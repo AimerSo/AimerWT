@@ -136,6 +136,9 @@ const app = {
     _guideReady: false,
     telemetryConnected: false,
     userSeqId: 0,
+    currentUiLanguage: null,
+    currentPathValid: false,
+    _pathUiReady: false,
     _telemetryStatusTimer: 0,
     _lastLogHtml: "",
     _lastLogAt: 0,
@@ -207,6 +210,98 @@ const app = {
         return key ? features[key] !== false : features;
     },
 
+    t(key, params) {
+        return window.I18N ? I18N.t(key, params) : key;
+    },
+
+    applyUiLanguage(locale) {
+        if (!window.I18N) return "zh_cn";
+        const applied = I18N.setLocale(locale || "zh_cn");
+        this.currentUiLanguage = applied;
+        this.updateLanguageSelect(applied);
+        this.applyDisclaimerI18n();
+        if (this._pathUiReady) {
+            this.updatePathUI(this.currentGamePath || "", this.currentPathValid, { skipInstalledRefresh: true });
+        }
+        return applied;
+    },
+
+    updateLanguageSelect(locale) {
+        const current = locale || this.currentUiLanguage || "zh_cn";
+        const textEl = document.getElementById('language-select-text');
+        if (textEl && window.I18N) textEl.textContent = I18N.getLocaleName(current);
+        document.querySelectorAll('#language-select-dropdown .custom-select-option').forEach(opt => {
+            opt.classList.toggle('selected', opt.dataset.value === current);
+        });
+    },
+
+    toggleLanguageDropdown() {
+        const wrapper = document.getElementById('language-select-wrapper');
+        if (!wrapper) return;
+        const isActive = wrapper.classList.contains('active');
+        document.querySelectorAll('.custom-select-wrapper').forEach(el => {
+            el.classList.remove('active');
+        });
+        if (!isActive) wrapper.classList.add('active');
+    },
+
+    async selectLanguage(locale) {
+        const applied = this.applyUiLanguage(locale);
+        document.getElementById('language-select-wrapper')?.classList.remove('active');
+        this.applyOnlineFeatureVisibility();
+        if (this.isOnlineFeatureAvailable()) {
+            this.renderNoticeBoard();
+        }
+        if (window.pywebview?.api?.set_ui_language) {
+            try {
+                await pywebview.api.set_ui_language(applied);
+            } catch (e) {
+                console.warn('set_ui_language failed:', e);
+            }
+        }
+    },
+
+    applyDisclaimerI18n() {
+        if (!window.I18N) return;
+        const modal = document.getElementById('modal-disclaimer');
+        if (modal) I18N.applyToDOM(modal);
+    },
+
+    isOnlineFeatureAvailable() {
+        if (!window.I18N) return true;
+        if (!this.currentUiLanguage) return false;
+        return I18N.isOnlineFeatureAvailable();
+    },
+
+    applyOnlineFeatureVisibility() {
+        const online = this.isOnlineFeatureAvailable();
+        const features = this.normalizeServerUserFeatures(this.serverUserFeatures || window._aimerUserFeatures || {});
+        const visibility = {
+            'cdk-redeem-card': online && features.redeem_code_enabled !== false,
+            'feedback-card': online && features.feedback_enabled !== false,
+            'user-profile-card': online,
+            'btn-notification-bell': online,
+        };
+        Object.entries(visibility).forEach(([id, visible]) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = visible ? '' : 'none';
+        });
+        const noticeBoard = document.getElementById('notice-board') || document.querySelector('.notice-content');
+        if (noticeBoard && !online) {
+            noticeBoard.innerHTML = `
+                <div class="empty-state" style="padding: 22px 12px;">
+                    <i class="ri-global-line"></i>
+                    <h3>${this.t('online.unavailable_title')}</h3>
+                    <p>${this.t('online.unavailable_desc')}</p>
+                </div>`;
+        }
+        if (!online && window.userProfile && typeof window.userProfile.stopForCurrentLanguage === 'function') {
+            window.userProfile.stopForCurrentLanguage();
+        } else if (online && window._telemetryHWID && window.userProfile && typeof window.userProfile.loadProfile === 'function') {
+            window.userProfile.loadProfile();
+        }
+    },
+
     applyServerUserFeatures(raw = {}) {
         const features = this.normalizeServerUserFeatures(raw);
         this.serverUserFeatures = features;
@@ -228,6 +323,7 @@ const app = {
             window.userProfile.applyFeatureSettings(features);
         }
 
+        this.applyOnlineFeatureVisibility();
         return features;
     },
 
@@ -268,7 +364,7 @@ const app = {
                 ? `${theme.name} - by ${theme.author}`
                 : `${theme.name} (v${theme.version}) - by ${theme.author}`;
             option.textContent = theme.filename === 'default.json'
-                ? '默认主题 (System Default)'
+                ? this.t('theme.default')
                 : themeLabel;
             option.onclick = () => this.selectTheme(theme.filename);
             dropdown.appendChild(option);
@@ -298,7 +394,7 @@ const app = {
                 ? `${theme.name} - by ${theme.author}`
                 : `${theme.name} (v${theme.version}) - by ${theme.author}`;
             textEl.textContent = filename === 'default.json'
-                ? '默认主题 (System Default)'
+                ? this.t('theme.default')
                 : themeLabel;
         }
 
@@ -317,7 +413,7 @@ const app = {
             this.applyThemeData(themeData);
             pywebview.api.save_theme_selection(filename);
         } else {
-            app.showAlert("错误", "主题文件损坏或格式错误！");
+            app.showAlert(this.t('common.error'), this.t('theme.invalid'));
             this.selectTheme("default.json");
             // 尝试载入预设主题
             const defaultTheme = await pywebview.api.load_theme_content("default.json");
@@ -397,7 +493,7 @@ const app = {
             refreshBtn.disabled = true;
             refreshBtn.classList.add('is-loading');
         }
-        countEl.textContent = '刷新中...';
+        countEl.textContent = this.t('tools.count_refreshing');
         await new Promise(requestAnimationFrame);
 
         const camoPage = document.getElementById('page-camo');
@@ -445,7 +541,7 @@ const app = {
         }
 
         const items = res.items || [];
-        countEl.textContent = `本地: ${items.length}`;
+        countEl.textContent = this.t('tools.count_local', { n: items.length });
 
         if (items.length === 0) {
             this._skinsLoaded = true;
@@ -457,8 +553,8 @@ const app = {
             listEl.innerHTML = `
                 <div class="empty-state" style="grid-column: 1 / -1;">
                     <i class="ri-brush-3-line"></i>
-                    <h3>还没有涂装</h3>
-                    <p>拖入 ZIP 或点击“选择 ZIP 解压”，导入后会自动出现在这里</p>
+                    <h3>${this.t('tools.empty_skins')}</h3>
+                    <p>${this.t('tools.empty_skins_desc')}</p>
                 </div>
             `;
             return;
@@ -561,7 +657,7 @@ const app = {
 
         const newName = document.getElementById('edit-skin-name').value.trim();
         if (!newName) {
-            app.showAlert("错误", "名称不能为空！", "error");
+            app.showAlert(app.t("common.error"), app.t("tools.name_empty"), "error");
             return;
         }
 
@@ -570,15 +666,15 @@ const app = {
             try {
                 const res = await pywebview.api.rename_skin(this.currentEditSkin, newName);
                 if (res.success) {
-                    app.showAlert("成功", "重命名成功！", "success");
+                    app.showAlert(app.t("common.success"), app.t("tools.rename_success"), "success");
                     this.currentEditSkin = newName; // Update local ref
                     this.refreshSkins(); // Reload list
                 } else {
-                    app.showAlert("失败", "重命名失败: " + res.msg, "error");
+                    app.showAlert(app.t("common.failure"), app.t("tools.rename_failed", { message: res.msg }), "error");
                     return; // Stop if rename failed
                 }
             } catch (e) {
-                app.showAlert("错误", "调用失败: " + e, "error");
+                app.showAlert(app.t("common.error"), app.t("common.operation_failed", { message: e }), "error");
                 return;
             }
         }
@@ -637,7 +733,7 @@ const app = {
 
         const newName = document.getElementById('edit-sight-name').value.trim();
         if (!newName) {
-            app.showAlert("错误", "名称不能为空！", "error");
+            app.showAlert(app.t("common.error"), app.t("tools.name_empty"), "error");
             return;
         }
 
@@ -645,15 +741,15 @@ const app = {
             try {
                 const res = await pywebview.api.rename_sight(this.currentEditSight, newName);
                 if (res.success) {
-                    app.showAlert("成功", "重命名成功！", "success");
+                    app.showAlert(app.t("common.success"), app.t("tools.rename_success"), "success");
                     this.currentEditSight = newName;
                     this.refreshSights({ manual: true });
                 } else {
-                    app.showAlert("失败", "重命名失败: " + res.msg, "error");
+                    app.showAlert(app.t("common.failure"), app.t("tools.rename_failed", { message: res.msg }), "error");
                     return;
                 }
             } catch (e) {
-                app.showAlert("错误", "调用失败: " + e, "error");
+                app.showAlert(app.t("common.error"), app.t("common.operation_failed", { message: e }), "error");
                 return;
             }
         }
@@ -1426,29 +1522,30 @@ const app = {
             try { this._confirmCleanup(false); } catch (e) { }
         }
 
-        titleEl.textContent = title || '操作确认';
+        titleEl.textContent = title || this.t('modal.confirm_title');
         msgEl.innerHTML = messageHtml || '';
 
         let finalOkText = okText;
         let iconClass = 'ri-check-line';
         const t = String(title || '');
         if (!finalOkText) {
-            if (t.includes('删除')) {
-                finalOkText = '确认删除';
+            if (t.includes('删除') || t.toLowerCase().includes('delete')) {
+                finalOkText = this.t('modal.confirm_delete');
                 iconClass = 'ri-delete-bin-line';
-            } else if (t.includes('还原')) {
-                finalOkText = '确认还原';
+            } else if (t.includes('还原') || t.toLowerCase().includes('restore')) {
+                finalOkText = this.t('modal.confirm_restore');
                 iconClass = 'ri-refresh-line';
-            } else if (t.includes('冲突') || t.includes('安装')) {
-                finalOkText = '继续';
+            } else if (t.includes('冲突') || t.includes('安装') || t.toLowerCase().includes('conflict') || t.toLowerCase().includes('install')) {
+                finalOkText = this.t('modal.confirm_continue');
                 iconClass = 'ri-rocket-line';
             } else {
-                finalOkText = isDanger ? '确认' : '确定';
+                finalOkText = isDanger ? this.t('modal.confirm_danger') : this.t('modal.confirm_ok');
                 iconClass = isDanger ? 'ri-alert-line' : 'ri-check-line';
             }
         }
 
         okBtn.innerHTML = `<i class="${iconClass}"></i> ${finalOkText}`;
+        cancelBtn.textContent = this.t('common.cancel');
         okBtn.classList.remove('primary', 'secondary', 'danger');
         okBtn.classList.add(isDanger ? 'danger' : 'primary');
 
@@ -1504,8 +1601,8 @@ const app = {
             try { this._archivePasswordCleanup(); } catch (e) { }
         }
 
-        if (titleEl) titleEl.textContent = '请输入解压密码';
-        if (fileEl) fileEl.textContent = archiveName ? `文件: ${archiveName}` : '';
+        if (titleEl) titleEl.textContent = this.t('modal.archive_password_title');
+        if (fileEl) fileEl.textContent = archiveName ? this.t('modal.archive_file', { name: archiveName }) : '';
         if (hintEl) hintEl.textContent = errorHint || '';
         input.value = '';
 
@@ -1547,7 +1644,7 @@ const app = {
         const input = document.getElementById('archive-password-input');
         const value = String(input?.value || '');
         if (!value) {
-            this.showAlert('提示', '请输入密码', 'warn');
+            this.showAlert(this.t('common.info'), this.t('modal.archive_password_required'), 'warn');
             return;
         }
         if (typeof this._archivePasswordCleanup === 'function') {
@@ -1704,7 +1801,7 @@ const app = {
         const titleEl = toast.querySelector('.toast-info-title');
         const messageEl = toast.querySelector('.toast-info-message');
 
-        if (titleEl) titleEl.textContent = title || '提示';
+        if (titleEl) titleEl.textContent = title || this.t('modal.alert_default_title');
         if (messageEl) messageEl.textContent = message || '';
 
         toast.classList.remove('hiding');
@@ -1790,6 +1887,10 @@ const app = {
 
     // 动态更新首页公告栏文字
     updateNoticeBar(contentHtml) {
+        if (!this.isOnlineFeatureAvailable()) {
+            this.applyOnlineFeatureVisibility();
+            return;
+        }
         if (window.NoticeBoardModule && typeof window.NoticeBoardModule.updateNoticeBar === 'function') {
             window.NoticeBoardModule.updateNoticeBar(contentHtml);
             return;
@@ -1893,6 +1994,10 @@ const app = {
     },
 
     renderNoticeBoard() {
+        if (!this.isOnlineFeatureAvailable()) {
+            this.applyOnlineFeatureVisibility();
+            return;
+        }
         if (window.NoticeBoardModule && typeof window.NoticeBoardModule.renderNoticeBoard === 'function') {
             window.NoticeBoardModule.renderNoticeBoard(this);
             return;
@@ -1963,7 +2068,7 @@ const app = {
     },
 
     // --- 路径搜索逻辑 ---
-    async updatePathUI(path, valid) {
+    async updatePathUI(path, valid, options = {}) {
         const input = document.getElementById('input-game-path');
         const statusIcon = document.getElementById('status-icon');
         const statusText = document.getElementById('status-text');
@@ -1972,24 +2077,28 @@ const app = {
 
         input.value = path || "";
         this.currentGamePath = path;
+        this.currentPathValid = !!valid;
+        this._pathUiReady = true;
 
-        const modeText = this.currentLaunchMode === 'steam' ? '[Steam端启动]' : '[战雷客户端启动]';
+        const modeText = this.currentLaunchMode === 'steam'
+            ? this.t('home.launch_mode.steam')
+            : this.t('home.launch_mode.launcher');
         if (valid) {
             statusIcon.innerHTML = '<i class="ri-link"></i>';
             statusIcon.className = 'status-icon active';
-            statusText.textContent = '连接正常';
+            statusText.textContent = this.t('home.ready.connected');
             statusText.className = 'status-text success';
             if (gameStatusIcon) {
                 gameStatusIcon.innerHTML = '<i class="ri-link"></i>';
                 gameStatusIcon.className = 'game-status-icon active';
             }
             if (gameStatusText) {
-                gameStatusText.innerHTML = `<span style="color: var(--status-success)">连接正常</span><span style="color: var(--text-sec)">：随时可以开始游戏 ${modeText}</span>`;
+                gameStatusText.innerHTML = `<span style="color: var(--status-success)">${this.t('home.ready.connected')}</span><span style="color: var(--text-sec)">${this.t('home.ready.can_start', { mode: modeText })}</span>`;
                 gameStatusText.className = 'game-status-text ready';
             }
 
             try {
-                if (window.pywebview && pywebview.api && pywebview.api.get_installed_mods) {
+                if (!options.skipInstalledRefresh && window.pywebview && pywebview.api && pywebview.api.get_installed_mods) {
                     this.installedModIds = await pywebview.api.get_installed_mods() || [];
                 }
             } catch (e) {
@@ -1999,28 +2108,28 @@ const app = {
         } else if (!path) {
             statusIcon.innerHTML = '<i class="ri-wifi-off-line"></i>';
             statusIcon.className = 'status-icon';
-            statusText.textContent = '未设置路径';
+            statusText.textContent = this.t('home.status.path_unset');
             statusText.className = 'status-text waiting';
             if (gameStatusIcon) {
                 gameStatusIcon.innerHTML = '<i class="ri-wifi-off-line"></i>';
                 gameStatusIcon.className = 'game-status-icon';
             }
             if (gameStatusText) {
-                gameStatusText.textContent = '未就绪：请先选择路径';
+                gameStatusText.textContent = this.t('home.ready.not_ready');
                 gameStatusText.className = 'game-status-text waiting';
             }
             this.installedModIds = [];
         } else {
             statusIcon.innerHTML = '<i class="ri-error-warning-line"></i>';
             statusIcon.className = 'status-icon';
-            statusText.textContent = '路径无效';
+            statusText.textContent = this.t('home.status.invalid_path');
             statusText.className = 'status-text error';
             if (gameStatusIcon) {
                 gameStatusIcon.innerHTML = '<i class="ri-error-warning-line"></i>';
                 gameStatusIcon.className = 'game-status-icon error';
             }
             if (gameStatusText) {
-                gameStatusText.textContent = '未就绪：路径无效';
+                gameStatusText.textContent = this.t('home.ready.invalid_path');
                 gameStatusText.className = 'game-status-text error';
             }
             this.installedModIds = [];
@@ -2033,31 +2142,31 @@ const app = {
 
     startGame() {
         if (!this.currentGamePath) {
-            this.showAlert('提示', '请先在主页设置游戏路径！');
+            this.showAlert(this.t('common.info'), this.t('home.path_required'));
             return;
         }
         if (window.AuthorGuide?.isActive?.()) {
-            this.showAlert('引导中', '新手引导当前只做流程演示，不会真的启动游戏，请点击右侧“继续”进入下一步。', 'info');
+            this.showAlert(this.t('modal.guide_running'), this.t('modal.launch_demo'), 'info');
             return;
         }
         if (!window.pywebview?.api?.start_game) {
-            this.showAlert('错误', '后端连接未就绪，请稍候再试或重启程序', 'error');
+            this.showAlert(this.t('common.error'), this.t('common.not_ready_backend'), 'error');
             return;
         }
         pywebview.api.start_game().then((result) => {
             const success = typeof result === 'object' ? Boolean(result?.success) : Boolean(result);
             if (success) {
-                this.notifyToast('SUCCESS', '游戏启动指令已发送');
+                this.notifyToast('SUCCESS', this.t('home.start_game_sent'));
                 return;
             }
 
             const message = typeof result === 'object' && result?.message
                 ? result.message
-                : '启动失败，请查看运行日志后重试';
-            this.showAlert('错误', message, 'error');
+                : this.t('home.start_game_failed');
+            this.showAlert(this.t('common.error'), message, 'error');
         }).catch((e) => {
             const message = e && e.message ? e.message : String(e || '');
-            this.showAlert('错误', `启动失败：${message}`, 'error');
+            this.showAlert(this.t('common.error'), this.t('home.start_game_failed_with_message', { message }), 'error');
         });
     },
 
@@ -2103,21 +2212,21 @@ const app = {
                 await pywebview.api.set_launch_mode(mode);
             } catch (e) {
                 const message = e && e.message ? e.message : String(e || '');
-                this.showAlert('错误', `保存启动设置失败：${message}`, 'error');
+                this.showAlert(this.t('common.error'), this.t('home.save_launch_failed', { message }), 'error');
             }
         }
         this.closeModal('modal-launch-settings');
         const gameStatusText = document.getElementById('game-status-text');
         if (gameStatusText && gameStatusText.classList.contains('ready')) {
-            const modeText = mode === 'steam' ? '[Steam端启动]' : '[战雷客户端启动]';
-            gameStatusText.innerHTML = `<span style="color: var(--status-success)">连接正常</span><span style="color: var(--text-sec)">：随时可以开始游戏 ${modeText}</span>`;
+            const modeText = mode === 'steam' ? this.t('home.launch_mode.steam') : this.t('home.launch_mode.launcher');
+            gameStatusText.innerHTML = `<span style="color: var(--status-success)">${this.t('home.ready.connected')}</span><span style="color: var(--text-sec)">${this.t('home.ready.can_start', { mode: modeText })}</span>`;
         }
     },
 
     async browsePath() {
         if (!window.pywebview?.api?.browse_folder) {
             console.error('API not ready: browse_folder');
-            this.showAlert('错误', '后端连接未就绪，请稍候再试或重启程序', 'error');
+            this.showAlert(this.t('common.error'), this.t('common.not_ready_backend'), 'error');
             return;
         }
         try {
@@ -2127,7 +2236,7 @@ const app = {
             }
         } catch (e) {
             console.error('browsePath failed:', e);
-            this.showAlert('错误', '选择路径失败: ' + e.message, 'error');
+            this.showAlert(this.t('common.error'), this.t('common.select_path_failed', { message: e.message }), 'error');
         }
     },
 
@@ -2312,11 +2421,11 @@ const app = {
     autoSearch() {
         if (!window.pywebview?.api?.start_auto_search) {
             console.error('API not ready: start_auto_search');
-            this.showAlert('错误', '后端连接未就绪，请稍候再试或重启程序', 'error');
+            this.showAlert(this.t('common.error'), this.t('common.not_ready_backend'), 'error');
             return;
         }
         document.getElementById('btn-auto-search').disabled = true;
-        document.getElementById('status-text').textContent = '搜索中...';
+        document.getElementById('status-text').textContent = this.t('home.status.searching');
         document.getElementById('status-icon').innerHTML = '<i class="ri-loader-4-line"></i>';
         const gameStatusIcon = document.getElementById('game-status-icon');
         if (gameStatusIcon) {
@@ -2328,7 +2437,7 @@ const app = {
         } catch (e) {
             console.error('autoSearch failed:', e);
             document.getElementById('btn-auto-search').disabled = false;
-            this.showAlert('错误', '启动搜索失败: ' + e.message, 'error');
+            this.showAlert(this.t('common.error'), this.t('home.auto_search_failed', { message: e.message }), 'error');
         }
     },
 
@@ -2504,36 +2613,62 @@ const app = {
     createModCard(mod) {
         const div = document.createElement('div');
         div.className = 'card mod-card';
-        div.dataset.id = mod.id; // 添加 ID 标识，方便动画定位
+        const safeModId = String(mod?.id || '');
+        div.dataset.id = safeModId; // 添加 ID 标识，方便动画定位
 
-        const imgUrl = mod.cover_url || '';
+        const escapeHtml = (value) => app._escapeHtml(String(value == null ? '' : value));
+        const safeClass = (value, fallback = '') => {
+            const cls = String(value || '').trim();
+            return /^[a-zA-Z0-9_-]+$/.test(cls) ? cls : fallback;
+        };
+        const sanitizeCardUrl = (value) => {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            if (/^(https?:\/\/|mailto:)/i.test(raw)) return raw;
+            if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return `https://${raw}`;
+            return '';
+        };
+        const sanitizeImageUrl = (value) => {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            if (/^data:image\/(?:png|jpe?g|webp|gif|bmp);base64,/i.test(raw)) return raw;
+            if (/^(https?:\/\/|\.{0,2}\/|assets\/)/i.test(raw)) return raw;
+            return '';
+        };
+
+        const titleText = String(mod?.title || '未命名语音包');
+        const authorText = String(mod?.author || '未知作者');
+        const sizeText = String(mod?.size_str || '0 MB');
+        const capabilities = (mod?.capabilities && typeof mod.capabilities === 'object') ? mod.capabilities : {};
+        const imgUrl = sanitizeImageUrl(mod?.cover_url);
         let tagsHtml = '';
 
         // 标签映射优先使用 UI_CONFIG；当 UI_CONFIG 不存在时使用内置映射
-        if (typeof UI_CONFIG !== 'undefined') {
+        if (typeof UI_CONFIG !== 'undefined' && UI_CONFIG.tagMap) {
             for (const [key, conf] of Object.entries(UI_CONFIG.tagMap)) {
-                if (mod.capabilities[key]) {
-                    tagsHtml += `<span class="tag ${conf.cls}">${conf.text}</span>`;
+                if (capabilities[key]) {
+                    const tagConf = conf || {};
+                    tagsHtml += `<span class="tag ${safeClass(tagConf.cls, 'default')}">${escapeHtml(tagConf.text)}</span>`;
                 }
             }
         } else {
-            if (mod.capabilities.tank) tagsHtml += `<span class="tag tank">陆战</span>`;
-            if (mod.capabilities.air) tagsHtml += `<span class="tag air">空战</span>`;
-            if (mod.capabilities.naval) tagsHtml += `<span class="tag naval">海战</span>`;
-            if (mod.capabilities.radio) tagsHtml += `<span class="tag radio">无线电/局势</span>`;
-            if (mod.capabilities.missile) tagsHtml += `<span class="tag missile">导弹音效</span>`;
-            if (mod.capabilities.music) tagsHtml += `<span class="tag music">音乐包</span>`;
-            if (mod.capabilities.noise) tagsHtml += `<span class="tag noise">降噪包</span>`;
-            if (mod.capabilities.pilot) tagsHtml += `<span class="tag pilot">飞行员语音</span>`;
+            if (capabilities.tank) tagsHtml += `<span class="tag tank">陆战</span>`;
+            if (capabilities.air) tagsHtml += `<span class="tag air">空战</span>`;
+            if (capabilities.naval) tagsHtml += `<span class="tag naval">海战</span>`;
+            if (capabilities.radio) tagsHtml += `<span class="tag radio">无线电/局势</span>`;
+            if (capabilities.missile) tagsHtml += `<span class="tag missile">导弹音效</span>`;
+            if (capabilities.music) tagsHtml += `<span class="tag music">音乐包</span>`;
+            if (capabilities.noise) tagsHtml += `<span class="tag noise">降噪包</span>`;
+            if (capabilities.pilot) tagsHtml += `<span class="tag pilot">飞行员语音</span>`;
         }
 
         let fullLangList = [];
-        if (mod.language && Array.isArray(mod.language) && mod.language.length > 0) {
-            fullLangList = mod.language;
-        } else if (mod.language && typeof mod.language === 'string') {
-            fullLangList = [mod.language];
+        if (mod?.language && Array.isArray(mod.language) && mod.language.length > 0) {
+            fullLangList = mod.language.map(lang => String(lang || '').trim()).filter(Boolean);
+        } else if (mod?.language && typeof mod.language === 'string') {
+            fullLangList = [mod.language.trim()].filter(Boolean);
         } else {
-            fullLangList = (mod.title.includes("Aimer") || mod.id === "Aimer") ? ["中", "美", "俄"] : ["未识别"];
+            fullLangList = (titleText.includes("Aimer") || safeModId === "Aimer") ? ["中", "美", "俄"] : ["未识别"];
         }
 
         // 过滤出主要展示语言 (中/美/英)
@@ -2544,29 +2679,29 @@ const app = {
 
         const langHtml = displayLangs.map(lang => {
             let cls = "";
-            if (typeof UI_CONFIG !== 'undefined' && UI_CONFIG.langMap[lang]) {
-                cls = UI_CONFIG.langMap[lang];
+            if (typeof UI_CONFIG !== 'undefined' && UI_CONFIG.langMap && UI_CONFIG.langMap[lang]) {
+                cls = safeClass(UI_CONFIG.langMap[lang]);
             }
-            return `<span class="lang-text ${cls}">${lang}</span>`;
+            return `<span class="lang-text ${cls}">${escapeHtml(lang)}</span>`;
         }).join('<span style="margin:0 2px">/</span>');
 
         // 拼接悬停显示的完整列表
         const langTooltip = fullLangList.length > 0 ? `支持语言: ${fullLangList.join(', ')}` : '未识别语言';
 
-        const updateDate = mod.date || "未知日期";
+        const updateDate = String(mod?.date || "未知日期");
 
-        const clsVideo = mod.link_video ? 'video' : 'disabled';
-        const clsWt = mod.link_wtlive ? 'wt' : 'disabled';
-        const clsBili = mod.link_bilibili ? 'bili' : 'disabled';
+        const videoUrl = sanitizeCardUrl(mod?.link_video);
+        const wtLiveUrl = sanitizeCardUrl(mod?.link_wtlive);
+        const biliUrl = sanitizeCardUrl(mod?.link_bilibili);
 
-        const actVideo = mod.link_video ? `window.open('${mod.link_video}')` : '';
-        const actWt = mod.link_wtlive ? `window.open('${mod.link_wtlive}')` : '';
-        const actBili = mod.link_bilibili ? `window.open('${mod.link_bilibili}')` : '';
+        const clsVideo = videoUrl ? 'video' : 'disabled';
+        const clsWt = wtLiveUrl ? 'wt' : 'disabled';
+        const clsBili = biliUrl ? 'bili' : 'disabled';
 
-        const noteText = mod.note || '暂无留言';
+        const noteText = String(mod?.note || '暂无留言');
 
         // 判断该语音包是否为当前已生效项
-        const isInstalled = app.installedModIds && app.installedModIds.includes(mod.id);
+        const isInstalled = Array.isArray(app.installedModIds) && app.installedModIds.includes(safeModId);
 
         // 根据状态决定按钮样式和图标
         // 已安装: active 样式, check 图标, title="当前已加载"
@@ -2574,52 +2709,56 @@ const app = {
         const loadBtnClass = isInstalled ? 'action-btn-load active' : 'action-btn-load';
         const loadBtnIcon = isInstalled ? 'ri-check-line' : 'ri-play-circle-line';
         const loadBtnTitle = isInstalled ? '当前已生效' : '加载此语音包';
-        const loadBtnClick = `app.openInstallModal('${mod.id}')`;
 
         // 处理版本号显示，避免出现 vv2.53 的情况
-        let displayVersion = mod.version || "1.0";
+        let displayVersion = String(mod?.version || "1.0");
         if (displayVersion.toLowerCase().startsWith('v')) {
             displayVersion = displayVersion.substring(1);
         }
 
+        const filesHtml = Array.isArray(mod?.files) && mod.files.length > 0 ?
+            mod.files.map(f => {
+                const fileCls = safeClass(f?.cls || 'default', 'default');
+                const fileType = String(f?.type || '');
+                return `<span class="tag ${fileCls}" title="包含模块: ${escapeHtml(fileType)}">${escapeHtml(fileType)}</span>`;
+            }).join('')
+            : tagsHtml;
+
         div.innerHTML = `
             <div class="mod-img-area">
-                <img src="${imgUrl}" class="mod-img" onerror="this.style.display='none'">
+                <img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(titleText)}" class="mod-img" onerror="this.style.display='none'">
             </div>
 
             <div class="mod-info-area">
-                <div class="mod-ver">v${displayVersion}</div>
+                <div class="mod-ver">v${escapeHtml(displayVersion)}</div>
 
                 <div class="mod-title-row">
-                    <div class="mod-title" title="${mod.title}">${mod.title}</div>
+                    <div class="mod-title" title="${escapeHtml(titleText)}">${escapeHtml(titleText)}</div>
                 </div>
 
                 <div class="mod-author-row">
-                    <i class="ri-user-3-line"></i> <span>${mod.author}</span>
+                    <i class="ri-user-3-line"></i> <span>${escapeHtml(authorText)}</span>
                     <span style="margin: 0 5px; color:#ddd">|</span>
-                    <i class="ri-hard-drive-2-line"></i> <span>${mod.size_str}</span>
+                    <i class="ri-hard-drive-2-line"></i> <span>${escapeHtml(sizeText)}</span>
                     <span style="margin: 0 5px; color:#ddd">|</span>
                     
-                    <div class="mod-lang-wrap" title="${langTooltip}" style="display:inline-flex; align-items:center; cursor:help;">
+                    <div class="mod-lang-wrap" title="${escapeHtml(langTooltip)}" style="display:inline-flex; align-items:center; cursor:help;">
                         <i class="ri-translate"></i> 
                         <span style="margin-left:2px">${langHtml || '未识别'}</span>
                     </div>
                 </div>
 
                 <div class="mod-meta-row" style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; min-height: 20px;">
-                    ${mod.files && mod.files.length > 0 ?
-                mod.files.map(f => `<span class="tag ${f.cls || 'default'}" title="包含模块: ${f.type}">${f.type}</span>`).join('')
-                : tagsHtml
-            }
+                    ${filesHtml}
                 </div>
                 
                 <div style="font-size:11px; color:var(--text-log); opacity:0.6; margin: 6px 0 8px; display:flex; align-items:center; gap:4px;">
-                    <i class="ri-time-line"></i> 更新于: ${updateDate}
+                    <i class="ri-time-line"></i> 更新于: ${escapeHtml(updateDate)}
                 </div>
 
                 <div class="mod-note">
                     <i class="ri-chat-1-line" style="vertical-align:middle; margin-right:4px; opacity:0.7"></i>
-                    ${noteText}
+                    ${escapeHtml(noteText)}
                 </div>
             </div>
 
@@ -2628,39 +2767,61 @@ const app = {
             </button>
 
             <div class="mod-actions-col">
-                <div class="action-icon action-btn-del-dropdown" onclick="app.showDeleteMenu(event, '${mod.id}')" title="删除选项">
+                <div class="action-icon action-btn-del-dropdown" data-action="delete-menu" title="删除选项">
                     <i class="ri-delete-bin-line"></i>
                     <i class="ri-arrow-down-s-line" style="font-size: 12px; margin-left: -2px;"></i>
                 </div>
 
                 <div style="flex:1"></div>
 
-                <div class="action-icon ${clsVideo}" onclick="${actVideo}" title="观看介绍视频">
+                <div class="action-icon ${clsVideo}" data-action="open-link" data-url="${escapeHtml(videoUrl)}" title="观看介绍视频">
                     <i class="ri-play-circle-line"></i>
                 </div>
 
-                <div class="action-icon ${clsWt}" onclick="${actWt}" title="访问 WT Live 页面">
+                <div class="action-icon ${clsWt}" data-action="open-link" data-url="${escapeHtml(wtLiveUrl)}" title="访问 WT Live 页面">
                     <i class="ri-global-line"></i>
                 </div>
 
-                <div class="action-icon ${clsBili}" onclick="${actBili}" title="访问 Bilibili">
+                <div class="action-icon ${clsBili}" data-action="open-link" data-url="${escapeHtml(biliUrl)}" title="访问 Bilibili">
                     <i class="ri-bilibili-line"></i>
                 </div>
 
-                <button class="${loadBtnClass}" onclick="${loadBtnClick}" title="${loadBtnTitle}">
+                <button class="${loadBtnClass}" data-action="load" title="${escapeHtml(loadBtnTitle)}">
                     <i class="${loadBtnIcon}" style="font-size: 24px;"></i>
                 </button>
             </div>
         `;
 
-        div.dataset.caps = JSON.stringify(mod.capabilities);
+        div.dataset.caps = JSON.stringify(capabilities);
         const copyBtn = div.querySelector('.mod-copy-action');
         if (copyBtn) {
-            copyBtn.dataset.modId = mod.id || '';
-            copyBtn.dataset.modTitle = mod.title || '';
-            copyBtn.onclick = () => {
+            copyBtn.dataset.modId = safeModId;
+            copyBtn.dataset.modTitle = titleText;
+            copyBtn.addEventListener('click', () => {
                 app.openCopyCountryModal(copyBtn.dataset.modId, copyBtn.dataset.modTitle);
-            };
+            });
+        }
+        const deleteBtn = div.querySelector('[data-action="delete-menu"]');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', (event) => {
+                app.showDeleteMenu(event, safeModId);
+            });
+        }
+        div.querySelectorAll('[data-action="open-link"]').forEach((btn) => {
+            const url = btn.dataset.url || '';
+            if (!url) {
+                btn.setAttribute('aria-disabled', 'true');
+                return;
+            }
+            btn.addEventListener('click', () => {
+                app.openExternal(url);
+            });
+        });
+        const loadBtn = div.querySelector('[data-action="load"]');
+        if (loadBtn) {
+            loadBtn.addEventListener('click', () => {
+                app.openInstallModal(safeModId);
+            });
         }
         const noteEl = div.querySelector('.mod-note');
         if (noteEl) noteEl.dataset.note = noteText;
@@ -2813,16 +2974,28 @@ const app = {
     openExternal(url) {
         const u = String(url || '').trim();
         if (!u) return;
+        let finalUrl = u;
+        if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(finalUrl)) {
+            finalUrl = 'https://' + finalUrl;
+        }
+        const scheme = (finalUrl.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/) || [])[1]?.toLowerCase();
+        if (!['http', 'https', 'mailto'].includes(scheme)) {
+            if (typeof app.showToast === 'function') app.showToast('已拦截不支持的链接协议', 'warning');
+            return;
+        }
+        try {
+            const parsedUrl = new URL(finalUrl);
+            if ((scheme === 'http' || scheme === 'https') && !parsedUrl.host) return;
+            if (scheme === 'mailto' && !parsedUrl.pathname) return;
+        } catch (_) {
+            return;
+        }
 
         // 优先使用后端 API 以在外部浏览器打开，并处理协议头
         if (window.pywebview?.api?.open_external) {
-            pywebview.api.open_external(u);
+            pywebview.api.open_external(finalUrl);
         } else {
             // 降级方案
-            let finalUrl = u;
-            if (!finalUrl.match(/^[a-zA-Z]+:\/\//)) {
-                finalUrl = 'https://' + finalUrl;
-            }
             window.open(finalUrl, '_blank', 'noopener');
         }
     },
@@ -2909,32 +3082,32 @@ const app = {
 
             const menuItems = [
                 {
-                    label: '只删除库文件',
+                    label: this.t('lib.delete_library'),
                     icon: 'ri-folder-reduce-line',
-                    description: '从语音包库中删除，保留游戏中已安装的文件',
+                    description: this.t('lib.delete_library_desc'),
                     action: () => this.deleteModLibraryOnly(modId)
                 }
             ];
 
             if (isInstalled) {
                 menuItems.push({
-                    label: '只卸载游戏文件',
+                    label: this.t('lib.uninstall_game'),
                     icon: 'ri-uninstall-line',
-                    description: '从游戏目录中卸载，保留库文件',
+                    description: this.t('lib.uninstall_game_desc'),
                     action: () => this.uninstallModFromGame(modId)
                 });
                 menuItems.push({
-                    label: '按模块卸载',
+                    label: this.t('lib.uninstall_modules'),
                     icon: 'ri-list-check',
-                    description: '选择性卸载特定模块（陆战、空战等）',
+                    description: this.t('lib.uninstall_modules_desc'),
                     action: () => this.showUninstallModulesDialog(modId)
                 });
             }
 
             menuItems.push({
-                label: '完全删除',
+                label: this.t('lib.delete_complete'),
                 icon: 'ri-delete-bin-line',
-                description: '同时删除库文件和游戏中已安装的文件',
+                description: this.t('lib.delete_complete_desc'),
                 action: () => this.deleteModCompletely(modId),
                 danger: true
             });
@@ -2942,14 +3115,14 @@ const app = {
             app.showContextMenu(event, menuItems);
         }).catch(err => {
             console.error('获取安装信息失败:', err);
-            app.showToast('获取安装信息失败', 'error');
+            app.showToast(app.t('lib.install_info_failed'), 'error');
         });
     },
 
     async deleteModLibraryOnly(modId) {
         const yes = await app.confirm(
-            '删除库文件',
-            `确定要从语音包库中删除 <strong>[${modId}]</strong> 吗？<br>游戏中已安装的文件将保留。`,
+            this.t('lib.delete_library_title'),
+            this.t('lib.delete_library_message', { id: modId }),
             true
         );
         if (yes) {
@@ -2961,7 +3134,7 @@ const app = {
 
             const result = await pywebview.api.delete_mod(modId);
             if (result && result.success) {
-                app.showToast(result.msg || '已从库中删除', 'success');
+                app.showToast(this.t('lib.delete_from_library'), 'success');
 
                 // 更新已安装列表
                 try {
@@ -2975,15 +3148,15 @@ const app = {
                 // 强制刷新库列表以更新卡片状态
                 this.refreshLibrary({ manual: true });
             } else {
-                app.showToast(result?.msg || '删除失败', 'error');
+                app.showToast(result?.msg || this.t('lib.delete_failed'), 'error');
             }
         }
     },
 
     async uninstallModFromGame(modId) {
         const yes = await app.confirm(
-            '卸载游戏文件',
-            `确定要从游戏目录中卸载 <strong>[${modId}]</strong> 吗？<br>语音包库文件将保留。`,
+            this.t('lib.uninstall_game_title'),
+            this.t('lib.uninstall_game_message', { id: modId }),
             true
         );
         if (yes) {
@@ -2996,7 +3169,7 @@ const app = {
 
             const result = await pywebview.api.uninstall_mod(modId);
             if (result && result.success) {
-                app.showToast(`已卸载 ${result.removed || 0} 个文件`, 'success');
+                app.showToast(this.t('lib.uninstall_success', { count: result.removed || 0 }), 'success');
                 if (card) {
                     card.style.opacity = '1';
                     card.style.transform = 'scale(1)';
@@ -3014,7 +3187,7 @@ const app = {
                 // 强制刷新库列表
                 this.refreshLibrary({ manual: true });
             } else {
-                app.showToast(result?.msg || '卸载失败', 'error');
+                app.showToast(result?.msg || this.t('lib.uninstall_failed'), 'error');
                 if (card) {
                     card.style.opacity = '1';
                     card.style.transform = 'scale(1)';
@@ -3025,8 +3198,8 @@ const app = {
 
     async deleteModCompletely(modId) {
         const yes = await app.confirm(
-            '完全删除',
-            `确定要完全删除语音包 <strong>[${modId}]</strong> 吗？<br>将同时删除库文件和游戏中已安装的文件。<br><span style="color: var(--danger);">此操作不可撤销！</span>`,
+            this.t('lib.delete_complete_title'),
+            this.t('lib.delete_complete_message', { id: modId }),
             true
         );
         if (yes) {
@@ -3038,7 +3211,7 @@ const app = {
 
             const result = await pywebview.api.delete_mod_completely(modId);
             if (result && result.success) {
-                app.showToast(result.msg || '已完全删除', 'success');
+                app.showToast(this.t('lib.delete_complete_success'), 'success');
 
                 // 更新已安装列表
                 try {
@@ -3052,7 +3225,7 @@ const app = {
                 // 强制刷新库列表
                 this.refreshLibrary({ manual: true });
             } else {
-                app.showToast(result?.msg || '删除失败', 'error');
+                app.showToast(result?.msg || this.t('lib.delete_failed'), 'error');
             }
         }
     },
@@ -3066,7 +3239,7 @@ const app = {
 
         const mod = mods.find(m => m.id === modId);
         if (!mod || !mod.files || mod.files.length === 0) {
-            app.showToast('无法获取语音包模块信息', 'error');
+            app.showToast(this.t('lib.module_info_unavailable'), 'error');
             return;
         }
 
@@ -3076,7 +3249,7 @@ const app = {
             : [];
 
         if (installedFiles.length === 0) {
-            app.showToast('该语音包未安装任何文件', 'warning');
+            app.showToast(this.t('lib.no_installed_files'), 'warning');
             return;
         }
 
@@ -3091,7 +3264,7 @@ const app = {
         }));
 
         if (moduleOptions.length === 0) {
-            app.showToast('没有可卸载的模块', 'warning');
+            app.showToast(this.t('lib.no_uninstallable_modules'), 'warning');
             return;
         }
 
@@ -3105,9 +3278,9 @@ const app = {
         const modalHtml = `
             <div id="${modalId}" class="modal-overlay">
                 <div class="modal-content" style="max-width: 480px; text-align: left;">
-                    <h2 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 600; color: var(--text-main);">按模块卸载</h2>
+                    <h2 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 600; color: var(--text-main);">${this.t('lib.uninstall_modules_title')}</h2>
                     <p style="margin: 0 0 24px 0; color: var(--text-sec); font-size: 14px;">
-                        语音包: <strong style="color: var(--primary);">${mod.title || modId}</strong>
+                        ${this.t('lib.voice_pack_label')}: <strong style="color: var(--primary);">${mod.title || modId}</strong>
                     </p>
 
                     <div class="toggle-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 12px; margin-bottom: 30px;">
@@ -3120,10 +3293,10 @@ const app = {
                     </div>
 
                     <div style="display: flex; gap: 12px; justify-content: flex-end; align-items: center;">
-                        <button class="btn secondary modal-cancel-btn" style="height: 40px; padding: 0 20px; display: flex; align-items: center; justify-content: center;">取消</button>
+                        <button class="btn secondary modal-cancel-btn" style="height: 40px; padding: 0 20px; display: flex; align-items: center; justify-content: center;">${this.t('common.cancel')}</button>
                         <button class="btn primary modal-confirm-btn" style="height: 40px; padding: 0 20px; display: flex; align-items: center; justify-content: center; gap: 6px;">
                             <i class="ri-uninstall-line"></i>
-                            <span>卸载选中</span>
+                            <span>${this.t('lib.uninstall_selected')}</span>
                         </button>
                     </div>
                 </div>
@@ -3157,7 +3330,7 @@ const app = {
                 .map(btn => btn.dataset.module);
 
             if (selectedModules.length === 0) {
-                app.showToast('请至少选择一个模块', 'warning');
+                app.showToast(app.t('lib.select_module_required'), 'warning');
                 return;
             }
 
@@ -3188,7 +3361,9 @@ const app = {
             const result = await pywebview.api.uninstall_mod_modules(modId, selectedModules || []);
 
             if (result && result.success) {
-                const msg = `已卸载 ${result.removed || 0} 个文件${result.remaining ? `，剩余 ${result.remaining} 个文件` : ''}`;
+                const msg = result.remaining
+                    ? this.t('lib.uninstall_success_remaining', { count: result.removed || 0, remaining: result.remaining })
+                    : this.t('lib.uninstall_success', { count: result.removed || 0 });
 
                 // 使用 app 引用而不是 this
                 const appRef = window.app || this;
@@ -3212,14 +3387,14 @@ const app = {
             } else {
                 const appRef = window.app || this;
                 if (appRef.showToast) {
-                    appRef.showToast(result?.msg || '模块卸载失败', 'error');
+                    appRef.showToast(result?.msg || appRef.t('lib.uninstall_modules_failed'), 'error');
                 }
             }
         } catch (error) {
             console.error("confirmUninstallModules error:", error);
             const appRef = window.app || this;
             if (appRef.showToast) {
-                appRef.showToast('卸载过程发生错误', 'error');
+                appRef.showToast(appRef.t('lib.uninstall_error'), 'error');
             }
         }
     },
@@ -3368,7 +3543,7 @@ document.getElementById('btn-confirm-install').onclick = async function () {
     const hasToggles = document.querySelectorAll('#install-toggles .toggle-btn').length > 0;
 
     if (hasToggles && allFiles.length === 0) {
-        app.showAlert("提示", "请至少选择一个模块！");
+        app.showAlert(app.t("common.info"), app.t("lib.select_module_required"));
         return;
     }
 
@@ -3376,7 +3551,7 @@ document.getElementById('btn-confirm-install').onclick = async function () {
     const conflictBtn = document.getElementById('btn-confirm-install');
     const originalText = conflictBtn.innerHTML;
     conflictBtn.disabled = true;
-    conflictBtn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 检查中...';
+    conflictBtn.innerHTML = `<i class="ri-loader-4-line ri-spin"></i> ${app.t("lib.checking")}`;
 
     try {
         // 将文件列表序列化为 JSON 字符串传递给后端
@@ -3385,20 +3560,20 @@ document.getElementById('btn-confirm-install').onclick = async function () {
         if (conflicts && conflicts.length > 0) {
             // 构建冲突提示信息
             const conflictCount = conflicts.length;
-            let msg = `检测到 <strong>${conflictCount}</strong> 个文件冲突，继续安装将复盖现有文件。<br><br>`;
+            let msg = app.t("lib.conflict_message", { count: conflictCount });
             msg += `<div style="max-height:100px;overflow-y:auto;background:rgba(0,0,0,0.05);padding:8px;border-radius:4px;font-size:12px;">`;
 
             // 只显示前 5 个
             conflicts.slice(0, 5).forEach(c => {
-                msg += `<div style="margin-bottom:2px;">• ${c.file} <span style="color:#aaa;">(来自 ${c.existing_mod})</span></div>`;
+                msg += `<div style="margin-bottom:2px;">• ${c.file} <span style="color:#aaa;">(${app.t("lib.conflict_from", { name: c.existing_mod })})</span></div>`;
             });
 
             if (conflictCount > 5) {
-                msg += `<div>... 以及其他 ${conflictCount - 5} 个文件</div>`;
+                msg += `<div>${app.t("lib.conflict_more", { count: conflictCount - 5 })}</div>`;
             }
-            msg += `</div><br>是否继续安装？`;
+            msg += `</div><br>${app.t("lib.conflict_continue")}`;
 
-            const proceed = await app.confirm('⚠️ 文件冲突警告', msg, true); // 使用危险样式提醒
+            const proceed = await app.confirm(app.t("lib.conflict_title"), msg, true); // 使用危险样式提醒
             if (!proceed) {
                 conflictBtn.disabled = false;
                 conflictBtn.innerHTML = originalText;
@@ -3415,7 +3590,7 @@ document.getElementById('btn-confirm-install').onclick = async function () {
 
     // 显示极简加载动画 (关闭模拟模式，等待后端真实进度)
     if (typeof MinimalistLoading !== 'undefined') {
-        MinimalistLoading.show(false, "正在准备安装...");
+        MinimalistLoading.show(false, app.t("loading.preparing_install"));
     }
 
     // 将文件列表序列化为 JSON 字符串传递给后端
@@ -3425,11 +3600,8 @@ document.getElementById('btn-confirm-install').onclick = async function () {
 
 app.restoreGame = async function () {
     const yes = await app.confirm(
-        '确认还原',
-        '确定要还原纯净模式吗？<br><br>' +
-        '<strong>逻辑说明：</strong><br>' +
-        '1. 将清空游戏目录 <code>sound/mod</code> 文件夹下的所有内容。<br>' +
-        '2. 将在配置文件 <code>config.blk</code> 中设置 <code>enable_mod:b=no</code>。',
+        app.t("settings.restore_confirm_title"),
+        app.t("settings.restore_confirm_message"),
         true
     );
     if (yes) {
@@ -3455,15 +3627,19 @@ app.checkDisclaimer = async function () {
             app._pendingAgreementVer = result.version;
 
             const modal = document.getElementById('modal-disclaimer');
+            app.applyDisclaimerI18n();
             modal.classList.add('show');
 
             // 倒计时逻辑
             const btn = document.getElementById('btn-disclaimer-agree');
             const hint = document.getElementById('disclaimer-timer-hint');
             let timeLeft = 5;
+            const updateTimerHint = () => {
+                if (hint) hint.textContent = app.t('disclaimer.timer', { seconds: timeLeft });
+            };
 
             btn.disabled = true;
-            if (hint) hint.textContent = `请阅读协议 (${timeLeft}s)`;
+            updateTimerHint();
 
             const timer = setInterval(() => {
                 timeLeft--;
@@ -3472,7 +3648,7 @@ app.checkDisclaimer = async function () {
                     btn.disabled = false;
                     if (hint) hint.textContent = "";
                 } else {
-                    if (hint) hint.textContent = `请阅读协议 (${timeLeft}s)`;
+                    updateTimerHint();
                 }
             }, 1000);
 
@@ -3582,12 +3758,7 @@ app.init = async function () {
     console.log("App initializing...");
     this.recoverToSafeState('init');
     this.initToasts();
-    // 公告先行渲染：即使后续后端初始化异常，也不要让首页公告区域空白。
-    try {
-        this.renderNoticeBoard();
-    } catch (e) {
-        console.warn("Initial notice render failed:", e);
-    }
+    // 公告渲染等配置语言恢复后再执行，避免英文界面初始化阶段触发联网公告。
 
     if (!this._safetyHandlersInstalled) {
         this._safetyHandlersInstalled = true;
@@ -3626,23 +3797,24 @@ app.init = async function () {
         this._setupModalDragLock();
         this._setupModalOverlayClose();
 
-        // 1. 优先检查免责声明
-        const disclaimerAccepted = await app.checkDisclaimer();
-        if (disclaimerAccepted === false) return;
-
-        // 1.2 全局拖放初始化（暂未启用）
-        // TODO: 当前拖放导入在部分压缩包场景下仍可能阻塞，需要完成专项优化后再恢复。
-        // if (app.setupGlobalDragDrop) app.setupGlobalDragDrop();
-
-
-        // 2. 获取初始状态
+        // 1. 获取初始状态并先恢复界面语言，免责声明随后按当前语言展示。
         const state = await pywebview.api.init_app_state() || {
             game_path: "",
             path_valid: false,
             active_theme: "default.json",
             theme: "Light",
             installed_mods: [],
+            ui_language: "zh_cn",
         };
+        this.applyUiLanguage(state.ui_language || "zh_cn");
+
+        // 1.1 检查免责声明
+        const disclaimerAccepted = await app.checkDisclaimer();
+        if (disclaimerAccepted === false) return;
+
+        // 1.2 全局拖放初始化（暂未启用）
+        // TODO: 当前拖放导入在部分压缩包场景下仍可能阻塞，需要完成专项优化后再恢复。
+        // if (app.setupGlobalDragDrop) app.setupGlobalDragDrop();
         this.telemetryConnected = !!state.telemetry_connected;
         // AI 代理模式使用的遥测服务器基地址
         if (state.telemetry_base_url) window._telemetryBaseUrl = state.telemetry_base_url;
@@ -4160,7 +4332,7 @@ app.refreshSights = async function (opts) {
             refreshBtn.disabled = true;
             refreshBtn.classList.add('is-loading');
         }
-        if (countEl) countEl.textContent = '刷新中...';
+        if (countEl) countEl.textContent = this.t('tools.count_refreshing');
         await new Promise(requestAnimationFrame);
 
         const forceRefresh = !!(opts && opts.manual);
@@ -4171,15 +4343,15 @@ app.refreshSights = async function (opts) {
 
         const items = result.items || [];
 
-        countEl.textContent = `本地: ${items.length}`;
+        countEl.textContent = this.t('tools.count_local', { n: items.length });
 
         if (items.length === 0) {
             this._sightsLoaded = true;
             listEl.innerHTML = `
                 <div class="empty-state">
                     <i class="ri-crosshair-line"></i>
-                    <h3>还没有炮镜</h3>
-                    <p>请手动将炮镜文件放入 UserSights 文件夹</p>
+                    <h3>${this.t('tools.empty_sights')}</h3>
+                    <p>${this.t('tools.empty_sights_desc')}</p>
                 </div>
             `;
             return;
@@ -4588,16 +4760,16 @@ app.setupGlobalDragDrop = function () {
             if (activePageEl && textEl) {
                 const id = activePageEl.id;
                 if (id === 'page-lib' || id === 'page-home') {
-                    textEl.innerText = '放下并导入语音包';
+                    textEl.innerText = app.t('drop.import_voice_pack');
                 } else if (id === 'page-camo') {
                     const sightsView = document.getElementById('view-sights');
                     if (sightsView && sightsView.classList.contains('active')) {
-                        textEl.innerText = '放下并导入炮镜';
+                        textEl.innerText = app.t('drop.import_sight');
                     } else {
-                        textEl.innerText = '放下并导入涂装';
+                        textEl.innerText = app.t('drop.import_skin');
                     }
                 } else if (id === 'page-sight') {
-                    textEl.innerText = '放下并导入信息/炮镜';
+                    textEl.innerText = app.t('drop.import_info_sight');
                 }
             }
             overlay.classList.add('active');
@@ -4964,10 +5136,27 @@ app.setupGlobalDragDrop = function () {
     function openExternal(url) {
         const safeUrl = String(url || '').trim();
         if (!safeUrl) return;
+        const app = getApp();
+        if (app && typeof app.openExternal === 'function') {
+            app.openExternal(safeUrl);
+            return;
+        }
+        let finalUrl = safeUrl;
+        if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(finalUrl)) {
+            finalUrl = 'https://' + finalUrl;
+        }
+        const scheme = (finalUrl.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/) || [])[1]?.toLowerCase();
+        if (!['http', 'https', 'mailto'].includes(scheme)) return;
         try {
-            window.open(safeUrl, '_blank', 'noopener');
+            const parsedUrl = new URL(finalUrl);
+            if ((scheme === 'http' || scheme === 'https') && !parsedUrl.host) return;
+            if (scheme === 'mailto' && !parsedUrl.pathname) return;
+        } catch (_) {
+            return;
+        }
+        try {
+            window.open(finalUrl, '_blank', 'noopener');
         } catch (e) {
-            const app = getApp();
             if (app && typeof app.showAlert === 'function') {
                 app.showAlert('错误', '打开链接失败', 'error');
             }

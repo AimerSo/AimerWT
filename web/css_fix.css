@@ -497,6 +497,22 @@
     aspect-ratio: 1;
 }
 
+.btn span[data-i18n],
+.btn-v2 span[data-i18n],
+.nav-btn span[data-i18n],
+.resource-nav-item span[data-i18n],
+.custom-select-trigger span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nav-btn span[data-i18n],
+.resource-nav-item span[data-i18n],
+.custom-select-trigger span {
+    white-space: nowrap;
+}
+
 /* ========================
    6. 主页网格样式
    ======================== */

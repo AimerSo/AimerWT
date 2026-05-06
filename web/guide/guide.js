@@ -355,6 +355,9 @@
         state.helpProximityBound = true;
         document.addEventListener("mousemove", (e) => {
             updateHelpProximity(e.clientX, e.clientY);
+            if (window.NotificationBellModule && typeof window.NotificationBellModule.updateProximity === 'function') {
+                window.NotificationBellModule.updateProximity(e.clientX, e.clientY);
+            }
         });
         window.addEventListener("resize", () => {
             btn.classList.remove("near");

@@ -401,6 +401,7 @@ class AppApi:
         self._last_ad_carousel_state = None  # 广告轮播配置去重
         self._last_notice_items_state = None  # 公告列表配置去重
         self._last_user_feature_state = None  # 用户功能开关去重
+        self._last_system_notifications_state = None  # 系统通知列表去重
 
         # 服务器数据缓存文件路径
         self._server_cache_file = Path(self._cfg_mgr.config_dir) / "server_cache.json"
@@ -824,6 +825,19 @@ class AppApi:
                     f"if(el) el.textContent={json.dumps(project_last_update, ensure_ascii=False)}; }})()"
                 )
 
+            # 8. 系统通知消息（推送到铃铛模块）
+            system_notifications = config.get("system_notifications")
+            if isinstance(system_notifications, list):
+                notif_state = json.dumps(system_notifications, ensure_ascii=False, sort_keys=True)
+                last_notif_state = getattr(self, "_last_system_notifications_state", None)
+                notif_json = json.dumps(system_notifications, ensure_ascii=False)
+                if system_notifications and notif_state != last_notif_state:
+                    self._window.evaluate_js(
+                        f"if(window.NotificationBellModule) "
+                        f"window.NotificationBellModule.pushSystemMessages({notif_json})"
+                    )
+                self._last_system_notifications_state = notif_state
+
         except Exception as e:
             print(f"消息处理异常: {e}")
 
@@ -878,6 +892,16 @@ class AppApi:
                     self._window.evaluate_js(safe_js_call("showAlert", title, message, "success"))
                 else:
                     self._window.evaluate_js(safe_js_call("showAlert", title, message, "error"))
+            elif cmd_type == "interaction_notification":
+                action = cmd.get("action", "")
+                data = cmd.get("data", {})
+                if isinstance(data, dict) and action:
+                    data["action"] = action
+                    data_json = json.dumps(data, ensure_ascii=False)
+                    self._window.evaluate_js(
+                        f"if(window.NotificationBellModule) "
+                        f"window.NotificationBellModule.pushInteractionMessage({data_json})"
+                    )
 
         except Exception as e:
             print(f"专用指令解析异常: {e}")
@@ -1130,7 +1154,8 @@ class AppApi:
             "user_seq_id": get_user_seq_id(),
             "autostart_enabled": self._cfg_mgr.get_autostart_enabled(),
             "tray_mode": self._cfg_mgr.get_tray_mode(),
-            "close_confirm": self._cfg_mgr.get_close_confirm()
+            "close_confirm": self._cfg_mgr.get_close_confirm(),
+            "ui_language": self._cfg_mgr.get_ui_language()
         }
 
     def ensure_telemetry_ready(self, timeout_ms=2500):
@@ -1184,6 +1209,11 @@ class AppApi:
     def set_theme(self, mode):
         # 保存前端选择的主题模式（Light/Dark）到配置。
         self._cfg_mgr.set_theme_mode(mode)
+
+    def set_ui_language(self, language):
+        # 保存前端选择的界面语言。
+        ok = self._cfg_mgr.set_ui_language(str(language or "zh_cn"))
+        return {"success": bool(ok), "language": self._cfg_mgr.get_ui_language()}
 
     def set_launch_mode(self, mode):
         """
@@ -2553,10 +2583,26 @@ class AppApi:
         if not url:
             return
 
-        import re
         u = str(url).strip()
-        if not re.match(r'^[a-zA-Z]+://', u):
+        if not re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', u):
             u = "https://" + u
+
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(u)
+            scheme = parsed.scheme.lower()
+            if scheme not in {"http", "https", "mailto"}:
+                self._logger.warning(f"[WARN] 已拦截不支持的外部链接协议: {scheme or 'empty'}")
+                return
+            if scheme in {"http", "https"} and not parsed.netloc:
+                self._logger.warning("[WARN] 已拦截格式异常的外部链接")
+                return
+            if scheme == "mailto" and not parsed.path:
+                self._logger.warning("[WARN] 已拦截格式异常的邮件链接")
+                return
+        except Exception as e:
+            self._logger.error(f"[ERROR] 外部链接校验失败: {e}")
+            return
 
         try:
             import os
@@ -2847,6 +2893,32 @@ class AppApi:
             return True, "已就绪"
         except Exception as e:
             return False, f"创建 lang/AimerWT 失败: {e}"
+
+    def _resolve_custom_text_temp_dir(self, lang_dir: Path, temp_dir_value) -> Path | None:
+        temp_dir_text = str(temp_dir_value or "").strip()
+        if not temp_dir_text:
+            return None
+
+        try:
+            aimer_dir = (Path(lang_dir) / "aimerWT").resolve(strict=False)
+            temp_dir = Path(temp_dir_text).expanduser().resolve(strict=False)
+        except Exception:
+            return None
+
+        if temp_dir.name not in {".import_temp", ".skipped_files"}:
+            return None
+
+        def norm_path(path: Path) -> str:
+            return os.path.normcase(os.path.normpath(str(path)))
+
+        if norm_path(temp_dir.parent) != norm_path(aimer_dir):
+            return None
+
+        return temp_dir
+
+    def _cleanup_custom_text_temp_dir(self, temp_dir: Path) -> None:
+        if temp_dir.exists() and temp_dir.is_dir():
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _redirect_localization_for_files(self, lang_dir: Path, changed_files: list[str]) -> tuple[bool, str]:
         if not changed_files:
@@ -3406,17 +3478,30 @@ class AppApi:
 
         deleted_files = []
         failed_files = []
+        aimer_dir_resolved = aimer_dir.resolve(strict=False)
 
         for file_name in file_names:
-            file_path = aimer_dir / file_name
+            raw_file_name = str(file_name or "").strip()
+            safe_file_name = sanitize_csv_file_name(raw_file_name)
+            if not safe_file_name or Path(safe_file_name).name != safe_file_name:
+                failed_files.append(f"{raw_file_name or file_name} (文件名不安全)")
+                continue
+
+            file_path = (aimer_dir / safe_file_name).resolve(strict=False)
+            try:
+                file_path.relative_to(aimer_dir_resolved)
+            except ValueError:
+                failed_files.append(f"{safe_file_name} (路径越界)")
+                continue
+
             try:
                 if file_path.exists():
                     file_path.unlink()
-                    deleted_files.append(file_name)
+                    deleted_files.append(safe_file_name)
                 else:
-                    failed_files.append(f"{file_name} (文件不存在)")
+                    failed_files.append(f"{safe_file_name} (文件不存在)")
             except Exception as e:
-                failed_files.append(f"{file_name} ({e})")
+                failed_files.append(f"{safe_file_name} ({e})")
 
         if not deleted_files:
             return {"success": False, "msg": "没有成功删除任何文件。", "failed": failed_files}
@@ -3459,10 +3544,6 @@ class AppApi:
         if not selected_files or not temp_dir_str:
             return {"success": False, "msg": "缺少必要参数。"}
 
-        temp_dir = Path(temp_dir_str)
-        if not temp_dir.exists():
-            return {"success": False, "msg": "临时文件已被清理，请重新导入。"}
-
         game_path = self._cfg_mgr.get_game_path()
         if not game_path:
             return {"success": False, "msg": "请先在主页设置游戏路径。"}
@@ -3480,6 +3561,11 @@ class AppApi:
             return {"success": False, "msg": info}
 
         aimer_dir = lang_dir / "aimerWT"
+        temp_dir = self._resolve_custom_text_temp_dir(lang_dir, temp_dir_str)
+        if not temp_dir:
+            return {"success": False, "msg": "临时目录路径不安全，请重新导入。"}
+        if not temp_dir.exists():
+            return {"success": False, "msg": "临时文件已被清理，请重新导入。"}
 
         try:
             # 查找临时目录中的所有CSV文件
@@ -3510,8 +3596,7 @@ class AppApi:
                     mapping_info.append(f"✗ 失败: {file_name} ({e})")
 
             # 清理临时目录
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            self._cleanup_custom_text_temp_dir(temp_dir)
 
             if not imported_files:
                 return {"success": False, "msg": "没有成功导入任何文件。", "details": mapping_info}
@@ -3530,8 +3615,7 @@ class AppApi:
 
         except Exception as e:
             # 出错时也清理临时目录
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            self._cleanup_custom_text_temp_dir(temp_dir)
             return {"success": False, "msg": f"手动导入失败: {e}"}
 
     def cleanup_import_temp(self, payload):
@@ -3551,10 +3635,17 @@ class AppApi:
         if not temp_dir_str:
             return {"success": False, "msg": "缺少临时目录路径。"}
 
-        temp_dir = Path(temp_dir_str)
+        game_path = self._cfg_mgr.get_game_path()
+        if not game_path:
+            return {"success": False, "msg": "请先在主页设置游戏路径。"}
+
+        lang_dir = Path(game_path) / "lang"
+        temp_dir = self._resolve_custom_text_temp_dir(lang_dir, temp_dir_str)
+        if not temp_dir:
+            return {"success": False, "msg": "临时目录路径不安全。"}
+
         try:
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            self._cleanup_custom_text_temp_dir(temp_dir)
             return {"success": True, "msg": "清理成功。"}
         except Exception as e:
             return {"success": False, "msg": f"清理失败: {e}"}

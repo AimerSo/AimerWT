@@ -410,7 +410,8 @@ body {
 #app-root > .app-header,
 #app-root > .main-container,
 #app-root > #tooltip,
-#app-root > #btn-guide-help {
+#app-root > #btn-guide-help,
+#app-root > #btn-notification-bell {
     transition: filter 0.22s ease, transform 0.22s ease, opacity 0.22s ease;
     transform-origin: top center;
 }
@@ -419,14 +420,17 @@ body.ai-disclaimer-open #app-root > .app-header,
 body.ai-disclaimer-open #app-root > .main-container,
 body.ai-disclaimer-open #app-root > #tooltip,
 body.ai-disclaimer-open #app-root > #btn-guide-help,
+body.ai-disclaimer-open #app-root > #btn-notification-bell,
 body.ai-chat-open #app-root > .app-header,
 body.ai-chat-open #app-root > .main-container,
 body.ai-chat-open #app-root > #tooltip,
 body.ai-chat-open #app-root > #btn-guide-help,
+body.ai-chat-open #app-root > #btn-notification-bell,
 body.overlay-performance-lock #app-root > .app-header,
 body.overlay-performance-lock #app-root > .main-container,
 body.overlay-performance-lock #app-root > #tooltip,
-body.overlay-performance-lock #app-root > #btn-guide-help {
+body.overlay-performance-lock #app-root > #btn-guide-help,
+body.overlay-performance-lock #app-root > #btn-notification-bell {
     filter: blur(4px) saturate(0.96);
     transform: scale(0.995);
     opacity: 0.9;
@@ -438,16 +442,22 @@ body.ai-disclaimer-open #app-root > .main-container *,
 body.ai-disclaimer-open #app-root > #tooltip *,
 body.ai-disclaimer-open #app-root > #btn-guide-help,
 body.ai-disclaimer-open #app-root > #btn-guide-help *,
+body.ai-disclaimer-open #app-root > #btn-notification-bell,
+body.ai-disclaimer-open #app-root > #btn-notification-bell *,
 body.ai-chat-open #app-root > .app-header *,
 body.ai-chat-open #app-root > .main-container *,
 body.ai-chat-open #app-root > #tooltip *,
 body.ai-chat-open #app-root > #btn-guide-help,
 body.ai-chat-open #app-root > #btn-guide-help *,
+body.ai-chat-open #app-root > #btn-notification-bell,
+body.ai-chat-open #app-root > #btn-notification-bell *,
 body.overlay-performance-lock #app-root > .app-header *,
 body.overlay-performance-lock #app-root > .main-container *,
 body.overlay-performance-lock #app-root > #tooltip *,
 body.overlay-performance-lock #app-root > #btn-guide-help,
-body.overlay-performance-lock #app-root > #btn-guide-help * {
+body.overlay-performance-lock #app-root > #btn-guide-help *,
+body.overlay-performance-lock #app-root > #btn-notification-bell,
+body.overlay-performance-lock #app-root > #btn-notification-bell * {
     animation-play-state: paused !important;
 }
 
@@ -455,14 +465,17 @@ body.ai-disclaimer-open #app-root > .app-header *,
 body.ai-disclaimer-open #app-root > .main-container *,
 body.ai-disclaimer-open #app-root > #tooltip *,
 body.ai-disclaimer-open #app-root > #btn-guide-help *,
+body.ai-disclaimer-open #app-root > #btn-notification-bell *,
 body.ai-chat-open #app-root > .app-header *,
 body.ai-chat-open #app-root > .main-container *,
 body.ai-chat-open #app-root > #tooltip *,
 body.ai-chat-open #app-root > #btn-guide-help *,
+body.ai-chat-open #app-root > #btn-notification-bell *,
 body.overlay-performance-lock #app-root > .app-header *,
 body.overlay-performance-lock #app-root > .main-container *,
 body.overlay-performance-lock #app-root > #tooltip *,
-body.overlay-performance-lock #app-root > #btn-guide-help * {
+body.overlay-performance-lock #app-root > #btn-guide-help *,
+body.overlay-performance-lock #app-root > #btn-notification-bell * {
     transition: none !important;
 }
 

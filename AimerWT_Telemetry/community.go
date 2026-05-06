@@ -1032,6 +1032,35 @@ func initCommunityClientRoutes(r *gin.Engine) {
 			auditDetail(map[string]interface{}{"notice_id": req.NoticeID, "parent_id": req.ParentID, "content": content}),
 			userVersion, c.ClientIP())
 
+		// 向被回复评论的作者推送互动通知（不向自己推送）
+		if replyTarget != nil && replyTarget.MachineID != req.MachineID {
+			replierNickname := ""
+			nm := buildNicknameMap([]string{req.MachineID})
+			if n, ok := nm[req.MachineID]; ok && n != "" {
+				replierNickname = n
+			} else {
+				sm := buildSeqMap([]string{req.MachineID})
+				if uid, ok := sm[req.MachineID]; ok {
+					replierNickname = fmt.Sprintf("用户#%d", uid)
+				}
+			}
+			contentPreview := content
+			if len([]rune(contentPreview)) > 30 {
+				contentPreview = string([]rune(contentPreview)[:30]) + "..."
+			}
+			var noticeTitle string
+			db.Model(&NoticeItem{}).Where("id = ?", req.NoticeID).Select("title").Scan(&noticeTitle)
+			notifData := map[string]interface{}{
+				"actor":        replierNickname,
+				"content":      contentPreview,
+				"notice_id":    req.NoticeID,
+				"comment_id":   replyTarget.ID,
+				"notice_title": noticeTitle,
+			}
+			go SendInteractionNotification(replyTarget.MachineID, "reply", notifData)
+			go enqueueInteractionCommand(replyTarget.MachineID, "reply", notifData)
+		}
+
 		c.JSON(200, gin.H{
 			"status":  "success",
 			"comment": commentResp,
@@ -1108,6 +1137,36 @@ func initCommunityClientRoutes(r *gin.Engine) {
 			replyCount = buildReplyCountMap(comment.NoticeID, []uint{comment.ID})[comment.ID]
 		}
 		authorWeight := buildCommentAuthorWeightMap([]string{comment.MachineID}, weightCfg)[comment.MachineID]
+
+		// 向被点赞评论的作者推送互动通知（不向自己推送）
+		if comment.MachineID != req.MachineID {
+			likerNickname := ""
+			nm := buildNicknameMap([]string{req.MachineID})
+			if n, ok := nm[req.MachineID]; ok && n != "" {
+				likerNickname = n
+			} else {
+				sm := buildSeqMap([]string{req.MachineID})
+				if uid, ok := sm[req.MachineID]; ok {
+					likerNickname = fmt.Sprintf("用户#%d", uid)
+				}
+			}
+			contentPreview := comment.Content
+			if len([]rune(contentPreview)) > 30 {
+				contentPreview = string([]rune(contentPreview)[:30]) + "..."
+			}
+			var noticeTitle string
+			db.Model(&NoticeItem{}).Where("id = ?", comment.NoticeID).Select("title").Scan(&noticeTitle)
+			notifData := map[string]interface{}{
+				"actor":        likerNickname,
+				"content":      contentPreview,
+				"notice_id":    comment.NoticeID,
+				"comment_id":   comment.ID,
+				"notice_title": noticeTitle,
+			}
+			go SendInteractionNotification(comment.MachineID, "like", notifData)
+			go enqueueInteractionCommand(comment.MachineID, "like", notifData)
+		}
+
 		c.JSON(200, gin.H{
 			"status":       "liked",
 			"liked":        true,
@@ -1790,4 +1849,24 @@ func initCommunityAdminRoutes(admin *gin.RouterGroup) {
 			c.JSON(200, gin.H{"status": "success"})
 		})
 	}
+}
+
+// enqueueInteractionCommand 将互动通知写入目标用户的 pending_command
+// 作为 WebSocket 推送的 HTTP 轮询回退通道，确保无 WS 连接时通知仍可送达
+func enqueueInteractionCommand(targetMachineID string, action string, data map[string]interface{}) {
+	if targetMachineID == "" {
+		return
+	}
+	cmd := map[string]interface{}{
+		"type":   "interaction_notification",
+		"action": action,
+		"data":   data,
+	}
+	cmdJSON, err := json.Marshal(cmd)
+	if err != nil {
+		return
+	}
+	db.Model(&TelemetryRecord{}).
+		Where("machine_id = ? AND (pending_command IS NULL OR pending_command = '')", targetMachineID).
+		Update("pending_command", string(cmdJSON))
 }

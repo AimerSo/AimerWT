@@ -45,19 +45,25 @@
         /* 链接：安全过滤 + target=_blank */
         renderer.link = function (token) {
             var href = sanitizeUrl(token.href);
-            if (!href) return token.text || '';
+            if (!href) return escapeHtml(token.text || '');
             return '<a href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer">' +
-                (token.text || href) + '</a>';
+                escapeHtml(token.text || href) + '</a>';
         };
 
         /* 图片：添加懒加载、圆角样式 */
         renderer.image = function (token) {
             var src = sanitizeUrl(token.href);
-            if (!src) return token.text || '';
+            if (!src) return escapeHtml(token.text || '');
             var alt = escapeHtml(token.text || '');
             var title = token.title ? ' title="' + escapeHtml(token.title) + '"' : '';
             return '<img src="' + escapeHtml(src) + '" alt="' + alt + '"' + title +
                 ' loading="lazy" class="md-img">';
+        };
+
+        /* 原始 HTML：公告内容来自远端，只作为文本展示 */
+        renderer.html = function (token) {
+            if (typeof token === 'string') return escapeHtml(token);
+            return escapeHtml((token && (token.text || token.raw)) || '');
         };
 
         /* 代码块：集成 highlight.js */

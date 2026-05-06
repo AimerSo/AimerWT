@@ -37,7 +37,34 @@ const MinimalistLoading = {
     currentProgress: 0,
     targetProgress: 0,
     animationFrame: null,
-    messages: ["准备加载文件...", "正在处理资源...", "正在写入配置...", "同步中...", "加载完成！"],
+    messageKeys: ["loading.prepare", "loading.processing", "loading.writing", "loading.syncing", "loading.done"],
+
+    _t(key, params = {}) {
+        const fallback = {
+            "common.close": "关闭",
+            "loading.prepare": "准备加载文件...",
+            "loading.preparing_install": "正在准备安装...",
+            "loading.processing": "正在处理资源...",
+            "loading.writing": "正在写入配置...",
+            "loading.syncing": "同步中...",
+            "loading.done": "加载完成！",
+            "loading.percent": "已完成 {n}%",
+            "loading.slow": "导入耗时较长，请稍候或点击关闭",
+        };
+        let text = window.I18N ? I18N.t(key, params) : (fallback[key] || key);
+        Object.entries(params).forEach(([name, value]) => {
+            text = text.replace(new RegExp(`\\{${name}\\}`, 'g'), String(value));
+        });
+        return text;
+    },
+
+    _getMessages() {
+        return this.messageKeys.map(key => this._t(key));
+    },
+
+    _formatPercent(value) {
+        return this._t("loading.percent", { n: Math.round(value) });
+    },
 
     // 初始化并创建 DOM 结构
     _init() {
@@ -177,12 +204,12 @@ const MinimalistLoading = {
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" style="opacity: 0.75;"></path>
                     </svg>
                     <div>
-                        <p id="loading-status" class="loading-text-status">正在处理资源...</p>
-                        <p id="loading-percent" class="loading-text-percent">已完成 0%</p>
+                        <p id="loading-status" class="loading-text-status">${this._t("loading.processing")}</p>
+                        <p id="loading-percent" class="loading-text-percent">${this._formatPercent(0)}</p>
                     </div>
                 </div>
                 <div class="loading-actions">
-                    <button id="loading-cancel" class="loading-cancel-btn hidden" type="button">关闭</button>
+                    <button id="loading-cancel" class="loading-cancel-btn hidden" type="button">${this._t("common.close")}</button>
                 </div>
             </div>
         `;
@@ -196,16 +223,19 @@ const MinimalistLoading = {
     },
 
     // 显示 (autoSimulate: 是否自动模拟进度)
-    show(autoSimulate = true, initialMessage = "准备加载文件...") {
+    show(autoSimulate = true, initialMessage = null) {
         this._init();
         this.overlay.classList.remove('hidden');
         this.lastUpdateAt = Date.now();
 
         // 重置状态
         this.bar.style.width = '0%';
-        this.percent.innerText = '已完成 0%';
-        this.status.innerText = initialMessage;
-        if (this.cancelBtn) this.cancelBtn.classList.add('hidden');
+        this.percent.innerText = this._formatPercent(0);
+        this.status.innerText = initialMessage || this._t("loading.prepare");
+        if (this.cancelBtn) {
+            this.cancelBtn.textContent = this._t("common.close");
+            this.cancelBtn.classList.add('hidden');
+        }
 
         if (autoSimulate) {
             if (this.watchdog) clearInterval(this.watchdog);
@@ -220,7 +250,7 @@ const MinimalistLoading = {
                 if (!this.overlay || this.overlay.classList.contains('hidden')) return;
                 const elapsed = Date.now() - this.lastUpdateAt;
                 if (elapsed >= 30000) {
-                    if (this.status) this.status.innerText = "导入耗时较长，请稍候或点击关闭";
+                    if (this.status) this.status.innerText = this._t("loading.slow");
                     if (this.cancelBtn) this.cancelBtn.classList.remove('hidden');
                 }
             }, 1000);
@@ -267,7 +297,7 @@ const MinimalistLoading = {
             // 已经足够接近目标，直接设置
             this.currentProgress = this.targetProgress;
             this.bar.style.width = `${this.currentProgress}%`;
-            this.percent.innerText = `已完成 ${Math.round(this.currentProgress)}%`;
+            this.percent.innerText = this._formatPercent(this.currentProgress);
             this.animationFrame = null;
 
             // 如果达到100%，延迟隐藏
@@ -285,7 +315,7 @@ const MinimalistLoading = {
         }
 
         this.bar.style.width = `${this.currentProgress}%`;
-        this.percent.innerText = `已完成 ${Math.round(this.currentProgress)}%`;
+        this.percent.innerText = this._formatPercent(this.currentProgress);
 
         // 继续动画
         this.animationFrame = requestAnimationFrame(() => this._animateProgress());
@@ -294,6 +324,7 @@ const MinimalistLoading = {
     // 内部模拟逻辑
     _simulate() {
         let progress = 0;
+        const messages = this._getMessages();
         if (this.interval) clearInterval(this.interval);
 
         this.interval = setInterval(() => {
@@ -302,10 +333,10 @@ const MinimalistLoading = {
             if (progress > 100) progress = 100;
 
             this.bar.style.width = `${progress}%`;
-            this.percent.innerText = `已完成 ${progress}%`;
+            this.percent.innerText = this._formatPercent(progress);
 
-            const msgIndex = Math.min(Math.floor(progress / (100 / this.messages.length)), this.messages.length - 1);
-            this.status.innerText = this.messages[msgIndex];
+            const msgIndex = Math.min(Math.floor(progress / (100 / messages.length)), messages.length - 1);
+            this.status.innerText = messages[msgIndex];
 
             if (progress >= 100) {
                 clearInterval(this.interval);

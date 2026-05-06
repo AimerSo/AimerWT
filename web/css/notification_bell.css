@@ -1,0 +1,504 @@
+/* ======================================================================
+   通知铃铛按钮 & 通知面板样式
+   与左下角问号按钮（#btn-guide-help）对称，采用相同的显隐与动画策略。
+   ====================================================================== */
+
+/* ---- 铃铛按钮 ---- */
+#btn-notification-bell {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 2600;
+    width: 42px;
+    height: 42px;
+    border: 1px solid color-mix(in srgb, var(--border-color, #e2e8f0) 88%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-card, #fff) 92%, transparent);
+    color: var(--text-sec, #64748b);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 8px 20px rgba(9, 16, 32, 0.16);
+    transition: opacity 0.28s ease, transform 0.28s ease, box-shadow 0.28s ease, color 0.2s ease;
+    opacity: 0;
+    transform: translateY(5px) scale(0.96);
+    pointer-events: none;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    font-size: 18px;
+    padding: 0;
+    line-height: 1;
+}
+
+/* 鼠标接近或悬停 */
+#btn-notification-bell.near,
+#btn-notification-bell:hover {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    box-shadow: 0 12px 28px rgba(9, 16, 32, 0.24);
+    color: var(--primary, #ff9900);
+    pointer-events: auto;
+}
+
+/* 有新消息时始终可见 */
+#btn-notification-bell.bell-has-new {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+    color: var(--primary, #ff9900);
+}
+
+/* 通知面板打开时强制可见 */
+#btn-notification-bell.bell-panel-open {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+    color: var(--primary, #ff9900);
+    box-shadow: 0 12px 28px rgba(9, 16, 32, 0.24);
+}
+
+/* 铃铛晃动动画 */
+#btn-notification-bell.bell-ringing i {
+    animation: bell-swing 0.8s ease-in-out 3;
+    transform-origin: 50% 4px;
+}
+
+/* 未读数红点徽章 */
+#btn-notification-bell .bell-badge {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 10px;
+    height: 10px;
+    background: #EF4444;
+    border-radius: 50%;
+    border: 2px solid var(--bg-card, #fff);
+    display: none;
+    animation: bell-badge-pulse 2s ease-in-out infinite;
+}
+
+#btn-notification-bell.bell-has-new .bell-badge {
+    display: block;
+}
+
+/* 弹窗/遮罩打开时隐藏铃铛 */
+body.ai-disclaimer-open #app-root > #btn-notification-bell,
+body.ai-chat-open #app-root > #btn-notification-bell,
+body.overlay-performance-lock #app-root > #btn-notification-bell {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+/* ---- 关键帧动画 ---- */
+
+@keyframes bell-swing {
+    0% { transform: rotate(0deg); }
+    15% { transform: rotate(14deg); }
+    30% { transform: rotate(-12deg); }
+    45% { transform: rotate(10deg); }
+    60% { transform: rotate(-8deg); }
+    75% { transform: rotate(4deg); }
+    100% { transform: rotate(0deg); }
+}
+
+@keyframes bell-badge-pulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
+    }
+}
+
+/* ====================================================================== */
+/* 通知面板                                                                 */
+/* ====================================================================== */
+
+.notif-panel-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2650;
+    display: none;
+}
+
+.notif-panel-overlay.open {
+    display: block;
+}
+
+.notif-panel {
+    position: fixed;
+    right: 18px;
+    bottom: 72px;
+    z-index: 2660;
+    width: 380px;
+    height: 520px;
+    background: var(--bg-card, #fff);
+    border: 1px solid color-mix(in srgb, var(--border-color, #e2e8f0) 60%, transparent);
+    border-radius: 18px;
+    box-shadow:
+        0 20px 60px rgba(9, 16, 32, 0.22),
+        0 8px 24px rgba(9, 16, 32, 0.10),
+        0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+    transition: opacity 0.25s ease, transform 0.25s cubic-bezier(.2, .8, .2, 1);
+}
+
+.notif-panel.open {
+    display: flex;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+/* 面板头部 */
+.notif-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
+    flex-shrink: 0;
+}
+
+.notif-panel-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-main, #2c3e50);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.notif-panel-title i {
+    font-size: 18px;
+    color: var(--primary, #ff9900);
+}
+
+.notif-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.notif-panel-action-btn {
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-sec, #64748b);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    transition: all 0.2s ease;
+    padding: 0;
+}
+
+.notif-panel-action-btn:hover {
+    background: var(--nav-item-hover-bg, rgba(0,0,0,0.05));
+    color: var(--primary, #ff9900);
+}
+
+/* Tab 栏 */
+.notif-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
+    flex-shrink: 0;
+}
+
+.notif-tab-btn {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--text-sec, #64748b);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 0;
+    cursor: pointer;
+    position: relative;
+    transition: color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+}
+
+.notif-tab-btn:hover {
+    color: var(--text-main, #2c3e50);
+}
+
+.notif-tab-btn.active {
+    color: var(--primary, #ff9900);
+}
+
+.notif-tab-btn.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 20%;
+    width: 60%;
+    height: 2px;
+    background: var(--primary, #ff9900);
+    border-radius: 2px;
+}
+
+/* Tab 未读数 */
+.notif-tab-count {
+    font-size: 10px;
+    font-weight: 700;
+    background: rgba(239, 68, 68, 0.12);
+    color: #EF4444;
+    border-radius: 999px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.notif-tab-count:empty,
+.notif-tab-count[data-count="0"] {
+    display: none;
+}
+
+/* 消息列表 */
+.notif-list-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px 0;
+}
+
+.notif-list-wrap:hover::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-track-hover, #ccc);
+}
+
+.notif-list {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 单条消息 */
+.notif-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 18px;
+    cursor: default;
+    transition: background 0.18s ease;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color, #e2e8f0) 50%, transparent);
+}
+
+.notif-item:last-child {
+    border-bottom: none;
+}
+
+.notif-item:hover {
+    background: var(--nav-item-hover-bg, rgba(0,0,0,0.03));
+}
+
+.notif-item-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+/* 系统消息图标 */
+.notif-item-icon.icon-system {
+    background: rgba(59, 130, 246, 0.12);
+    color: #3B82F6;
+}
+
+/* 点赞图标 */
+.notif-item-icon.icon-like {
+    background: rgba(239, 68, 68, 0.10);
+    color: #EF4444;
+}
+
+/* 回复图标 */
+.notif-item-icon.icon-reply {
+    background: rgba(16, 185, 129, 0.12);
+    color: #10B981;
+}
+
+.notif-item-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.notif-item-text {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-main, #2c3e50);
+    line-height: 1.5;
+    margin: 0 0 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.notif-item-text strong {
+    color: var(--primary, #ff9900);
+    font-weight: 600;
+}
+
+.notif-item-sub {
+    font-size: 11px;
+    color: var(--text-sec, #7f8c8d);
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.notif-item-time {
+    font-size: 11px;
+    color: var(--text-sec, #7f8c8d);
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+/* 空状态 */
+.notif-empty {
+    padding: 48px 20px;
+    text-align: center;
+    color: var(--text-sec, #7f8c8d);
+}
+
+.notif-empty-icon {
+    font-size: 40px;
+    opacity: 0.3;
+    margin-bottom: 12px;
+}
+
+.notif-empty-text {
+    font-size: 13px;
+    margin: 0;
+}
+
+/* ---- 设置面板 ---- */
+
+.notif-settings-panel {
+    padding: 14px 18px;
+    border-top: 1px solid var(--border-color, #e2e8f0);
+    flex-shrink: 0;
+    display: none;
+}
+
+.notif-settings-panel.open {
+    display: block;
+}
+
+.notif-settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.notif-settings-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-main, #2c3e50);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.notif-settings-label i {
+    color: var(--text-sec, #64748b);
+    font-size: 15px;
+}
+
+/* Toggle Switch */
+.notif-toggle-switch {
+    position: relative;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+}
+
+.notif-toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.notif-toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--border-color, #e2e8f0);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.25s ease;
+}
+
+.notif-toggle-slider::before {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 2px;
+    width: 18px;
+    height: 18px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.25s ease;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+.notif-toggle-switch input:checked + .notif-toggle-slider {
+    background: var(--primary, #ff9900);
+}
+
+.notif-toggle-switch input:checked + .notif-toggle-slider::before {
+    transform: translateX(18px);
+}
+
+/* 面板底部提示 */
+.notif-panel-footer {
+    padding: 8px 18px 12px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.notif-panel-footer-text {
+    font-size: 11px;
+    color: var(--text-sec, #7f8c8d);
+    opacity: 0.6;
+    margin: 0;
+}
+
+/* ---- 弹窗/遮罩打开时的联动样式 ---- */
+
+body.ai-disclaimer-open #app-root > #btn-notification-bell,
+body.ai-disclaimer-open #app-root > #btn-notification-bell *,
+body.ai-chat-open #app-root > #btn-notification-bell,
+body.ai-chat-open #app-root > #btn-notification-bell *,
+body.overlay-performance-lock #app-root > #btn-notification-bell,
+body.overlay-performance-lock #app-root > #btn-notification-bell * {
+    animation-play-state: paused !important;
+}

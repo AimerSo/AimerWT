@@ -459,3 +459,21 @@ func BroadcastMaintenance(enabled bool, message string) {
 	data, _ := json.Marshal(msg)
 	wsHub.BroadcastToAll(data)
 }
+
+// SendInteractionNotification 向指定客户端推送互动通知（点赞/回复）
+func SendInteractionNotification(targetMachineID string, notifAction string, notifData map[string]interface{}) {
+	if wsHub == nil || targetMachineID == "" {
+		return
+	}
+	msg := PushMessage{
+		Type:   "interaction_notification",
+		Action: notifAction,
+		Data:   notifData,
+		Time:   time.Now().Unix(),
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	wsHub.SendToMachine(targetMachineID, data)
+}

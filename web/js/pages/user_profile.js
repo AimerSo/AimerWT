@@ -291,6 +291,22 @@
         }
     }
 
+    function isOnlineProfileAvailable() {
+        if (window.app && typeof window.app.isOnlineFeatureAvailable === 'function') {
+            return window.app.isOnlineFeatureAvailable();
+        }
+        if (window.I18N && typeof window.I18N.isOnlineFeatureAvailable === 'function') {
+            return window.I18N.isOnlineFeatureAvailable();
+        }
+        return true;
+    }
+
+    function stopForCurrentLanguage() {
+        clearLoadRetry();
+        _loadFailureCount = 0;
+        setOfflineTipVisible(false);
+    }
+
     function scheduleLoadRetry(delayMs) {
         clearLoadRetry();
         _loadRetryTimer = window.setTimeout(function () {
@@ -300,6 +316,10 @@
     }
 
     async function loadProfile() {
+        if (!isOnlineProfileAvailable()) {
+            stopForCurrentLanguage();
+            return;
+        }
         if (_loadInFlight) return;
         var mid = getMachineID();
         var endpoint = buildProfileEndpoint();
@@ -343,6 +363,7 @@
     }
 
     async function saveNickname() {
+        if (!isOnlineProfileAvailable()) return;
         var mid = getMachineID();
         var input = document.getElementById('up-nickname-input');
         var endpoint = buildProfileEndpoint();
@@ -417,6 +438,7 @@
     }
 
     async function uploadAvatar(dataURL) {
+        if (!isOnlineProfileAvailable()) return;
         var mid = getMachineID();
         var endpoint = buildProfileEndpoint();
         if (!mid || !endpoint || !_featureConfig.avatar_upload_enabled || (_profile && !_profile.can_set_avatar)) return;
@@ -443,7 +465,11 @@
             _serviceBaseURL = normalizeServiceBaseURL(reportURL);
         }
         initAvatarUpload();
-        loadProfile();
+        if (isOnlineProfileAvailable()) {
+            loadProfile();
+        } else {
+            stopForCurrentLanguage();
+        }
     }
 
     function showVerifyDialog() {
@@ -470,12 +496,13 @@
         saveNickname: saveNickname,
         renderProfile: renderProfile,
         applyFeatureSettings: applyFeatureSettings,
+        stopForCurrentLanguage: stopForCurrentLanguage,
         showVerifyDialog: showVerifyDialog
     };
 
     // 如果已有全局 machine_id，延迟初始化
     document.addEventListener('DOMContentLoaded', function () {
-        if (window._telemetryHWID) {
+        if (window._telemetryHWID && isOnlineProfileAvailable()) {
             _serviceBaseURL = normalizeServiceBaseURL(window._telemetryBaseUrl || window._reportURL || '');
             setTimeout(loadProfile, 500);
         }

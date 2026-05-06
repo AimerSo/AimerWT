@@ -22,6 +22,7 @@
     <link rel="stylesheet" href="css/pages/custom_text.css">
     <link rel="stylesheet" href="css/import-result-modal.css">
     <link rel="stylesheet" href="css/header_banner.css">
+    <link rel="stylesheet" href="css/notification_bell.css?v=20260404_1">
     <link rel="stylesheet" href="guide/guide.css">
     <link rel="stylesheet" href="css/user_profile.css">
 </head>
@@ -59,7 +60,7 @@
             <img src="assets/logo.ico" class="app-logo" alt="Logo">
             <div class="app-brand-wrapper">
                 <span class="app-brand-text">Aimer WT</span>
-                <span class="app-version-text" style="color: #8B0000;">v3 内测</span>
+                <span class="app-version-text" style="color: #8B0000;" data-i18n="app.version">v3 内测</span>
             </div>
         </div>
 
@@ -69,19 +70,19 @@
         <!-- 2. 中间导航菜单 (不可拖拽) -->
         <nav class="header-nav">
             <button class="nav-btn active" id="btn-home" onclick="app.switchTab('home')">
-                <i class="ri-home-4-line"></i> 主页
+                <i class="ri-home-4-line"></i> <span data-i18n="nav.home">主页</span>
             </button>
             <button class="nav-btn" id="btn-lib" onclick="app.switchTab('lib')">
-                <i class="ri-archive-line"></i> 语音包库
+                <i class="ri-archive-line"></i> <span data-i18n="nav.lib">语音包库</span>
             </button>
             <button class="nav-btn" id="btn-camo" onclick="app.switchTab('camo')">
-                <i class="ri-brush-3-line"></i> 副功能库
+                <i class="ri-brush-3-line"></i> <span data-i18n="nav.camo">副功能库</span>
             </button>
             <button class="nav-btn" id="btn-sight" onclick="app.switchTab('sight')">
-                <i class="ri-crosshair-line"></i> 信息库
+                <i class="ri-crosshair-line"></i> <span data-i18n="nav.sight">信息库</span>
             </button>
             <button class="nav-btn" id="btn-settings" onclick="app.switchTab('settings')">
-                <i class="ri-settings-3-line"></i> 设置
+                <i class="ri-settings-3-line"></i> <span data-i18n="nav.settings">设置</span>
             </button>
         </nav>
 
@@ -121,8 +122,8 @@
         <div id="drop-overlay" class="drop-overlay">
             <div class="drop-overlay-content">
                 <i class="ri-file-zip-line drop-overlay-icon"></i>
-                <div class="drop-overlay-text">放下并导入语音包</div>
-                <div style="font-size: 14px; color: var(--text-sec);">支持 ZIP / RAR / 7Z / BANK 等格式</div>
+                <div class="drop-overlay-text" data-i18n="drop.import_voice_pack">放下并导入语音包</div>
+                <div style="font-size: 14px; color: var(--text-sec);" data-i18n="drop.supported_archives">支持 ZIP / RAR / 7Z / BANK 等格式</div>
             </div>
         </div>
 
@@ -135,23 +136,23 @@
                         <div class="status-icon" id="status-icon">
                             <i class="ri-wifi-off-line"></i>
                         </div>
-                        <div class="status-label">当前连接状态</div>
-                        <div class="status-text waiting" id="status-text">未搜索路径</div>
+                        <div class="status-label" data-i18n="home.connection_status">当前连接状态</div>
+                        <div class="status-text waiting" id="status-text" data-i18n="home.status.not_searched">未搜索路径</div>
                     </div>
                 </div>
 
                 <div class="card path-card">
                     <div class="card-header no-border">
-                        <h2>游戏路径</h2>
-                        <span class="subtitle">Game Path Directory</span>
+                        <h2 data-i18n="home.game_path">游戏路径</h2>
+                        <span class="subtitle" data-i18n="home.game_path_subtitle">Game Path Directory</span>
                     </div>
                     <div class="input-row">
-                        <input type="text" id="input-game-path" placeholder="等待选择或自动搜索..." readonly>
+                        <input type="text" id="input-game-path" placeholder="等待选择或自动搜索..." data-i18n-placeholder="home.game_path_placeholder" readonly>
                         <button class="btn secondary" onclick="app.browsePath()">
-                            <i class="ri-folder-open-line"></i> 浏览
+                            <i class="ri-folder-open-line"></i> <span data-i18n="common.browse">浏览</span>
                         </button>
                         <button class="btn primary" id="btn-auto-search" onclick="app.autoSearch()">
-                            <i class="ri-search-line"></i> 自动搜索
+                            <i class="ri-search-line"></i> <span data-i18n="common.search">自动搜索</span>
                         </button>
                     </div>
                 </div>
@@ -162,16 +163,16 @@
 
                 <div class="card log-card">
                     <div class="card-header no-border">
-                        <h3>运行日志</h3>
+                        <h3 data-i18n="home.log_title">运行日志</h3>
                         <span class="subtitle">System Log</span>
                         <div style="flex:1"></div>
                         <button class="btn small secondary" onclick="app.clearLogs()">
-                            <i class="ri-delete-bin-line"></i> 清空
+                            <i class="ri-delete-bin-line"></i> <span data-i18n="common.clear">清空</span>
                         </button>
                     </div>
                     <div class="log-container" id="log-container">
-                        <div class="log-line info">[System] 界面 UI 引擎加载完毕...</div>
-                        <div class="log-line sys">[System] 等待用户指令...</div>
+                        <div class="log-line info" data-i18n="home.log_ready">[System] 界面 UI 引擎加载完毕...</div>
+                        <div class="log-line sys" data-i18n="home.log_waiting">[System] 等待用户指令...</div>
                     </div>
                     <div class="game-status-bar">
                         <div class="game-status-left">
@@ -179,16 +180,16 @@
                                 <i class="ri-wifi-off-line"></i>
                             </div>
                             <div class="game-status-info">
-                                <span class="game-status-label">当前准备状态</span>
-                                <span class="game-status-text waiting" id="game-status-text">未就绪：请先选择路径</span>
+                                <span class="game-status-label" data-i18n="home.ready_status">当前准备状态</span>
+                                <span class="game-status-text waiting" id="game-status-text" data-i18n="home.ready.not_ready">未就绪：请先选择路径</span>
                             </div>
                         </div>
                         <div style="display: flex; gap: 8px;">
-                            <button class="btn secondary icon-only" onclick="app.openLaunchSettings()" title="启动设置">
+                            <button class="btn secondary icon-only" onclick="app.openLaunchSettings()" title="启动设置" data-i18n-title="home.launch_settings">
                                 <i class="ri-settings-3-line"></i>
                             </button>
                             <button class="btn primary" id="btn-start-game" onclick="app.startGame()">
-                                <i class="ri-play-fill"></i> 开始游戏
+                                <i class="ri-play-fill"></i> <span data-i18n="home.start_game">开始游戏</span>
                             </button>
                         </div>
                     </div>
@@ -202,29 +203,29 @@
                     <div class="toolbar-v2-left">
                         <button class="btn-v2 primary" onclick="app.openImportModal()">
                             <i class="ri-file-zip-line"></i>
-                            <span>导入压缩包</span>
+                            <span data-i18n="lib.import">导入压缩包</span>
                         </button>
                         <div class="btn-v2-group">
-                            <button class="btn-v2" onclick="app.openFolder('library')" title="打开库目录">
+                            <button class="btn-v2" onclick="app.openFolder('library')" title="打开库目录" data-i18n-title="lib.open_library">
                                 <i class="ri-folder-2-line"></i>
-                                <span>库目录</span>
+                                <span data-i18n="lib.open_library">库目录</span>
                             </button>
-                            <button class="btn-v2" onclick="app.openFolder('pending')" title="打开待解压区">
+                            <button class="btn-v2" onclick="app.openFolder('pending')" title="打开待解压区" data-i18n-title="lib.open_pending">
                                 <i class="ri-folder-download-line"></i>
-                                <span>待解压区</span>
+                                <span data-i18n="lib.open_pending">待解压区</span>
                             </button>
-                            <button class="btn-v2" onclick="app.openFolder('game')" title="打开游戏根目录">
+                            <button class="btn-v2" onclick="app.openFolder('game')" title="打开游戏根目录" data-i18n-title="lib.open_game">
                                 <i class="ri-gamepad-line"></i>
-                                <span>游戏目录</span>
+                                <span data-i18n="lib.open_game">游戏目录</span>
                             </button>
                         </div>
                     </div>
                     <div class="toolbar-v2-right">
                         <div class="search-v2">
                             <i class="ri-search-2-line"></i>
-                            <input type="text" placeholder="搜索作者或标题..." oninput="app.filterLibrary(this.value)">
+                            <input type="text" placeholder="搜索作者或标题..." data-i18n-placeholder="lib.search_placeholder" oninput="app.filterLibrary(this.value)">
                         </div>
-                        <button class="btn-v2 icon-only" onclick="app.refreshLibrary({manual:true})" title="刷新">
+                        <button class="btn-v2 icon-only" onclick="app.refreshLibrary({manual:true})" title="刷新" data-i18n-title="lib.refresh">
                             <i class="ri-refresh-line"></i>
                         </button>
                     </div>
@@ -234,8 +235,8 @@
             <div class="lib-scroll-area" id="lib-list">
                 <div class="empty-state">
                     <i class="ri-inbox-archive-line"></i>
-                    <h3>这里空空如也</h3>
-                    <p>请将 ZIP/RAR 包放入 [待解压区] 并点击左上角导入</p>
+                    <h3 data-i18n="lib.empty_title">这里空空如也</h3>
+                    <p data-i18n="lib.empty_import_desc">请将 ZIP/RAR 包放入 [待解压区] 并点击左上角导入</p>
                 </div>
             </div>
         </div>
@@ -248,28 +249,28 @@
                     <button class="resource-nav-item active" data-target="skins"
                         onclick="app.switchResourceView('skins')">
                         <i class="ri-brush-3-line"></i>
-                        <span>涂装库</span>
+                        <span data-i18n="tools.skins">涂装库</span>
                     </button>
                     <button class="resource-nav-item" data-target="sights" onclick="app.switchResourceView('sights')">
                         <i class="ri-crosshair-line"></i>
-                        <span>炮镜库</span>
+                        <span data-i18n="tools.sights">炮镜库</span>
                     </button>
                     <button class="resource-nav-item" data-target="tasks" onclick="app.switchResourceView('tasks')">
                         <i class="ri-task-line"></i>
-                        <span>任务库</span>
+                        <span data-i18n="tools.tasks">任务库</span>
                     </button>
                     <button class="resource-nav-item" data-target="models" onclick="app.switchResourceView('models')">
                         <i class="ri-box-3-line"></i>
-                        <span>模型库</span>
+                        <span data-i18n="tools.models">模型库</span>
                     </button>
                     <button class="resource-nav-item" data-target="hangar" onclick="app.switchResourceView('hangar')">
                         <i class="ri-plane-line"></i>
-                        <span>机库</span>
+                        <span data-i18n="tools.hangar">机库</span>
                     </button>
                     <button class="resource-nav-item resource-nav-item-compact" data-target="custom_text"
                         onclick="app.switchResourceView('custom_text')">
                         <i class="ri-sparkling-2-line"></i>
-                        <span>自定义文本</span>
+                        <span data-i18n="tools.custom_text">自定义文本</span>
                     </button>
                 </div>
 
@@ -278,11 +279,11 @@
                     <!-- 涂装视图 -->
                     <div class="resource-view active" id="view-skins">
                         <div class="resource-view-header">
-                            <h2><i class="ri-brush-3-line"></i> 涂装库</h2>
+                            <h2><i class="ri-brush-3-line"></i> <span data-i18n="tools.skins">涂装库</span></h2>
                             <div class="resource-view-header-right">
-                                <div class="col-count" id="skins-count">本地: 0</div>
+                                <div class="col-count" id="skins-count" data-i18n="tools.count_local_zero">本地: 0</div>
                                 <button class="btn-v2 icon-only" id="btn-refresh-skins"
-                                    onclick="app.refreshSkins({manual:true})" title="刷新涂装库">
+                                    onclick="app.refreshSkins({manual:true})" title="刷新涂装库" data-i18n-title="tools.refresh_skins">
                                     <i class="ri-refresh-line"></i>
                                 </button>
                             </div>
@@ -296,17 +297,17 @@
                                         <div class="drop-zone-actions">
                                             <button class="btn-v2 primary" onclick="app.importSkinZipDialog()">
                                                 <i class="ri-upload-2-line"></i>
-                                                <span>选择 ZIP 解压</span>
+                                                <span data-i18n="tools.choose_zip">选择 ZIP 解压</span>
                                             </button>
                                             <button class="btn-v2" onclick="app.openFolder('userskins')">
                                                 <i class="ri-folder-2-line"></i>
-                                                <span>打开 UserSkins</span>
+                                                <span data-i18n="tools.open_user_skins">打开 UserSkins</span>
                                             </button>
                                         </div>
                                     </div>
                                 </div>
                                 <div class="drop-tutorial" id="skins-tutorial">
-                                    <div class="drop-tutorial-title">涂装教程</div>
+                                    <div class="drop-tutorial-title" data-i18n="tools.skin_tutorial">涂装教程</div>
                                     <div class="drop-tutorial-body">
                                         <p>涂装文件名尽可能使用英文。</p>
                                         <p>
@@ -324,8 +325,8 @@
                                 <div class="small-card-grid" id="skins-list">
                                     <div class="empty-state" style="grid-column: 1 / -1;">
                                         <i class="ri-brush-3-line"></i>
-                                        <h3>还没有涂装</h3>
-                                        <p>拖入 ZIP 或点击"选择 ZIP 解压"，导入后会自动出现在这里</p>
+                                        <h3 data-i18n="tools.empty_skins">还没有涂装</h3>
+                                        <p data-i18n="tools.empty_skins_desc">拖入 ZIP 或点击"选择 ZIP 解压"，导入后会自动出现在这里</p>
                                     </div>
                                 </div>
                             </div>
@@ -335,11 +336,11 @@
                     <!-- 炮镜视图 -->
                     <div class="resource-view" id="view-sights">
                         <div class="resource-view-header">
-                            <h2><i class="ri-crosshair-line"></i> 炮镜库</h2>
+                            <h2><i class="ri-crosshair-line"></i> <span data-i18n="tools.sights">炮镜库</span></h2>
                             <div class="resource-view-header-right">
-                                <div class="col-count" id="sights-count">本地: 0</div>
+                                <div class="col-count" id="sights-count" data-i18n="tools.count_local_zero">本地: 0</div>
                                 <button class="btn-v2 icon-only" id="btn-refresh-sights"
-                                    onclick="app.refreshSights({manual:true})" title="刷新炮镜库">
+                                    onclick="app.refreshSights({manual:true})" title="刷新炮镜库" data-i18n-title="tools.refresh_sights">
                                     <i class="ri-refresh-line"></i>
                                 </button>
                             </div>
@@ -355,13 +356,13 @@
                                             <div class="uid-selector-wrapper">
                                                 <label class="uid-selector-label">
                                                     <i class="ri-user-line"></i>
-                                                    选择用户 UID
+                                                    <span data-i18n="tools.select_user_uid">选择用户 UID</span>
                                                 </label>
                                                 <div class="uid-selector-row">
                                                     <div id="sights-uid-select-wrapper" class="uid-select-wrapper">
                                                     </div>
                                                     <button class="btn-v2 icon-only"
-                                                        onclick="app.refreshSightsUidList()" title="刷新 UID 列表">
+                                                        onclick="app.refreshSightsUidList()" title="刷新 UID 列表" data-i18n-title="tools.refresh_uid_list">
                                                         <i class="ri-refresh-line"></i>
                                                     </button>
                                                 </div>
@@ -370,18 +371,18 @@
                                             <button class="btn-v2" id="btn-sights-primary"
                                                 onclick="app.selectSightsPath()">
                                                 <i class="ri-folder-open-line"></i>
-                                                <span>手动选择路径</span>
+                                                <span data-i18n="tools.manual_select_path">手动选择路径</span>
                                             </button>
                                             <button class="btn-v2" id="btn-sights-secondary"
                                                 onclick="app.openSightsFolder()">
                                                 <i class="ri-folder-2-line"></i>
-                                                <span>打开 UserSights</span>
+                                                <span data-i18n="tools.open_user_sights">打开 UserSights</span>
                                             </button>
                                         </div>
                                     </div>
                                 </div>
                                 <div class="drop-tutorial" id="sights-tutorial">
-                                    <div class="drop-tutorial-title">炮镜教程</div>
+                                    <div class="drop-tutorial-title" data-i18n="tools.sight_tutorial">炮镜教程</div>
                                     <div class="drop-tutorial-body">
                                         <p>炮镜模块在
                                             <code>C:\Users\&lt;"user name"&gt;\Documents\My Games\WarThunder\Saves\&lt;"user ID"&gt;\production\UserSights</code>
@@ -401,8 +402,8 @@
                                 <div class="small-card-grid" id="sights-list">
                                     <div class="empty-state" style="grid-column: 1 / -1;">
                                         <i class="ri-crosshair-line"></i>
-                                        <h3>还没有炮镜</h3>
-                                        <p>请先设置 UserSights 路径</p>
+                                        <h3 data-i18n="tools.empty_sights">还没有炮镜</h3>
+                                        <p data-i18n="tools.set_sights_path">请先设置 UserSights 路径</p>
                                     </div>
                                 </div>
                             </div>
@@ -412,11 +413,11 @@
                     <!-- 任务库视图 -->
                     <div class="resource-view" id="view-tasks">
                         <div class="resource-view-header">
-                            <h2><i class="ri-task-line"></i> 任务库</h2>
+                            <h2><i class="ri-task-line"></i> <span data-i18n="tools.tasks">任务库</span></h2>
                             <div class="resource-view-header-right">
-                                <div class="col-count" id="tasks-count">本地: 0</div>
+                                <div class="col-count" id="tasks-count" data-i18n="tools.count_local_zero">本地: 0</div>
                                 <button class="btn-v2 icon-only" id="btn-refresh-tasks"
-                                    onclick="app.refreshTasks({manual:true})" title="刷新任务库">
+                                    onclick="app.refreshTasks({manual:true})" title="刷新任务库" data-i18n-title="tools.refresh_tasks">
                                     <i class="ri-refresh-line"></i>
                                 </button>
                             </div>
@@ -430,21 +431,21 @@
                                         <div class="drop-zone-actions">
                                             <button class="btn-v2 primary" onclick="app.openFolder('task_library')">
                                                 <i class="ri-folder-open-line"></i>
-                                                <span>打开任务库</span>
+                                                <span data-i18n="tools.open_task_library">打开任务库</span>
                                             </button>
                                             <button class="btn-v2" onclick="app.openFolder('game')">
                                                 <i class="ri-gamepad-line"></i>
-                                                <span>打开游戏目录</span>
+                                                <span data-i18n="tools.open_game_folder">打开游戏目录</span>
                                             </button>
                                             <button class="btn-v2" onclick="app.openFolder('user_missions')">
                                                 <i class="ri-folder-2-line"></i>
-                                                <span>打开 UserMissions</span>
+                                                <span data-i18n="tools.open_user_missions">打开 UserMissions</span>
                                             </button>
                                         </div>
                                     </div>
                                 </div>
                                 <div class="drop-tutorial" id="tasks-tutorial">
-                                    <div class="drop-tutorial-title">任务库教程</div>
+                                    <div class="drop-tutorial-title" data-i18n="tools.task_tutorial">任务库教程</div>
                                     <div class="drop-tutorial-body">
                                         <p>任务库由于条件不同，目前支持展示卡片和手动安装。</p>
                                         <p>如果您想要本功能的更新或者完善，请给出建议并等待后续更新，您也可以在本项目的 GitHub 贡献代码和功能，非常感谢。</p>
@@ -457,8 +458,8 @@
                                 <div class="small-card-grid" id="tasks-list">
                                     <div class="empty-state" style="grid-column: 1 / -1;">
                                         <i class="ri-task-line"></i>
-                                        <h3>还没有任务</h3>
-                                        <p>点击左侧"打开任务库"按钮，导入任务文件</p>
+                                        <h3 data-i18n="tools.empty_tasks">还没有任务</h3>
+                                        <p data-i18n="tools.empty_tasks_desc">点击左侧"打开任务库"按钮，导入任务文件</p>
                                     </div>
                                 </div>
                             </div>
@@ -468,11 +469,11 @@
                     <!-- 模型库视图 -->
                     <div class="resource-view" id="view-models">
                         <div class="resource-view-header">
-                            <h2><i class="ri-box-3-line"></i> 模型库</h2>
+                            <h2><i class="ri-box-3-line"></i> <span data-i18n="tools.models">模型库</span></h2>
                             <div class="resource-view-header-right">
-                                <div class="col-count" id="models-count">本地: 0</div>
+                                <div class="col-count" id="models-count" data-i18n="tools.count_local_zero">本地: 0</div>
                                 <button class="btn-v2 icon-only" id="btn-refresh-models"
-                                    onclick="app.refreshModels({manual:true})" title="刷新模型库">
+                                    onclick="app.refreshModels({manual:true})" title="刷新模型库" data-i18n-title="tools.refresh_models">
                                     <i class="ri-refresh-line"></i>
                                 </button>
                             </div>
@@ -486,25 +487,25 @@
                                         <div class="drop-zone-actions">
                                             <button class="btn-v2 primary" onclick="app.openFolder('model_library')">
                                                 <i class="ri-folder-open-line"></i>
-                                                <span>打开模型库</span>
+                                                <span data-i18n="tools.open_model_library">打开模型库</span>
                                             </button>
                                             <button class="btn-v2" onclick="app.openFolder('game')">
                                                 <i class="ri-gamepad-line"></i>
-                                                <span>打开游戏目录</span>
+                                                <span data-i18n="tools.open_game_folder">打开游戏目录</span>
                                             </button>
                                             <button class="btn-v2" onclick="app.openFolder('user_missions')">
                                                 <i class="ri-folder-2-line"></i>
-                                                <span>打开 UserMissions</span>
+                                                <span data-i18n="tools.open_user_missions">打开 UserMissions</span>
                                             </button>
                                             <button class="btn-v2" onclick="app.openFolder('pkg_local')">
                                                 <i class="ri-folder-2-line"></i>
-                                                <span>打开 pkg_local</span>
+                                                <span data-i18n="tools.open_pkg_local">打开 pkg_local</span>
                                             </button>
                                         </div>
                                     </div>
                                 </div>
                                 <div class="drop-tutorial" id="models-tutorial">
-                                    <div class="drop-tutorial-title">模型库教程</div>
+                                    <div class="drop-tutorial-title" data-i18n="tools.model_tutorial">模型库教程</div>
                                     <div class="drop-tutorial-body">
                                         <p>模型库由于条件不同，目前支持展示卡片和手动安装。</p>
                                         <p>如果您想要本功能的更新或者完善，请给出建议并等待后续更新，您也可以在本项目的 GitHub 贡献代码和功能，非常感谢。</p>
@@ -517,8 +518,8 @@
                                 <div class="small-card-grid" id="models-list">
                                     <div class="empty-state" style="grid-column: 1 / -1;">
                                         <i class="ri-box-3-line"></i>
-                                        <h3>还没有模型</h3>
-                                        <p>点击左侧"打开模型库"按钮，导入模型文件</p>
+                                        <h3 data-i18n="tools.empty_models">还没有模型</h3>
+                                        <p data-i18n="tools.empty_models_desc">点击左侧"打开模型库"按钮，导入模型文件</p>
                                     </div>
                                 </div>
                             </div>
@@ -528,11 +529,11 @@
                     <!-- 机库视图 -->
                     <div class="resource-view" id="view-hangar">
                         <div class="resource-view-header">
-                            <h2><i class="ri-plane-line"></i> 机库</h2>
+                            <h2><i class="ri-plane-line"></i> <span data-i18n="tools.hangar">机库</span></h2>
                             <div class="resource-view-header-right">
-                                <div class="col-count" id="hangar-count">本地: 0</div>
+                                <div class="col-count" id="hangar-count" data-i18n="tools.count_local_zero">本地: 0</div>
                                 <button class="btn-v2 icon-only" id="btn-refresh-hangar"
-                                    onclick="app.refreshHangar({manual:true})" title="刷新机库">
+                                    onclick="app.refreshHangar({manual:true})" title="刷新机库" data-i18n-title="tools.refresh_hangar">
                                     <i class="ri-refresh-line"></i>
                                 </button>
                             </div>
@@ -546,17 +547,17 @@
                                         <div class="drop-zone-actions">
                                             <button class="btn-v2 primary" onclick="app.openFolder('hangar_library')">
                                                 <i class="ri-folder-open-line"></i>
-                                                <span>打开机库</span>
+                                                <span data-i18n="tools.open_hangar_library">打开机库</span>
                                             </button>
                                             <button class="btn-v2" onclick="app.openFolder('game')">
                                                 <i class="ri-gamepad-line"></i>
-                                                <span>打开游戏目录</span>
+                                                <span data-i18n="tools.open_game_folder">打开游戏目录</span>
                                             </button>
                                         </div>
                                     </div>
                                 </div>
                                 <div class="drop-tutorial" id="hangar-tutorial">
-                                    <div class="drop-tutorial-title">机库教程</div>
+                                    <div class="drop-tutorial-title" data-i18n="tools.hangar_tutorial">机库教程</div>
                                     <div class="drop-tutorial-body">
                                         <p>机库由于条件不同，目前支持展示卡片和手动安装。</p>
                                         <p>如果您想要本功能的更新或者完善，请给出建议并等待后续更新，您也可以在本项目的 GitHub 贡献代码和功能，非常感谢。</p>
@@ -569,8 +570,8 @@
                                 <div class="small-card-grid" id="hangar-list">
                                     <div class="empty-state" style="grid-column: 1 / -1;">
                                         <i class="ri-plane-line"></i>
-                                        <h3>还没有机库配置</h3>
-                                        <p>点击左侧"打开机库"按钮，导入机库配置文件</p>
+                                        <h3 data-i18n="tools.empty_hangar">还没有机库配置</h3>
+                                        <p data-i18n="tools.empty_hangar_desc">点击左侧"打开机库"按钮，导入机库配置文件</p>
                                     </div>
                                 </div>
                             </div>
@@ -923,15 +924,15 @@
                     </button>
                     <button class="btn big-btn secondary" onclick="app.openFolder('library')">
                         <i class="ri-folder-2-line"></i>
-                        打开语音包库
+                        <span data-i18n="settings.open_voice_library">打开语音包库</span>
                     </button>
                     <button class="btn big-btn secondary" onclick="app.openFolder('userskins')">
                         <i class="ri-brush-3-line"></i>
-                        打开涂装库
+                        <span data-i18n="tools.open_skins">打开涂装库</span>
                     </button>
                     <button class="btn big-btn secondary" onclick="app.openSightsFolder()">
                         <i class="ri-crosshair-line"></i>
-                        打开炮镜库
+                        <span data-i18n="tools.open_sights">打开炮镜库</span>
                     </button>
                 </div>
             </div>
@@ -939,13 +940,13 @@
             <div class="settings-split-row">
                 <div class="card" id="theme-card">
                     <div class="card-header">
-                        <h2>个性化</h2>
-                        <span class="subtitle">Appearance & Themes</span>
+                        <h2 data-i18n="settings.personalization">个性化</h2>
+                        <span class="subtitle" data-i18n="settings.appearance_subtitle">Appearance & Themes</span>
 
                     </div>
                     <div style="padding: 20px;">
                         <label style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 8px;">
-                            选择界面风格
+                            <span data-i18n="settings.theme_label">选择界面风格</span>
                         </label>
                         <!-- 自定义主题选择下拉菜单 -->
                         <div class="custom-select-wrapper" id="theme-select-wrapper">
@@ -959,12 +960,27 @@
                         </div>
 
                         <div style="height: 1px; background: var(--border-color); margin: 20px 0; opacity: 0.5;"></div>
+                        <label style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 8px;">
+                            <span data-i18n="settings.language_label">界面语言</span>
+                        </label>
+                        <div class="custom-select-wrapper" id="language-select-wrapper">
+                            <div class="custom-select-trigger" onclick="app.toggleLanguageDropdown()">
+                                <span id="language-select-text">简体中文</span>
+                                <i class="ri-arrow-down-s-line custom-select-arrow"></i>
+                            </div>
+                            <div class="custom-select-dropdown" id="language-select-dropdown">
+                                <div class="custom-select-option selected" data-value="zh_cn" onclick="app.selectLanguage('zh_cn')">简体中文</div>
+                                <div class="custom-select-option" data-value="en_us" onclick="app.selectLanguage('en_us')">English</div>
+                            </div>
+                        </div>
+
+                        <div style="height: 1px; background: var(--border-color); margin: 20px 0; opacity: 0.5;"></div>
                         <div style="display: flex; align-items: center; justify-content: space-between;">
                             <div>
                                 <div
                                     style="font-weight: 600; font-size: 14px; margin-bottom: 4px; color: var(--text-main);">
-                                    加入用户体验改善计划</div>
-                                <div style="font-size: 12px; color: var(--text-sec);">允许发送匿名使用数据以改进软件</div>
+                                    <span data-i18n="settings.telemetry_title">加入用户体验改善计划</span></div>
+                                <div style="font-size: 12px; color: var(--text-sec);" data-i18n="settings.telemetry_desc">允许发送匿名使用数据以改进软件</div>
                             </div>
                             <label class="switch">
                                 <input type="checkbox" id="telemetry-switch"
@@ -977,8 +993,8 @@
 
                 <div class="card" id="startup-card">
                     <div class="card-header">
-                        <h2>启动设置</h2>
-                        <span class="subtitle">Startup Settings</span>
+                        <h2 data-i18n="settings.startup">启动设置</h2>
+                        <span class="subtitle" data-i18n="settings.startup_subtitle">Startup Settings</span>
                     </div>
                     <div style="padding: 20px; display: flex; flex-direction: column; gap: 16px;">
                         <!-- 开机自启动 -->
@@ -987,8 +1003,8 @@
                             <div>
                                 <div
                                     style="font-weight: 600; font-size: 14px; margin-bottom: 4px; color: var(--text-main);">
-                                    开机自启动</div>
-                                <div style="font-size: 12px; color: var(--text-sec);">系统启动时自动运行本软件</div>
+                                    <span data-i18n="settings.autostart">开机自启动</span></div>
+                                <div style="font-size: 12px; color: var(--text-sec);" data-i18n="settings.autostart_desc">系统启动时自动运行本软件</div>
                             </div>
                             <label class="switch">
                                 <input type="checkbox" id="autostart-switch"
@@ -1002,8 +1018,8 @@
                             <div>
                                 <div
                                     style="font-weight: 600; font-size: 14px; margin-bottom: 4px; color: var(--text-main);">
-                                    关闭时最小化到托盘</div>
-                                <div style="font-size: 12px; color: var(--text-sec);">关闭窗口时最小化到系统托盘而非退出</div>
+                                    <span data-i18n="settings.tray_mode">关闭时最小化到托盘</span></div>
+                                <div style="font-size: 12px; color: var(--text-sec);" data-i18n="settings.tray_mode_desc">关闭窗口时最小化到系统托盘而非退出</div>
                             </div>
                             <label class="switch">
                                 <input type="checkbox" id="tray-mode-switch"
@@ -1017,8 +1033,8 @@
                             <div>
                                 <div
                                     style="font-weight: 600; font-size: 14px; margin-bottom: 4px; color: var(--text-main);">
-                                    关闭窗口时提示</div>
-                                <div style="font-size: 12px; color: var(--text-sec);">关闭窗口时询问是退出还是最小化到托盘</div>
+                                    <span data-i18n="settings.close_confirm">关闭窗口时提示</span></div>
+                                <div style="font-size: 12px; color: var(--text-sec);" data-i18n="settings.close_confirm_desc">关闭窗口时询问是退出还是最小化到托盘</div>
                             </div>
                             <label class="switch">
                                 <input type="checkbox" id="close-confirm-switch"
@@ -1048,16 +1064,16 @@
 
                 <div class="card" id="update-check-card">
                     <div class="card-header">
-                        <h2>更新检测</h2>
-                        <span class="subtitle">Update Check</span>
+                        <h2 data-i18n="settings.update_check">更新检测</h2>
+                        <span class="subtitle" data-i18n="settings.update_check_subtitle">Update Check</span>
                     </div>
                     <div style="padding: 20px; display: flex; flex-direction: column; gap: 12px;">
                         <p style="font-size: 12px; color: var(--text-sec); margin: 0; display: flex; align-items: center; gap: 6px;">
-                            当前版本: <span id="current-version-display" style="font-weight: 600; color: var(--text-main);">--</span>
+                            <span data-i18n="settings.current_version">当前版本</span>: <span id="current-version-display" style="font-weight: 600; color: var(--text-main);">--</span>
                             <span id="update-status-badge" style="display: none; font-size: 11px; padding: 1px 8px; border-radius: 20px; font-weight: 500;"></span>
                         </p>
                         <button class="btn feedback-outline full-width" id="btn-check-update" onclick="app.checkForUpdate()" style="width: 100%;">
-                            <i class="ri-refresh-line"></i> 检查更新
+                            <i class="ri-refresh-line"></i> <span data-i18n="settings.check_update">检查更新</span>
                         </button>
                     </div>
                 </div>
@@ -1066,15 +1082,15 @@
             <div class="settings-split-row">
                 <div class="card" id="restore-card">
                     <div class="card-header">
-                        <h2 style="color: var(--status-error);">还原</h2>
+                        <h2 style="color: var(--status-error);" data-i18n="settings.restore">还原</h2>
                         <span class="subtitle">Restore</span>
                     </div>
                     <div style="padding: 20px; display: flex; flex-direction: column; gap: 12px;">
                         <p style="font-size: 12px; color: var(--text-sec); margin: 0;">
-                            清空 mod 文件夹并禁用语音配置文件开关
+                            <span data-i18n="settings.restore_desc">清空 mod 文件夹并禁用语音配置文件开关</span>
                         </p>
                         <button class="btn danger full-width" onclick="app.restoreGame()" style="width: 100%;">
-                            <i class="ri-alert-line"></i> 一键还原纯净模式
+                            <i class="ri-alert-line"></i> <span data-i18n="settings.restore_clean">一键还原纯净模式</span>
                         </button>
                     </div>
                 </div>
@@ -1102,7 +1118,7 @@
             <!-- 語音包庫路徑設置 -->
             <div class="card" id="library-path-card">
                 <div class="card-header">
-                    <h2>语音包库路径</h2>
+                    <h2 data-i18n="settings.voice_library_path">语音包库路径</h2>
                     <span class="subtitle">Voice Pack Library Location</span>
                 </div>
                 <div class="path-settings-body">
@@ -1116,7 +1132,7 @@
                         <div class="path-input-row">
                             <div class="path-input-wrapper">
                                 <input type="text" id="pending-dir-input" class="path-input" readonly
-                                    placeholder="使用默认路径">
+                                    placeholder="使用默认路径" data-i18n-placeholder="settings.use_default_path">
                                 <button class="path-copy-btn" onclick="app.copyPathToClipboard('pending-dir-input')"
                                     title="复制路径">
                                     <i class="ri-file-copy-line"></i>
@@ -1144,7 +1160,7 @@
                         <div class="path-input-row">
                             <div class="path-input-wrapper">
                                 <input type="text" id="library-dir-input" class="path-input" readonly
-                                    placeholder="使用默认路径">
+                                    placeholder="使用默认路径" data-i18n-placeholder="settings.use_default_path">
                                 <button class="path-copy-btn" onclick="app.copyPathToClipboard('library-dir-input')"
                                     title="复制路径">
                                     <i class="ri-file-copy-line"></i>
@@ -1191,14 +1207,14 @@
 
     <div class="modal-overlay" id="modal-confirm">
         <div class="modal-content">
-            <h2 id="confirm-title" style="margin-top: 0; color: var(--text-main);">操作确认</h2>
+            <h2 id="confirm-title" style="margin-top: 0; color: var(--text-main);" data-i18n="modal.confirm_title">操作确认</h2>
             <p id="confirm-message"
                 style="margin-bottom: 25px; color: var(--text-sec); font-size: 14px; line-height: 1.5;"></p>
 
             <div class="modal-actions">
-                <button class="btn secondary" id="btn-confirm-cancel">取消</button>
+                <button class="btn secondary" id="btn-confirm-cancel" data-i18n="common.cancel">取消</button>
                 <button class="btn danger" id="btn-confirm-ok">
-                    <i class="ri-delete-bin-line"></i> 确认删除
+                    <i class="ri-delete-bin-line"></i> <span data-i18n="modal.confirm_delete">确认删除</span>
                 </button>
             </div>
         </div>
@@ -1253,8 +1269,8 @@
             </button>
 
             <div class="close-confirm-head">
-                <h3 class="close-confirm-title">关闭程序</h3>
-                <p class="close-confirm-subtitle">请选择您需要的操作</p>
+                <h3 class="close-confirm-title" data-i18n="modal.close_title">关闭程序</h3>
+                <p class="close-confirm-subtitle" data-i18n="modal.close_subtitle">请选择您需要的操作</p>
             </div>
 
             <div class="close-confirm-choice-grid">
@@ -1262,8 +1278,8 @@
                     <div class="close-confirm-choice-icon">
                         <i class="ri-computer-line"></i>
                     </div>
-                    <span>最小化到托盘</span>
-                    <small>保持后台运行<br>接收通知</small>
+                    <span data-i18n="modal.close_to_tray">最小化到托盘</span>
+                    <small data-i18n-html="modal.close_to_tray_desc">保持后台运行<br>接收通知</small>
                     <div class="close-confirm-arrow">
                         <i class="ri-arrow-right-s-line"></i>
                     </div>
@@ -1273,18 +1289,18 @@
                     <div class="close-confirm-choice-icon">
                         <i class="ri-shut-down-line"></i>
                     </div>
-                    <span>完全退出程序</span>
-                    <small>释放系统内存<br>并关闭应用</small>
+                    <span data-i18n="modal.close_exit">完全退出程序</span>
+                    <small data-i18n-html="modal.close_exit_desc">释放系统内存<br>并关闭应用</small>
                 </button>
             </div>
 
             <div class="close-confirm-foot">
                 <label class="close-confirm-remember">
                     <input type="checkbox" id="close-confirm-remember">
-                    <span>记住选择，不再提示</span>
+                    <span data-i18n="modal.close_remember">记住选择，不再提示</span>
                 </label>
 
-                <button class="close-confirm-cancel" onclick="app.handleCloseAction('cancel')">取消</button>
+                <button class="close-confirm-cancel" onclick="app.handleCloseAction('cancel')" data-i18n="common.cancel">取消</button>
             </div>
         </div>
     </div>
@@ -1332,20 +1348,21 @@
 
     <div class="modal-overlay" id="modal-archive-password">
         <div class="modal-content" style="max-width: 420px;">
-            <h2 id="archive-password-title" style="margin-top: 0; color: var(--text-main);">请输入解压密码</h2>
+            <h2 id="archive-password-title" style="margin-top: 0; color: var(--text-main);" data-i18n="modal.archive_password_title">请输入解压密码</h2>
             <p id="archive-password-file" style="margin-bottom: 8px; color: var(--text-sec); font-size: 13px;"></p>
             <p id="archive-password-hint" style="margin-bottom: 16px; color: var(--status-error); font-size: 12px;"></p>
 
             <div class="form-group">
-                <label>密码</label>
+                <label data-i18n="modal.password_label">密码</label>
                 <input type="password" id="archive-password-input" placeholder="请输入密码"
+                    data-i18n-placeholder="modal.password_placeholder"
                     onkeydown="app.onArchivePasswordKeydown(event)">
             </div>
 
             <div class="modal-actions">
-                <button class="btn secondary" onclick="app.cancelArchivePassword()">取消</button>
+                <button class="btn secondary" onclick="app.cancelArchivePassword()" data-i18n="common.cancel">取消</button>
                 <button class="btn primary" onclick="app.submitArchivePassword()">
-                    <i class="ri-lock-unlock-line"></i> 解压
+                    <i class="ri-lock-unlock-line"></i> <span data-i18n="modal.extract">解压</span>
                 </button>
             </div>
         </div>
@@ -1354,29 +1371,29 @@
     <!-- 导入方式选择模态框 -->
     <div class="modal-overlay" id="modal-import">
         <div class="modal-content" style="max-width: 500px;">
-            <h2>导入语音包</h2>
-            <p class="subtitle" style="margin-bottom: 25px;">请选择一种导入方式</p>
+            <h2 data-i18n="modal.import_title">导入语音包</h2>
+            <p class="subtitle" style="margin-bottom: 25px;" data-i18n="modal.import_subtitle">请选择一种导入方式</p>
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                 <button class="btn big-btn secondary square-btn" onclick="app.importSelectedZip()">
                     <i class="ri-folder-open-line"></i>
                     <div class="btn-text">
-                        <div class="title">选择文件导入</div>
-                        <div class="desc">浏览本地压缩包</div>
+                        <div class="title" data-i18n="modal.import_choose_file">选择文件导入</div>
+                        <div class="desc" data-i18n="modal.import_choose_file_desc">浏览本地压缩包</div>
                     </div>
                 </button>
 
                 <button class="btn big-btn primary square-btn" onclick="app.importPendingZips()">
                     <i class="ri-file-zip-line"></i>
                     <div class="btn-text">
-                        <div class="title">一键批量导入</div>
-                        <div class="desc">扫描 [待解压区]</div>
+                        <div class="title" data-i18n="modal.import_pending">一键批量导入</div>
+                        <div class="desc" data-i18n="modal.import_pending_desc">扫描 [待解压区]</div>
                     </div>
                 </button>
             </div>
 
             <div class="modal-actions" style="margin-top: 25px;">
-                <button class="btn secondary" onclick="app.closeModal('modal-import')" style="width: 100%;">取消</button>
+                <button class="btn secondary" onclick="app.closeModal('modal-import')" style="width: 100%;" data-i18n="common.cancel">取消</button>
             </div>
         </div>
     </div>
@@ -1659,11 +1676,11 @@
     <!-- 用户协议模态框 -->
     <div class="modal-overlay" id="modal-disclaimer" style="z-index: 9999;">
         <div class="modal-content disclaimer-modal">
-            <h2 class="disclaimer-title">免责声明</h2>
+            <h2 class="disclaimer-title" data-i18n="disclaimer.title">免责声明</h2>
 
             <div class="disclaimer-divider"></div>
 
-            <div id="disclaimer-text" class="disclaimer-content">
+            <div id="disclaimer-text" class="disclaimer-content" data-i18n-html="disclaimer.full_html">
                 <p>本人开发这款工具的初衷是希望能让大家更方便的体验个性化语音的乐趣。在开发过程中，我已经倾尽全力去完善每一个功能，并进行了多次测试，力求让它运行得更稳定、更安全。</p>
                 <p>但毕竟我只是一个人在利用业余时间开发。能力也有限，面对千差万别的电脑环境和游戏更新，我没办法保证它在每一个细节上都完美无缺。即便我非常希望它能成为对你有用的工具，也必须说明：由于个人技术和精力的局限性，我无法
                     100% 保证程序在所有情况下都不出 Bug，也无法预见它是否会与你的系统或其他软件产生冲突（比如极其罕见的蓝屏、文件丢失或损坏）。</p>
@@ -1731,9 +1748,9 @@
             <div class="disclaimer-footer">
                 <div id="disclaimer-timer-hint"></div>
                 <div class="disclaimer-actions-row">
-                    <button class="btn-disclaimer reject" onclick="app.disclaimerReject()">拒绝</button>
+                    <button class="btn-disclaimer reject" onclick="app.disclaimerReject()" data-i18n="disclaimer.reject">拒绝</button>
                     <button class="btn-disclaimer agree" id="btn-disclaimer-agree" disabled
-                        onclick="app.disclaimerAgree()">同意</button>
+                        onclick="app.disclaimerAgree()" data-i18n="disclaimer.agree">同意</button>
                 </div>
             </div>
         </div>
@@ -1743,7 +1760,7 @@
         <div class="toast-error-content">
             <i class="ri-error-warning-line toast-error-icon"></i>
             <div class="toast-error-text">
-                <div class="toast-error-title">错误</div>
+                <div class="toast-error-title" data-i18n="common.error">错误</div>
                 <div class="toast-error-message"></div>
             </div>
             <button class="toast-error-close" id="toast-error-close">
@@ -1756,7 +1773,7 @@
         <div class="toast-warn-content">
             <i class="ri-alert-line toast-warn-icon"></i>
             <div class="toast-warn-text">
-                <div class="toast-warn-title">警告</div>
+                <div class="toast-warn-title" data-i18n="common.warn">警告</div>
                 <div class="toast-warn-message"></div>
             </div>
             <button class="toast-warn-close" id="toast-warn-close">
@@ -1769,7 +1786,7 @@
         <div class="toast-info-content">
             <i class="ri-information-line toast-info-icon"></i>
             <div class="toast-info-text">
-                <div class="toast-info-title">提示</div>
+                <div class="toast-info-title" data-i18n="common.info">提示</div>
                 <div class="toast-info-message"></div>
             </div>
             <button class="toast-info-close" id="toast-info-close">
@@ -1784,17 +1801,17 @@
             <div id="alert-icon" style="margin-bottom: 16px;">
                 <i class="ri-information-line" style="font-size: 48px; color: var(--primary);"></i>
             </div>
-            <h2 id="alert-title" style="margin: 0 0 12px 0; color: var(--text-main);">提示</h2>
+            <h2 id="alert-title" style="margin: 0 0 12px 0; color: var(--text-main);" data-i18n="modal.alert_default_title">提示</h2>
             <div id="alert-message"
                 style="margin-bottom: 24px; color: var(--text-sec); font-size: 14px; line-height: 1.6;"></div>
 
             <div class="modal-actions" style="justify-content: center; gap: 12px;">
                 <button class="btn secondary" id="alert-link-btn" style="display: none;"
                     onclick="app.openExternal(this.dataset.url); app.closeModal('modal-alert')">
-                    <i class="ri-download-cloud-2-line"></i> 前往下载
+                    <i class="ri-download-cloud-2-line"></i> <span data-i18n="modal.go_download">前往下载</span>
                 </button>
                 <button class="btn primary" onclick="app.closeModal('modal-alert')" style="min-width: 120px;">
-                    <i class="ri-check-line"></i> 知道了
+                    <i class="ri-check-line"></i> <span data-i18n="modal.got_it">知道了</span>
                 </button>
             </div>
         </div>
@@ -1804,9 +1821,16 @@
     <button id="btn-guide-help" type="button" onclick="app.startGuide(true)" title="新手教程" aria-label="新手教程">
         <i class="ri-question-line"></i>
     </button>
+    <button id="btn-notification-bell" type="button" title="消息中心" aria-label="消息中心">
+        <i class="ri-notification-3-line"></i>
+        <span class="bell-badge"></span>
+    </button>
     </div>
 
     <script src="logger.js"></script>
+    <script src="i18n/i18n.js"></script>
+    <script src="i18n/zh_cn.js"></script>
+    <script src="i18n/en_us.js"></script>
     <script src="loading_voice_package.js"></script>
     <script src="components/AppDropdownMenu.js"></script>
     <!-- 新功能模块脚本 -->
@@ -1821,6 +1845,8 @@
     <script src="js/notice/notice_modal.js?v=20260331_3"></script>
     <script src="js/notice/community/notice_comment_panel.js?v=20260331_3"></script>
     <script src="js/notice/notice_board.js?v=20260228_1"></script>
+    <script src="js/notification_bell.js?v=20260404_1"></script>
+    <script src="js/notification_panel.js?v=20260404_1"></script>
     <script src="guide/guide.js"></script>
     <script src="js/header_banner/header_banner.js"></script>
     <script src="script.js?v=20260228"></script>
