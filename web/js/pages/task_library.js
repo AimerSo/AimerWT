@@ -190,7 +190,11 @@ const TaskLibrary = {
         if (!list_el || !count_el) return;
 
         const items = this._get_visible_items();
-        count_el.textContent = `（已选 0 项） 共 ${items.length} 项`;
+        if (window.app && typeof app.updateResourceSelectionSummary === 'function') {
+            app.updateResourceSelectionSummary('tasks', items.length);
+        } else {
+            count_el.textContent = `共${items.length}项`;
+        }
 
         const select_all = document.getElementById('tasks-select-all');
         if (select_all) {
@@ -241,7 +245,11 @@ const TaskLibrary = {
                 </div>
             `;
         }
-        if (count_el) count_el.textContent = '（已选 0 项） 共 0 项';
+        if (window.app && typeof app.updateResourceSelectionSummary === 'function') {
+            app.updateResourceSelectionSummary('tasks', 0);
+        } else if (count_el) {
+            count_el.textContent = '共0项';
+        }
     },
 
     // ==================== 编辑弹窗 ====================

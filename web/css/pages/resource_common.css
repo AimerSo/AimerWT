@@ -117,7 +117,7 @@
 .res-toolbar-right {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     margin-left: auto;
 }
 
@@ -147,16 +147,18 @@
     font-size: 13px;
 }
 
-.res-toolbar-inline-controls .res-select-all {
+.res-toolbar .res-select-all {
     display: flex;
     align-items: center;
     gap: 6px;
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
+    color: var(--text-sec);
+    font-size: 13px;
 }
 
-.res-toolbar-inline-controls .res-select-all input[type="checkbox"] {
+.res-toolbar .res-select-all input[type="checkbox"] {
     accent-color: var(--primary);
     width: 16px;
     height: 16px;
@@ -435,6 +437,12 @@
 .res-card-grid.is-list-view .small-card-body {
     min-width: 0;
     padding: 8px 12px;
+}
+
+.res-card-grid .small-card.is-selected,
+.res-card-grid .res-card.is-selected {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(255, 153, 0, 0.18);
 }
 
 #view-skins #skins-list,

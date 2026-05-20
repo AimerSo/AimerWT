@@ -190,7 +190,11 @@ const ModelLibrary = {
         if (!list_el || !count_el) return;
 
         const items = this._get_visible_items();
-        count_el.textContent = `（已选 0 项） 共 ${items.length} 项`;
+        if (window.app && typeof app.updateResourceSelectionSummary === 'function') {
+            app.updateResourceSelectionSummary('models', items.length);
+        } else {
+            count_el.textContent = `共${items.length}项`;
+        }
 
         const select_all = document.getElementById('models-select-all');
         if (select_all) {
@@ -241,7 +245,11 @@ const ModelLibrary = {
                 </div>
             `;
         }
-        if (count_el) count_el.textContent = '（已选 0 项） 共 0 项';
+        if (window.app && typeof app.updateResourceSelectionSummary === 'function') {
+            app.updateResourceSelectionSummary('models', 0);
+        } else if (count_el) {
+            count_el.textContent = '共0项';
+        }
     },
 
     // ==================== 编辑弹窗 ====================

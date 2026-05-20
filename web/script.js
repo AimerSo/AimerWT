@@ -613,7 +613,7 @@ const app = {
         this._skinsRenderSeq = (this._skinsRenderSeq || 0) + 1;
         const seq = this._skinsRenderSeq;
         const items = this._getFilteredSkins();
-        countEl.textContent = `（已选 0 项） 共 ${items.length} 项`;
+        this.updateResourceSelectionSummary('skins', items.length);
 
         const selectAll = document.getElementById('skins-select-all');
         if (selectAll) {
@@ -630,6 +630,7 @@ const app = {
                     <p>${hasQuery ? "换个关键词试试" : this.t('tools.empty_skins_desc')}</p>
                 </div>
             `;
+            this.updateResourceSelectionSummary('skins', 0);
             this._finishSkinsRender();
             return;
         }
@@ -677,6 +678,7 @@ const app = {
             if (currentIndex < items.length) {
                 requestAnimationFrame(renderChunk);
             } else {
+                this.updateResourceSelectionSummary('skins', items.length);
                 this._finishSkinsRender();
             }
         };
@@ -4367,6 +4369,63 @@ app.switchResourceViewMode = function (resource_type, mode) {
     }
 };
 
+app.updateResourceSelectionSummary = function (resource_type, total_count) {
+    const type = String(resource_type || '').trim();
+    if (!type) return;
+
+    const count_el = document.getElementById(`${type}-count`);
+    const hint_el = document.getElementById(`${type}-selected-hint`);
+    const select_all_el = document.getElementById(`${type}-select-all`);
+    const list_el = document.getElementById(`${type}-list`);
+    const cards = list_el ? Array.from(list_el.querySelectorAll('.small-card, .res-card')) : [];
+    const selected_count = cards.filter((card) => card.classList.contains('is-selected')).length;
+    const visible_count = Number.isFinite(Number(total_count)) ? Number(total_count) : cards.length;
+
+    if (count_el) count_el.textContent = `共${visible_count}项`;
+    if (hint_el) hint_el.textContent = selected_count > 0 ? `已选${selected_count}项` : '至少选择1个项目';
+
+    if (select_all_el) {
+        select_all_el.checked = visible_count > 0 && selected_count === visible_count;
+        select_all_el.indeterminate = selected_count > 0 && selected_count < visible_count;
+    }
+};
+
+app.setResourceSelection = function (resource_type, selected) {
+    const type = String(resource_type || '').trim();
+    const list_el = document.getElementById(`${type}-list`);
+    if (!list_el) return;
+
+    list_el.querySelectorAll('.small-card, .res-card').forEach((card) => {
+        card.classList.toggle('is-selected', !!selected);
+    });
+    this.updateResourceSelectionSummary(type);
+};
+
+app.initResourceSelectionControls = function () {
+    ['skins', 'sights', 'tasks', 'models', 'hangar'].forEach((resource_type) => {
+        const select_all_el = document.getElementById(`${resource_type}-select-all`);
+        const list_el = document.getElementById(`${resource_type}-list`);
+
+        if (select_all_el && select_all_el.dataset.selectionBound !== '1') {
+            select_all_el.dataset.selectionBound = '1';
+            select_all_el.addEventListener('change', () => {
+                this.setResourceSelection(resource_type, select_all_el.checked);
+            });
+        }
+
+        if (list_el && list_el.dataset.selectionBound !== '1') {
+            list_el.dataset.selectionBound = '1';
+            list_el.addEventListener('click', (event) => {
+                if (event.target.closest('button, a, input, select, textarea, [role="button"]')) return;
+                const card = event.target.closest('.small-card, .res-card');
+                if (!card || !list_el.contains(card)) return;
+                card.classList.toggle('is-selected');
+                this.updateResourceSelectionSummary(resource_type);
+            });
+        }
+    });
+};
+
 app.initResourceViewModeControls = function () {
     ['skins', 'sights', 'tasks', 'models', 'hangar'].forEach((resource_type) => {
         this.switchResourceViewMode(resource_type, 'card');
@@ -4376,6 +4435,7 @@ app.initResourceViewModeControls = function () {
 app.initResourcePageControls = function () {
     this.initResourceSortDropdowns();
     this.initResourceViewModeControls();
+    this.initResourceSelectionControls();
 };
 
 if (document.readyState === 'loading') {
@@ -4657,7 +4717,7 @@ app._renderSightsView = function () {
     if (!listEl || !countEl) return;
 
     const items = this._getFilteredSights();
-    countEl.textContent = `（已选 0 项） 共 ${items.length} 项`;
+    this.updateResourceSelectionSummary('sights', items.length);
 
     const selectAll = document.getElementById('sights-select-all');
     if (selectAll) {
@@ -4674,6 +4734,7 @@ app._renderSightsView = function () {
                 <p>${hasQuery ? "换个关键词试试" : this.t('tools.empty_sights_desc')}</p>
             </div>
         `;
+        this.updateResourceSelectionSummary('sights', 0);
         return;
     }
 
@@ -4701,6 +4762,7 @@ app._renderSightsView = function () {
             </div>
         `;
     }).join('');
+    this.updateResourceSelectionSummary('sights', items.length);
 };
 
 // --- 语音包库路径管理 ---

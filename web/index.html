@@ -286,10 +286,6 @@
                                 <input type="text" placeholder="搜索涂装名称或描述" id="skins-search-input" oninput="app.filterSkinsNew(this.value)">
                             </div>
                             <div class="res-toolbar-inline-controls">
-                                <label class="res-select-all">
-                                    <input type="checkbox" id="skins-select-all"> 全选
-                                </label>
-                                <span class="res-item-count" id="skins-count">（已选 0 项） 共 0 项</span>
                                 <div class="res-sort-wrapper">
                                     <i class="ri-sort-desc"></i>
                                     <span>排序:</span>
@@ -302,6 +298,9 @@
                                 </div>
                             </div>
                             <div class="res-toolbar-right">
+                                <label class="res-select-all">
+                                    <input type="checkbox" id="skins-select-all"> 全选
+                                </label>
                                 <div class="res-view-toggle is-card-mode" data-resource-type="skins">
                                     <button class="active" id="skins-view-card" type="button" onclick="app.switchResourceViewMode('skins', 'card')" title="卡片视图" aria-label="卡片视图">
                                         <i class="ri-layout-grid-line"></i><span class="res-view-label">卡片视图</span>
@@ -329,7 +328,10 @@
                                 <!-- 操作面板 -->
                                 <div class="res-panel-card res-ops-card">
                                     <div class="res-panel-title"><i class="ri-dashboard-line"></i> 操作面板</div>
-                                    <div class="res-ops-hint" id="skins-ops-hint">已选项目<br>请选择至少 1 个项目</div>
+                                    <div class="res-ops-hint" id="skins-ops-hint">
+                                        <span id="skins-count">共0项</span><br>
+                                        <span id="skins-selected-hint">至少选择1个项目</span>
+                                    </div>
                                     <div class="res-ops-actions">
                                         <button onclick="app.disableSelectedSkins()" title="禁用">
                                             <i class="ri-forbid-line"></i> 禁用
@@ -390,8 +392,6 @@
                                 <input type="text" placeholder="搜索炮镜名称或描述" id="sights-search-input" oninput="app.filterSightsNew(this.value)">
                             </div>
                             <div class="res-toolbar-inline-controls">
-                                <label class="res-select-all"><input type="checkbox" id="sights-select-all"> 全选</label>
-                                <span class="res-item-count" id="sights-count">（已选 0 项） 共 0 项</span>
                                 <div class="res-sort-wrapper">
                                     <i class="ri-sort-desc"></i> <span>排序:</span>
                                     <div class="res-sort-menu" id="sights-sort-dropdown"></div>
@@ -403,6 +403,7 @@
                                 </div>
                             </div>
                             <div class="res-toolbar-right">
+                                <label class="res-select-all"><input type="checkbox" id="sights-select-all"> 全选</label>
                                 <div class="res-view-toggle is-card-mode" data-resource-type="sights">
                                     <button class="active" type="button" onclick="app.switchResourceViewMode('sights', 'card')" title="卡片视图" aria-label="卡片视图">
                                         <i class="ri-layout-grid-line"></i><span class="res-view-label">卡片视图</span>
@@ -426,7 +427,10 @@
                             <div class="res-side-panel">
                                 <div class="res-panel-card res-ops-card">
                                     <div class="res-panel-title"><i class="ri-dashboard-line"></i> 操作面板</div>
-                                    <div class="res-ops-hint">已选项目<br>请选择至少 1 个项目</div>
+                                    <div class="res-ops-hint" id="sights-ops-hint">
+                                        <span id="sights-count">共0项</span><br>
+                                        <span id="sights-selected-hint">至少选择1个项目</span>
+                                    </div>
                                     <div class="res-ops-actions">
                                         <button title="禁用"><i class="ri-forbid-line"></i> 禁用</button>
                                         <button title="删除"><i class="ri-delete-bin-line"></i> 删除</button>
@@ -442,26 +446,6 @@
                                             <button class="btn-v2 icon-only" onclick="app.refreshSightsUidList()" title="刷新 UID 列表">
                                                 <i class="ri-refresh-line"></i>
                                             </button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="res-panel-card">
-                                    <div class="res-panel-title"><i class="ri-hard-drive-2-line"></i> 存储空间</div>
-                                    <div class="res-storage-info">
-                                        <div class="res-storage-detail">
-                                            <span>总共</span>
-                                            <span id="sights-storage-total">未获取</span>
-                                        </div>
-                                        <div class="res-storage-bar">
-                                            <div class="res-storage-bar-fill" id="sights-storage-bar" style="width: 0%"></div>
-                                        </div>
-                                        <div class="res-storage-detail">
-                                            <span>剩余</span>
-                                            <span id="sights-storage-used">未获取</span>
-                                        </div>
-                                        <div class="res-storage-detail">
-                                            <span>炮镜库已使用</span>
-                                            <span id="sights-storage-folder">未获取</span>
                                         </div>
                                     </div>
                                 </div>
@@ -491,8 +475,6 @@
                                 <input type="text" placeholder="搜索任务名称或描述" id="tasks-search-input" oninput="TaskLibrary.filter_list(this.value)">
                             </div>
                             <div class="res-toolbar-inline-controls">
-                                <label class="res-select-all"><input type="checkbox" id="tasks-select-all"> 全选</label>
-                                <span class="res-item-count" id="tasks-count">（已选 0 项） 共 0 项</span>
                                 <div class="res-sort-wrapper">
                                     <i class="ri-sort-desc"></i> <span>排序:</span>
                                     <div class="res-sort-menu" id="tasks-sort-dropdown"></div>
@@ -504,6 +486,7 @@
                                 </div>
                             </div>
                             <div class="res-toolbar-right">
+                                <label class="res-select-all"><input type="checkbox" id="tasks-select-all"> 全选</label>
                                 <div class="res-view-toggle is-card-mode" data-resource-type="tasks">
                                     <button class="active" type="button" onclick="app.switchResourceViewMode('tasks', 'card')" title="卡片视图" aria-label="卡片视图">
                                         <i class="ri-layout-grid-line"></i><span class="res-view-label">卡片视图</span>
@@ -527,7 +510,10 @@
                             <div class="res-side-panel">
                                 <div class="res-panel-card res-ops-card">
                                     <div class="res-panel-title"><i class="ri-dashboard-line"></i> 操作面板</div>
-                                    <div class="res-ops-hint">已选项目<br>请选择至少 1 个项目</div>
+                                    <div class="res-ops-hint" id="tasks-ops-hint">
+                                        <span id="tasks-count">共0项</span><br>
+                                        <span id="tasks-selected-hint">至少选择1个项目</span>
+                                    </div>
                                     <div class="res-ops-actions">
                                         <button title="禁用"><i class="ri-forbid-line"></i> 禁用</button>
                                         <button title="删除"><i class="ri-delete-bin-line"></i> 删除</button>
@@ -583,8 +569,6 @@
                                 <input type="text" placeholder="搜索模型名称或描述" id="models-search-input" oninput="ModelLibrary.filter_list(this.value)">
                             </div>
                             <div class="res-toolbar-inline-controls">
-                                <label class="res-select-all"><input type="checkbox" id="models-select-all"> 全选</label>
-                                <span class="res-item-count" id="models-count">（已选 0 项） 共 0 项</span>
                                 <div class="res-sort-wrapper">
                                     <i class="ri-sort-desc"></i> <span>排序:</span>
                                     <div class="res-sort-menu" id="models-sort-dropdown"></div>
@@ -596,6 +580,7 @@
                                 </div>
                             </div>
                             <div class="res-toolbar-right">
+                                <label class="res-select-all"><input type="checkbox" id="models-select-all"> 全选</label>
                                 <div class="res-view-toggle is-card-mode" data-resource-type="models">
                                     <button class="active" type="button" onclick="app.switchResourceViewMode('models', 'card')" title="卡片视图" aria-label="卡片视图">
                                         <i class="ri-layout-grid-line"></i><span class="res-view-label">卡片视图</span>
@@ -619,7 +604,10 @@
                             <div class="res-side-panel">
                                 <div class="res-panel-card res-ops-card">
                                     <div class="res-panel-title"><i class="ri-dashboard-line"></i> 操作面板</div>
-                                    <div class="res-ops-hint">已选项目<br>请选择至少 1 个项目</div>
+                                    <div class="res-ops-hint" id="models-ops-hint">
+                                        <span id="models-count">共0项</span><br>
+                                        <span id="models-selected-hint">至少选择1个项目</span>
+                                    </div>
                                     <div class="res-ops-actions">
                                         <button title="禁用"><i class="ri-forbid-line"></i> 禁用</button>
                                         <button title="删除"><i class="ri-delete-bin-line"></i> 删除</button>
@@ -678,8 +666,6 @@
                                 <input type="text" placeholder="搜索机库名称或描述" id="hangar-search-input" oninput="Hangar.filter_list(this.value)">
                             </div>
                             <div class="res-toolbar-inline-controls">
-                                <label class="res-select-all"><input type="checkbox" id="hangar-select-all"> 全选</label>
-                                <span class="res-item-count" id="hangar-count">（已选 0 项） 共 0 项</span>
                                 <div class="res-sort-wrapper">
                                     <i class="ri-sort-desc"></i> <span>排序:</span>
                                     <div class="res-sort-menu" id="hangar-sort-dropdown"></div>
@@ -691,6 +677,7 @@
                                 </div>
                             </div>
                             <div class="res-toolbar-right">
+                                <label class="res-select-all"><input type="checkbox" id="hangar-select-all"> 全选</label>
                                 <div class="res-view-toggle is-card-mode" data-resource-type="hangar">
                                     <button class="active" type="button" onclick="app.switchResourceViewMode('hangar', 'card')" title="卡片视图" aria-label="卡片视图">
                                         <i class="ri-layout-grid-line"></i><span class="res-view-label">卡片视图</span>
@@ -714,7 +701,10 @@
                             <div class="res-side-panel">
                                 <div class="res-panel-card res-ops-card">
                                     <div class="res-panel-title"><i class="ri-dashboard-line"></i> 操作面板</div>
-                                    <div class="res-ops-hint">已选项目<br>请选择至少 1 个项目</div>
+                                    <div class="res-ops-hint" id="hangar-ops-hint">
+                                        <span id="hangar-count">共0项</span><br>
+                                        <span id="hangar-selected-hint">至少选择1个项目</span>
+                                    </div>
                                     <div class="res-ops-actions">
                                         <button title="禁用"><i class="ri-forbid-line"></i> 禁用</button>
                                         <button title="删除"><i class="ri-delete-bin-line"></i> 删除</button>
@@ -2031,9 +2021,9 @@
     <script src="guide/guide.js"></script>
     <script src="js/header_banner/header_banner.js"></script>
     <script src="script.js?v=20260520_resource_ui"></script>
-    <script src="js/pages/task_library.js?v=20260520_storage"></script>
-    <script src="js/pages/model_library.js?v=20260520_storage"></script>
-    <script src="js/pages/hangar.js?v=20260520_storage"></script>
+    <script src="js/pages/task_library.js?v=20260520_resource_ui"></script>
+    <script src="js/pages/model_library.js?v=20260520_resource_ui"></script>
+    <script src="js/pages/hangar.js?v=20260520_resource_ui"></script>
     <script src="redeem/redeem_ui.js"></script>
     <script src="ads/utm_helper.js"></script>
     <script src="ads/ad_carousel_config.js"></script>
