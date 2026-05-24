@@ -115,24 +115,9 @@ func serializeComment(c NoticeComment, seqMap map[string]uint, likedSet map[uint
 	}
 }
 
-// 批量查询 MachineID → UID 序号映射，同时获取 tags
+// 批量查询 MachineID → 公开 UID 序号映射
 func buildSeqMap(machineIDs []string) map[string]uint {
-	if len(machineIDs) == 0 {
-		return map[string]uint{}
-	}
-
-	type idRow struct {
-		MachineID string
-		ID        uint
-	}
-	var rows []idRow
-	db.Model(&TelemetryRecord{}).Where("machine_id IN ?", machineIDs).Select("machine_id, id").Scan(&rows)
-
-	result := make(map[string]uint, len(rows))
-	for _, r := range rows {
-		result[r.MachineID] = r.ID
-	}
-	return result
+	return buildUserUIDMap(machineIDs)
 }
 
 // buildTagsMap 批量查询 MachineID → Tags JSON 映射
@@ -1488,7 +1473,7 @@ func initCommunityAdminRoutes(admin *gin.RouterGroup) {
 			if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
 				// 搜索内容或查找UID对应的MachineID
 				var matchedMachineIDs []string
-				db.Model(&TelemetryRecord{}).Where("CAST(id AS TEXT) LIKE ?", "%"+keyword+"%").Pluck("machine_id", &matchedMachineIDs)
+				db.Model(&UserUIDMapping{}).Where("CAST(seq_id AS TEXT) LIKE ?", "%"+keyword+"%").Pluck("machine_id", &matchedMachineIDs)
 				if len(matchedMachineIDs) > 0 {
 					query = query.Where("content LIKE ? OR machine_id IN ?", "%"+keyword+"%", matchedMachineIDs)
 				} else {

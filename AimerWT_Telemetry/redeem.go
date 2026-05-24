@@ -13,7 +13,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // 兑换码字符集（大写字母+数字，去掉易混淆字符 O/0/I/1）
@@ -187,6 +186,9 @@ func executeRedeemPayload(store *gorm.DB, machineID string, redeemCode *RedeemCo
 			if err := store.Create(&record).Error; err != nil {
 				return nil, fmt.Errorf("创建用户记录失败: %w", err)
 			}
+		}
+		if _, err := ensureUserUIDTx(store, machineID, record.ID); err != nil {
+			return nil, fmt.Errorf("创建用户 UID 失败: %w", err)
 		}
 
 		var currentTags []string
@@ -522,6 +524,39 @@ func initRedeemRoutes(admin *gin.RouterGroup) {
 	}
 }
 
+func setTelemetryPendingCommandTx(tx *gorm.DB, machineID string, pendingCommand string) error {
+	machineID = strings.TrimSpace(machineID)
+	if machineID == "" {
+		return fmt.Errorf("machine_id required")
+	}
+
+	pendingUpdate := tx.Model(&TelemetryRecord{}).
+		Where("machine_id = ?", machineID).
+		Update("pending_command", pendingCommand)
+	if pendingUpdate.Error != nil {
+		return pendingUpdate.Error
+	}
+	if pendingUpdate.RowsAffected == 0 {
+		placeholder := TelemetryRecord{
+			MachineID:      machineID,
+			PendingCommand: pendingCommand,
+			LastSeenAt:     time.Now(),
+		}
+		if err := tx.Create(&placeholder).Error; err != nil {
+			return err
+		}
+	}
+
+	var telemetryRecord TelemetryRecord
+	if err := tx.Select("id", "machine_id").
+		Where("machine_id = ?", machineID).
+		First(&telemetryRecord).Error; err != nil {
+		return err
+	}
+	_, err := ensureUserUIDTx(tx, machineID, telemetryRecord.ID)
+	return err
+}
+
 // handleRedeem 客户端提交兑换码验证（公开端点，UA 校验）
 func handleRedeem(c *gin.Context) {
 	if !sysConfig.RedeemCodeEnabled {
@@ -605,27 +640,8 @@ func handleRedeem(c *gin.Context) {
 		}
 
 		cmdJSON, _ := json.Marshal(executedCmd)
-		pendingUpdate := tx.Model(&TelemetryRecord{}).
-			Where("machine_id = ?", req.MachineID).
-			Update("pending_command", string(cmdJSON))
-		if pendingUpdate.Error != nil {
-			return pendingUpdate.Error
-		}
-		if pendingUpdate.RowsAffected == 0 {
-			placeholder := TelemetryRecord{
-				MachineID:      req.MachineID,
-				PendingCommand: string(cmdJSON),
-				LastSeenAt:     time.Now(),
-			}
-			if err := tx.Clauses(clause.OnConflict{
-				Columns: []clause.Column{{Name: "machine_id"}},
-				DoUpdates: clause.Assignments(map[string]interface{}{
-					"pending_command": string(cmdJSON),
-					"last_seen_at":    time.Now(),
-				}),
-			}).Create(&placeholder).Error; err != nil {
-				return err
-			}
+		if err := setTelemetryPendingCommandTx(tx, req.MachineID, string(cmdJSON)); err != nil {
+			return err
 		}
 
 		cmd = executedCmd

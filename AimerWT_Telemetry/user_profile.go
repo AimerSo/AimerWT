@@ -408,9 +408,8 @@ func serializeProfile(p UserProfile) map[string]interface{} {
 	if p.Level >= 0 && p.Level < len(LevelExpThresholds)-1 {
 		nextLevelExp = LevelExpThresholds[p.Level+1]
 	}
-	// 查询用户 UID 序号（TelemetryRecord.ID）
-	var seqID uint
-	db.Model(&TelemetryRecord{}).Where("machine_id = ?", p.MachineID).Select("id").Scan(&seqID)
+	// 查询用户公开 UID 序号（来自 user_uid_mappings 表）
+	seqID, _ := lookupUserUID(p.MachineID)
 
 	// 加载最新请求的审批状态（供客户端展示审批结果）
 	latestNickReq, hasLatestNickReq := loadLatestNicknameRequest(p.MachineID)
@@ -825,22 +824,8 @@ func initUserProfileAdminRoutes(admin *gin.RouterGroup) {
 			idList = append(idList, k)
 		}
 
-		// 查 UID
-		type idRow struct {
-			MachineID string
-			ID        uint
-		}
-		var idRows []idRow
-		if len(idList) > 0 {
-			if err := db.Model(&TelemetryRecord{}).Where("machine_id IN ?", idList).Select("machine_id, id").Scan(&idRows).Error; err != nil {
-				c.JSON(500, gin.H{"error": "加载用户序号失败"})
-				return
-			}
-		}
-		uidMap := map[string]uint{}
-		for _, r := range idRows {
-			uidMap[r.MachineID] = r.ID
-		}
+		// 查 UID（从映射表）
+		uidMap := buildUserUIDMap(idList)
 
 		// 查别名
 		type aliasRow struct {

@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // matchScope 判断用户是否匹配推送范围，支持 tag:/star/admin 前缀
@@ -80,15 +79,16 @@ func intValue(raw any) (int, bool) {
 }
 
 func serializeTelemetryUser(record TelemetryRecord) map[string]any {
-	row := serializeTelemetryUserBase(record)
+	seqID := lookupUserUIDWithFallback(record.MachineID, record.ID)
+	row := serializeTelemetryUserBase(record, seqID)
 	profiles := loadUserProfilesMap([]string{record.MachineID})
 	attachTelemetryUserProfile(row, profiles[record.MachineID])
 	return row
 }
 
-func serializeTelemetryUserBase(record TelemetryRecord) map[string]any {
+func serializeTelemetryUserBase(record TelemetryRecord, publicUID uint) map[string]any {
 	return map[string]any{
-		"id":                record.ID,
+		"id":                publicUID,
 		"uid":               record.MachineID,
 		"hwid":              record.MachineID,
 		"machine_id":        record.MachineID,
@@ -141,10 +141,11 @@ func serializeTelemetryUsers(records []TelemetryRecord) []map[string]any {
 		machineIDs = append(machineIDs, record.MachineID)
 	}
 	profiles := loadUserProfilesMap(machineIDs)
+	uidMap := buildUserUIDMap(machineIDs)
 
 	result := make([]map[string]any, len(records))
 	for i, record := range records {
-		row := serializeTelemetryUserBase(record)
+		row := serializeTelemetryUserBase(record, uidMap[record.MachineID])
 		attachTelemetryUserProfile(row, profiles[record.MachineID])
 		result[i] = row
 	}
@@ -1626,7 +1627,8 @@ func initRouter(r *gin.Engine) {
 				keys = append(keys, k)
 			}
 			db.Table("telemetry_records AS tr").
-				Select("tr.machine_id, tr.id, tr.alias, COALESCE(up.nickname, '') AS nickname").
+				Select("tr.machine_id, COALESCE(uum.seq_id, 0) AS id, tr.alias, COALESCE(up.nickname, '') AS nickname").
+				Joins("LEFT JOIN user_uid_mappings AS uum ON uum.machine_id = tr.machine_id").
 				Joins("LEFT JOIN user_profiles AS up ON up.machine_id = tr.machine_id").
 				Where("tr.machine_id IN ?", keys).
 				Scan(&identityRows)
@@ -1758,15 +1760,55 @@ func initRouter(r *gin.Engine) {
 			return
 		}
 
+		record.MachineID = strings.TrimSpace(record.MachineID)
 		record.LastSeenAt = time.Now()
 
-		err := db.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "machine_id"}},
-			DoUpdates: clause.AssignmentColumns([]string{
-				"version", "os", "os_release", "os_version", "arch",
-				"cpu_count", "screen_res", "python_version", "locale", "session_id", "last_seen_at",
-			}),
-		}).Create(&record).Error
+		var dbRecord TelemetryRecord
+		var userSeqID uint
+		err := db.Transaction(func(tx *gorm.DB) error {
+			// update-first：已有用户仅更新字段，不触发 autoincrement
+			updates := map[string]interface{}{
+				"version":        record.Version,
+				"os":             record.OS,
+				"os_release":     record.OSRelease,
+				"os_version":     record.OSVersion,
+				"arch":           record.Arch,
+				"cpu_count":      record.CPUCount,
+				"screen_res":     record.ScreenRes,
+				"python_version": record.PythonVersion,
+				"locale":         record.Locale,
+				"session_id":     record.SessionID,
+				"last_seen_at":   record.LastSeenAt,
+			}
+
+			updateTx := tx.Model(&TelemetryRecord{}).
+				Where("machine_id = ?", record.MachineID).
+				Updates(updates)
+			if updateTx.Error != nil {
+				return updateTx.Error
+			}
+
+			// insert-only-when-absent：仅首次注册才插入新行
+			if updateTx.RowsAffected == 0 {
+				if err := tx.Create(&record).Error; err != nil {
+					return err
+				}
+			}
+
+			if err := tx.Select("id", "version", "pending_command", "is_starred", "is_admin", "tags").
+				Where("machine_id = ?", record.MachineID).
+				First(&dbRecord).Error; err != nil {
+				return err
+			}
+
+			// 在同一事务内分配公开 UID（已有用户直接返回、不推进计数器）
+			seqID, err := ensureUserUIDTx(tx, record.MachineID, dbRecord.ID)
+			if err != nil {
+				return err
+			}
+			userSeqID = seqID
+			return nil
+		})
 
 		if err != nil {
 			c.JSON(500, gin.H{"status": "error"})
@@ -1774,13 +1816,6 @@ func initRouter(r *gin.Engine) {
 		}
 
 		clientConfig := sysConfig
-
-		var dbRecord TelemetryRecord
-		if err := db.Select("id", "version", "pending_command", "is_starred", "is_admin", "tags").
-			Where("machine_id = ?", record.MachineID).
-			First(&dbRecord).Error; err != nil {
-			dbRecord = record
-		}
 
 		if !matchScope(sysConfig.AlertScope, dbRecord) {
 			clientConfig.AlertActive = false
@@ -1801,7 +1836,6 @@ func initRouter(r *gin.Engine) {
 		}
 
 		pendingCmd := dbRecord.PendingCommand
-		userSeqID := dbRecord.ID
 		if pendingCmd != "" {
 			db.Model(&TelemetryRecord{}).Where("machine_id = ?", record.MachineID).Update("pending_command", "")
 		}

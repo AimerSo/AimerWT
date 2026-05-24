@@ -91,8 +91,13 @@ func initDB() {
 		&ClientDeviceToken{}, &AIUsageRecord{}, &AIUserBan{}, &AIUserLimit{}, &UserTag{}, &AdClickEvent{},
 		&RedeemCode{}, &RedeemRecord{}, &NoticeReaction{},
 		&NoticeComment{}, &NoticeCommentLike{}, &NoticeCommentBan{}, &CommentReport{},
-		&UserProfile{}, &NicknameRequest{}, &AvatarRequest{}, &AuditLog{}); err != nil {
+		&UserProfile{}, &NicknameRequest{}, &AvatarRequest{}, &AuditLog{},
+		&UserUIDMapping{}, &UserUIDCounter{}); err != nil {
 		log.Fatalf("数据库迁移失败: %v", err)
+	}
+
+	if err := migrateUserUIDMappings(); err != nil {
+		log.Fatalf("用户 UID 迁移失败: %v", err)
 	}
 }
 

@@ -110,7 +110,7 @@ type SystemConfig struct {
 	FeedbackEnabled       bool `json:"feedback_enabled"`
 
 	// 头像上传分组权限（按标签控制哪些用户组可上传头像）
-	AvatarUploadAllowAll  bool   `json:"avatar_upload_allow_all"`
+	AvatarUploadAllowAll    bool   `json:"avatar_upload_allow_all"`
 	AvatarUploadAllowedTags string `json:"avatar_upload_allowed_tags"`
 }
 
@@ -326,3 +326,29 @@ type AvatarRequest struct {
 
 // LevelExpThresholds 各等级所需的最低经验值（0~9，0级和1级无需经验值）
 var LevelExpThresholds = []int{0, 0, 200, 800, 2400, 4800, 9600, 19200, 38400, 76800}
+
+// UserUIDMapping 公开 UID 映射表，将 machine_id 映射到连续递增的 seq_id。
+// seq_id 由事务内的 UserUIDCounter 手动分配，不使用 SQLite AUTOINCREMENT，
+// 避免心跳 upsert 导致序号空洞。
+type UserUIDMapping struct {
+	SeqID             uint      `gorm:"primaryKey;column:seq_id" json:"seq_id"`
+	MachineID         string    `gorm:"uniqueIndex;type:varchar(64);not null" json:"machine_id"`
+	TelemetryRecordID uint      `gorm:"index" json:"telemetry_record_id"`
+	CreatedAt         time.Time `gorm:"autoCreateTime;index" json:"created_at"`
+	UpdatedAt         time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
+func (UserUIDMapping) TableName() string {
+	return "user_uid_mappings"
+}
+
+// UserUIDCounter 公开 UID 计数器，单行存储下一个可分配的 seq_id 值
+type UserUIDCounter struct {
+	Key       string    `gorm:"primaryKey;type:varchar(64)" json:"key"`
+	NextSeq   uint      `gorm:"not null" json:"next_seq"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
+func (UserUIDCounter) TableName() string {
+	return "user_uid_counters"
+}
