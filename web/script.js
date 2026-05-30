@@ -2432,6 +2432,8 @@ const app = {
             if (!target.classList.contains('show')) return;
             const modalId = target.id;
             if (!modalId) return;
+            // 免责声明弹窗只能通过按钮关闭
+            if (modalId === 'modal-disclaimer') return;
 
             e.stopPropagation();
 
@@ -3500,6 +3502,9 @@ const app = {
 
     clearLogs() {
         document.getElementById('log-container').innerHTML = '';
+        this._lastLogHtml = "";
+        this._lastLogAt = 0;
+        if (this._recentLogFingerprints) this._recentLogFingerprints.clear();
         if (window.pywebview?.api?.clear_logs) {
             pywebview.api.clear_logs();
         }

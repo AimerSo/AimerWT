@@ -797,6 +797,7 @@ window.I18N && I18N.register("de_de", {
     "log.install.failed_with_reason": "Installation fehlgeschlagen: {message}",
 
     "disclaimer.title": "Haftungsausschluss",
+    "disclaimer.subtitle": "Bitte lesen Sie die folgenden Bedingungen sorgfältig durch",
     "disclaimer.reject": "Ablehnen",
     "disclaimer.agree": "Zustimmen",
     "disclaimer.timer": "Bitte den Haftungsausschluss lesen. Zustimmung möglich in {seconds}s.",

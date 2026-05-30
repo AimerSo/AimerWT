@@ -4331,321 +4331,320 @@ i[class^="ri-"] {
     box-shadow: 0 0 0 3px var(--accent-glow, var(--primary-shadow, rgba(29, 133, 130, 0.25)));
 }
 
-/* --- Disclaimer Modal Styles --- */
-.disclaimer-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.75);
-    z-index: 9999;
+/* --- Disclaimer Modal Styles (Modern Redesign) --- */
+
+/* 弹窗容器 */
+.disclaimer-modal {
+    width: 580px;
+    max-width: 92vw;
+    max-height: 82vh;
+    background: var(--bg-card, #fff);
+    border-radius: 20px !important;
+    padding: 0 !important;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.04);
+    margin: auto;
+    overflow: hidden;
+    border: none !important;
+}
+
+[data-theme='dark'] .disclaimer-modal {
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* 顶部装饰区域 */
+.disclaimer-header {
+    padding: 28px 32px 20px;
+    text-align: center;
+    position: relative;
+    flex-shrink: 0;
+    background: linear-gradient(180deg,
+        rgba(255, 153, 0, 0.06) 0%,
+        transparent 100%);
+    border-bottom: 1px solid var(--border-color, #E2E8F0);
+}
+
+[data-theme='dark'] .disclaimer-header {
+    background: linear-gradient(180deg,
+        rgba(255, 153, 0, 0.08) 0%,
+        transparent 100%);
+    border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+/* 图标装饰 */
+.disclaimer-icon-area {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 14px;
+}
+
+.disclaimer-icon-circle {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, var(--primary, #FF9900), #FFB740);
     display: flex;
     align-items: center;
     justify-content: center;
-    opacity: 0;
-    animation: fadeIn 0.3s forwards;
+    box-shadow: 0 6px 20px rgba(255, 153, 0, 0.25);
+    animation: disclaimer-icon-enter 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.15s both;
 }
 
-.disclaimer-container {
-    width: 38%;
-    /* 宽度略大于 1/3，用于文本阅读区域 */
-    min-width: 420px;
-    max-width: 600px;
-    height: 80%;
-    /* 固定高度比例 */
-    background-color: var(--bg-card);
-    border-radius: 12px;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    border: 1px solid var(--border-color);
-    transform: scale(0.95);
-    animation: scaleIn 0.3s 0.1s forwards;
-}
-
-@keyframes scaleIn {
+@keyframes disclaimer-icon-enter {
+    from {
+        opacity: 0;
+        transform: scale(0.6) translateY(8px);
+    }
     to {
-        transform: scale(1);
+        opacity: 1;
+        transform: scale(1) translateY(0);
     }
 }
 
-.disclaimer-content {
-    padding: 30px;
-    overflow-y: auto;
-    flex: 1;
-    font-size: 14px;
-    line-height: 1.7;
-    color: var(--text-main);
+.disclaimer-icon-circle i {
+    font-size: 28px;
+    color: #fff;
 }
 
-/* Scrollbar for disclaimer */
+/* 标题 */
+.disclaimer-title {
+    font-size: 22px;
+    font-weight: 800 !important;
+    text-align: center;
+    margin: 0 !important;
+    line-height: 1.4;
+    color: var(--text-main, #2C3E50);
+    letter-spacing: -0.01em;
+}
+
+/* 副标题 */
+.disclaimer-subtitle {
+    margin: 6px 0 0 0;
+    font-size: 13px;
+    color: var(--text-sec, #7F8C8D);
+    letter-spacing: 0.02em;
+}
+
+/* 内容区域 */
+.disclaimer-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 32px;
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: var(--text-main, #2C3E50);
+    border: none !important;
+    background: transparent !important;
+    scroll-behavior: smooth;
+    text-align: left;
+}
+
+/* 内容区滚动条 */
 .disclaimer-content::-webkit-scrollbar {
-    width: 8px;
+    width: 6px;
 }
 
 .disclaimer-content::-webkit-scrollbar-track {
     background: transparent;
+    margin: 8px 0;
 }
 
 .disclaimer-content::-webkit-scrollbar-thumb {
-    background-color: var(--border-color);
-    border-radius: 4px;
+    background-color: rgba(0, 0, 0, 0.1);
+    border-radius: 3px;
 }
 
 .disclaimer-content::-webkit-scrollbar-thumb:hover {
-    background-color: var(--scrollbar-track-hover);
+    background-color: rgba(0, 0, 0, 0.2);
 }
 
-.disclaimer-content h2 {
-    margin-top: 24px;
-    margin-bottom: 16px;
-    font-size: 22px;
-    color: var(--primary);
-    border-bottom: 2px solid var(--primary);
-    padding-bottom: 8px;
+[data-theme='dark'] .disclaimer-content::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.1);
 }
 
+[data-theme='dark'] .disclaimer-content::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* 内容区排版 */
 .disclaimer-content h3 {
-    margin-top: 20px;
-    margin-bottom: 10px;
     font-size: 16px;
-    color: var(--text-main);
     font-weight: 700;
+    color: var(--text-main, #2C3E50);
+    margin: 24px 0 12px 0;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--primary, #FF9900);
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
 }
 
-.disclaimer-content p {
-    margin-bottom: 14px;
-    text-align: justify;
-}
-
-.disclaimer-content ul {
-    margin-bottom: 14px;
-    padding-left: 20px;
-}
-
-.disclaimer-content li {
-    margin-bottom: 6px;
-}
-
-.disclaimer-content .text-right {
-    text-align: right;
-    font-style: italic;
-    color: var(--text-sec);
-    margin-top: 30px;
-}
-
-.disclaimer-actions {
-    padding: 20px 30px;
-    background-color: var(--bg-body);
-    border-top: 1px solid var(--border-color);
+.disclaimer-content h4 {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--primary, #FF9900);
+    margin: 18px 0 8px 0;
     display: flex;
-    justify-content: flex-end;
-    gap: 16px;
     align-items: center;
-}
-
-/* --- 免责声明内容区域排版 --- */
-.disclaimer-content h3 {
-    margin: 20px 0 10px 0;
-    font-size: 18px;
-    color: var(--text-main);
-    border-bottom: 2px solid var(--border-color);
-    padding-bottom: 5px;
-}
-
-.disclaimer-content h4 {
-    margin: 15px 0 10px 0;
-    font-size: 16px;
-    color: var(--primary);
+    gap: 6px;
 }
 
 .disclaimer-content p {
-    margin: 8px 0;
-    line-height: 1.6;
+    margin: 0 0 10px 0;
+    line-height: 1.7;
+    color: var(--text-main, #2C3E50);
+    text-align: left;
 }
 
 .disclaimer-content ul {
-    margin: 8px 0;
-    padding-left: 20px;
+    margin: 0 0 12px 0;
+    padding-left: 18px;
+    list-style: disc;
+    text-align: left;
 }
 
 .disclaimer-content li {
-    margin: 4px 0;
-}
-
-/* 深色模式适配 */
-[data-theme="dark"] .disclaimer-content {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border-color: rgba(255, 255, 255, 0.1) !important;
-}
-
-[data-theme="dark"] .disclaimer-content h3 {
-    border-bottom-color: rgba(255, 255, 255, 0.1);
-}
-
-.disclaimer-modal {
-    width: 600px;
-    height: 80vh;
-    max-width: 90vw;
-    background: var(--bg-card, #fff);
-    border-radius: 4px !important;
-    padding: 30px;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
-    margin: auto;
-}
-
-.disclaimer-title {
-    font-size: 20px;
-    font-weight: 600 !important;
-    text-align: center;
-    margin: 0 0 1.2em 0 !important;
-    line-height: 1.5;
-    color: var(--text-main, #333);
-}
-
-.disclaimer-divider {
-    height: 1px;
-    background: #EEEEEE;
-    width: 80%;
-    margin: 10px auto;
-    flex-shrink: 0;
-}
-
-[data-theme='dark'] .disclaimer-divider {
-    background: var(--border-color);
-}
-
-.disclaimer-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 15px 20px;
-    font-size: 14px;
-    color: var(--text-main, #333);
-    border: none !important;
-    background: transparent !important;
-}
-
-.disclaimer-content h3 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-main, #333);
-    margin-top: 1.5em;
-    margin-bottom: 0.8em;
-    border: none !important;
-}
-
-.disclaimer-content h4 {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-main, #333);
-    margin-top: 1.2em;
-    margin-bottom: 0.5em;
-}
-
-.disclaimer-content p,
-.disclaimer-content li {
-    color: #333333;
-    line-height: 1.6;
-    margin-bottom: 8px;
+    position: relative;
+    padding-left: 6px;
+    margin-bottom: 6px;
+    line-height: 1.65;
+    color: var(--text-main, #2C3E50);
+    font-size: 13px;
 }
 
 .disclaimer-content strong {
-    color: #000;
+    color: var(--text-main, #2C3E50);
+    font-weight: 700;
 }
 
 .disclaimer-content .text-muted {
-    color: #999 !important;
+    color: var(--text-sec, #7F8C8D) !important;
+    font-size: 12px;
 }
 
+/* 底部操作区 */
 .disclaimer-footer {
-    margin-top: 20px;
+    padding: 16px 32px 24px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border-color, #E2E8F0);
+    background: var(--bg-body, #F5F7FA);
+    margin-top: 0;
 }
 
+[data-theme='dark'] .disclaimer-footer {
+    border-top-color: rgba(255, 255, 255, 0.06);
+    background: rgba(0, 0, 0, 0.15);
+}
+
+/* 倒计时提示 */
 #disclaimer-timer-hint {
     text-align: center;
-    color: #999;
+    color: var(--text-sec, #7F8C8D);
     font-size: 12px;
     height: 20px;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
+    transition: opacity 0.3s ease;
 }
 
+/* 按钮行 */
 .disclaimer-actions-row {
     display: flex;
     justify-content: center;
-    gap: 40px;
+    gap: 16px;
 }
 
+/* 按钮通用样式 */
 .btn-disclaimer {
-    width: 100px;
-    height: 36px;
-    border-radius: 4px;
+    min-width: 120px;
+    height: 40px;
+    border-radius: 12px;
     border: none;
     cursor: pointer;
     font-size: 14px;
-    transition: all 0.2s;
+    font-weight: 600;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: 500;
+    letter-spacing: 0.02em;
 }
 
+/* 拒绝按钮 */
 .btn-disclaimer.reject {
-    background: #fff;
-    border: 1px solid #ff4d4f;
-    color: #ff4d4f;
+    background: var(--bg-card, #fff);
+    border: 1.5px solid var(--border-color, #E2E8F0);
+    color: var(--text-sec, #7F8C8D);
 }
 
 .btn-disclaimer.reject:hover {
-    background: #fff1f0;
-    color: #d9363e;
-    border-color: #d9363e;
+    border-color: #EF4444;
+    color: #EF4444;
+    background: rgba(239, 68, 68, 0.05);
+    transform: translateY(-1px);
 }
 
 [data-theme='dark'] .btn-disclaimer.reject {
-    background: transparent;
-    border-color: #ff4d4f;
-    color: #ff4d4f;
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.1);
+    color: var(--text-sec);
 }
 
 [data-theme='dark'] .btn-disclaimer.reject:hover {
-    background: rgba(255, 77, 79, 0.1);
+    border-color: #EF4444;
+    color: #EF4444;
+    background: rgba(239, 68, 68, 0.1);
 }
 
+/* 同意按钮 */
 .btn-disclaimer.agree {
-    background: var(--primary);
+    background: linear-gradient(135deg, var(--primary, #FF9900), #FFB740);
     color: #fff;
+    box-shadow: 0 4px 14px rgba(255, 153, 0, 0.3);
 }
 
 .btn-disclaimer.agree:hover {
-    filter: brightness(1.1);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(255, 153, 0, 0.4);
+}
+
+.btn-disclaimer.agree:active {
+    transform: translateY(0);
 }
 
 .btn-disclaimer.agree:disabled {
-    opacity: 0.5;
+    opacity: 0.45;
     cursor: not-allowed;
-    background: #ccc;
+    background: var(--border-color, #ccc);
+    box-shadow: none;
+    color: var(--text-sec, #999);
+    transform: none;
 }
 
 [data-theme='dark'] .btn-disclaimer.agree:disabled {
-    background: #444;
-    color: #888;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.3);
 }
 
-/* 协议弹窗：深色模式文本可见性 */
+/* 深色模式文本适配 */
 [data-theme='dark'] .disclaimer-content,
 [data-theme='dark'] .disclaimer-content p,
 [data-theme='dark'] .disclaimer-content li {
-    color: #F4F4F5;
+    color: #E4E4E7;
 }
 
 [data-theme='dark'] .disclaimer-content h3,
 [data-theme='dark'] .disclaimer-content h4,
 [data-theme='dark'] .disclaimer-content strong {
-    color: #FFFFFF;
+    color: #F4F4F5;
+}
+
+/* 旧版兼容 - 不再使用的元素隐藏 */
+.disclaimer-overlay,
+.disclaimer-container,
+.disclaimer-divider,
+.disclaimer-actions {
+    display: none;
 }
 
 /* --- Camo/Sight Split Page Styles --- */

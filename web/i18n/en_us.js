@@ -797,6 +797,7 @@ window.I18N && I18N.register("en_us", {
     "log.install.failed_with_reason": "Install failed: {message}",
 
     "disclaimer.title": "Disclaimer",
+    "disclaimer.subtitle": "Please read the following terms before use",
     "disclaimer.reject": "Reject",
     "disclaimer.agree": "Agree",
     "disclaimer.timer": "Please read the disclaimer. You can agree in {seconds}s.",

@@ -1305,7 +1305,7 @@ class AppApi:
                 cached_notices = cache.get("notice_items")
                 if isinstance(cached_notices, list):
                     self._window.evaluate_js(self._build_notice_items_apply_js(cached_notices))
-                    log.info(f"[缓存] 已注入 {len(cached_notices)} 条缓存公告")
+                    log.debug(f"[缓存] 已注入 {len(cached_notices)} 条缓存公告")
 
                 # 注入缓存的广告轮播数据
                 cached_ad = cache.get("ad_carousel")
@@ -1314,7 +1314,7 @@ class AppApi:
                     ad_interval = cached_ad.get("interval_ms")
                     if isinstance(ad_items, list):
                         self._window.evaluate_js(self._build_ad_carousel_apply_js(ad_items, ad_interval))
-                        log.info(f"[缓存] 已注入 {len(ad_items)} 条缓存广告")
+                        log.debug(f"[缓存] 已注入 {len(ad_items)} 条缓存广告")
 
                 cached_banner = cache.get("banner_payload")
                 if isinstance(cached_banner, dict):
@@ -1322,7 +1322,7 @@ class AppApi:
                     banner_interval = cached_banner.get("interval")
                     if isinstance(banner_items, list):
                         self._window.evaluate_js(self._build_header_banner_apply_js(banner_items, banner_interval))
-                        log.info(f"[缓存] 已注入 {len(banner_items)} 条缓存横幅公告")
+                        log.debug(f"[缓存] 已注入 {len(banner_items)} 条缓存横幅公告")
             except Exception as e:
                 log.debug(f"注入服务器缓存失败: {e}")
 
@@ -1472,6 +1472,17 @@ class AppApi:
         self._window.destroy()
 
     # --- 核心业务 API (供 JS 调用) ---
+    def _log_init_path_state(self, path, is_valid):
+        path_log_key = ("valid" if is_valid else "invalid", str(path or ""))
+        if getattr(self, "_init_path_log_key", None) == path_log_key:
+            return
+
+        if is_valid:
+            log.info(f"[INIT] 已加载配置路径: {path}")
+        else:
+            log.warning(f"配置路径失效: {path}")
+        self._init_path_log_key = path_log_key
+
     def init_app_state(self):
         # 汇总并返回前端初始化所需状态，包括配置中的路径、主题、当前语音包与炮镜路径。
         path = self._cfg_mgr.get_game_path()
@@ -1483,18 +1494,17 @@ class AppApi:
         is_valid = False
         if path:
             is_valid, _ = self._logic.validate_game_path(path)
-            if is_valid:
-                log.info(f"[INIT] 已加载配置路径: {path}")
-            else:
-                log.warning(f"配置路径失效: {path}")
+            self._log_init_path_state(path, is_valid)
 
         if sights_path:
-            try:
-                self._sights_mgr.set_usersights_path(sights_path)
-            except Exception as e:
-                log.warning(f"炮镜路径失效: {e}")
-                sights_path = ""
-                self._cfg_mgr.set_sights_path("")
+            current = self._sights_mgr.get_usersights_path()
+            if not current or str(current) != sights_path:
+                try:
+                    self._sights_mgr.set_usersights_path(sights_path)
+                except Exception as e:
+                    log.warning(f"炮镜路径失效: {e}")
+                    sights_path = ""
+                    self._cfg_mgr.set_sights_path("")
 
         active_theme = self._theme_unlock.get_accessible_active_theme(self._cfg_mgr.get_active_theme())
         if active_theme != self._cfg_mgr.get_active_theme():

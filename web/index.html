@@ -2033,10 +2033,13 @@
     <!-- 用户协议模态框 -->
     <div class="modal-overlay" id="modal-disclaimer" style="z-index: 9999;">
         <div class="modal-content disclaimer-modal">
-            <h2 class="disclaimer-title" data-i18n="disclaimer.title">免责声明</h2>
+            <!-- 顶部装饰区域 -->
+            <div class="disclaimer-header">
+                <h2 class="disclaimer-title" data-i18n="disclaimer.title">免责声明</h2>
+                <p class="disclaimer-subtitle" data-i18n="disclaimer.subtitle">使用前请仔细阅读以下条款</p>
+            </div>
 
-            <div class="disclaimer-divider"></div>
-
+            <!-- 可滚动内容区域 -->
             <div id="disclaimer-text" class="disclaimer-content" data-i18n-html="disclaimer.full_html">
                 <p>本人开发这款工具的初衷是希望能让大家更方便的体验个性化语音的乐趣。在开发过程中，我已经倾尽全力去完善每一个功能，并进行了多次测试，力求让它运行得更稳定、更安全。</p>
                 <p>但毕竟我只是一个人在利用业余时间开发。能力也有限，面对千差万别的电脑环境和游戏更新，我没办法保证它在每一个细节上都完美无缺。即便我非常希望它能成为对你有用的工具，也必须说明：由于个人技术和精力的局限性，我无法
@@ -2100,8 +2103,7 @@
                 <p class="text-muted" style="margin-top: 20px; text-align: right;">最后更新日期：2026年1月10日</p>
             </div>
 
-            <div class="disclaimer-divider"></div>
-
+            <!-- 底部操作区 -->
             <div class="disclaimer-footer">
                 <div id="disclaimer-timer-hint"></div>
                 <div class="disclaimer-actions-row">

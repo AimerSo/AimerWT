@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"log"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -79,55 +78,127 @@ func RestoreSysConfig() {
 	log.Println("[Config] 已从数据库恢复 sysConfig")
 }
 
-// SaveAdCarouselItems 将广告轮播数据持久化，并清理不再引用的旧图片
+// SaveAdCarouselItems 将广告轮播数据持久化。图片文件保留在素材库中，需由后台显式删除。
 func SaveAdCarouselItems(items []AdCarouselItem) {
-	// 获取旧配置中引用的图片路径
-	oldItems := LoadAdCarouselItems()
-	oldImages := make(map[string]bool)
-	for _, item := range oldItems {
-		if item.Image != "" {
-			oldImages[item.Image] = true
-		}
-	}
-
-	// 获取新配置中引用的图片路径
-	newImages := make(map[string]bool)
-	for _, item := range items {
-		if item.Image != "" {
-			newImages[item.Image] = true
-		}
-	}
-
-	// 保存新配置
 	data, err := json.Marshal(items)
 	if err != nil {
 		log.Printf("[Config] 广告轮播序列化失败: %v", err)
 		return
 	}
 	SaveConfig("ad_carousel_items", string(data))
+}
 
-	// 删除不再引用的旧图片文件
-	for img := range oldImages {
-		if newImages[img] {
+type UploadMediaReference struct {
+	Source string `json:"source"`
+	ID     string `json:"id,omitempty"`
+	Field  string `json:"field,omitempty"`
+	Label  string `json:"label"`
+}
+
+func isAllowedUploadImageFilename(filename string) bool {
+	name := strings.TrimSpace(filename)
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+		return true
+	default:
+		return false
+	}
+}
+
+func safeUploadNamePart(value string) string {
+	value = strings.TrimSpace(value)
+	var builder strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		allowed := (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_'
+		if allowed {
+			builder.WriteRune(r)
+			lastUnderscore = false
 			continue
 		}
-		// 提取本地路径部分（/uploads/xxx.webp → uploads/xxx.webp）
-		localPath := img
-		if idx := strings.Index(localPath, "/uploads/"); idx >= 0 {
-			localPath = localPath[idx+1:]
-		} else if strings.HasPrefix(localPath, "/uploads/") {
-			localPath = localPath[1:]
-		}
-		if !strings.HasPrefix(localPath, "uploads/") {
-			continue
-		}
-		absPath := filepath.Join(".", localPath)
-		if _, err := os.Stat(absPath); err == nil {
-			if err := os.Remove(absPath); err == nil {
-				log.Printf("[Config] 已清理孤儿广告图片: %s", localPath)
-			}
+		if !lastUnderscore && builder.Len() > 0 {
+			builder.WriteByte('_')
+			lastUnderscore = true
 		}
 	}
+	result := strings.Trim(builder.String(), "_-.")
+	if result == "" {
+		return "item"
+	}
+	if len(result) > 48 {
+		return result[:48]
+	}
+	return result
+}
+
+func uploadMediaFilename(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if idx := strings.Index(value, "/uploads/"); idx >= 0 {
+		value = value[idx+len("/uploads/"):]
+	} else if strings.HasPrefix(value, "uploads/") {
+		value = strings.TrimPrefix(value, "uploads/")
+	} else {
+		return ""
+	}
+	value = strings.TrimLeft(value, "/\\")
+	if !isAllowedUploadImageFilename(value) {
+		return ""
+	}
+	return value
+}
+
+func collectUploadMediaReferences() map[string][]UploadMediaReference {
+	refs := make(map[string][]UploadMediaReference)
+	addRef := func(raw string, ref UploadMediaReference) {
+		filename := uploadMediaFilename(raw)
+		if filename == "" {
+			return
+		}
+		refs[filename] = append(refs[filename], ref)
+	}
+
+	for _, item := range LoadAdCarouselItems() {
+		label := "轮播广告"
+		if strings.TrimSpace(item.ID) != "" {
+			label += ": " + strings.TrimSpace(item.ID)
+		}
+		addRef(item.Image, UploadMediaReference{
+			Source: "ad_carousel",
+			ID:     strings.TrimSpace(item.ID),
+			Field:  "image",
+			Label:  label,
+		})
+	}
+
+	for _, item := range loadKnowledgeAdsConfigData().Items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			id = "knowledge_ad"
+		}
+		addRef(item.Avatar, UploadMediaReference{
+			Source: "knowledge_ads",
+			ID:     id,
+			Field:  "avatar",
+			Label:  "信息库广告头像: " + id,
+		})
+		addRef(item.Background, UploadMediaReference{
+			Source: "knowledge_ads",
+			ID:     id,
+			Field:  "background",
+			Label:  "信息库广告背景: " + id,
+		})
+	}
+	return refs
 }
 
 // LoadAdCarouselItems 从数据库加载广告轮播数据

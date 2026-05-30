@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1001,6 +1003,85 @@ func initRouter(r *gin.Engine) {
 				c.JSON(200, gin.H{"status": "success", "url": "/uploads/" + filename, "filename": filename})
 			})
 
+			// 素材库 API：列出 uploads 目录中的所有图片文件
+			admin.GET("/media-library", func(c *gin.Context) {
+				uploadsDir := "uploads"
+				if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+					c.JSON(500, gin.H{"error": "素材目录不可用"})
+					return
+				}
+				entries, err := os.ReadDir(uploadsDir)
+				if err != nil {
+					c.JSON(200, gin.H{"items": []any{}})
+					return
+				}
+				type mediaItem struct {
+					Filename   string                 `json:"filename"`
+					URL        string                 `json:"url"`
+					Size       int64                  `json:"size"`
+					ModTime    string                 `json:"mod_time"`
+					InUse      bool                   `json:"in_use"`
+					References []UploadMediaReference `json:"references"`
+					modUnix    int64
+				}
+				references := collectUploadMediaReferences()
+				items := make([]mediaItem, 0)
+				for _, entry := range entries {
+					if entry.IsDir() {
+						continue
+					}
+					filename := entry.Name()
+					if !isAllowedUploadImageFilename(filename) {
+						continue
+					}
+					info, err := entry.Info()
+					if err != nil {
+						continue
+					}
+					refs := references[filename]
+					items = append(items, mediaItem{
+						Filename:   filename,
+						URL:        "/uploads/" + url.PathEscape(filename),
+						Size:       info.Size(),
+						ModTime:    info.ModTime().Format("2006-01-02 15:04:05"),
+						InUse:      len(refs) > 0,
+						References: refs,
+						modUnix:    info.ModTime().UnixNano(),
+					})
+				}
+				// 按修改时间倒序（最新的在前）
+				sort.Slice(items, func(i, j int) bool {
+					return items[i].modUnix > items[j].modUnix
+				})
+				c.JSON(200, gin.H{"items": items})
+			})
+
+			// 素材库 API：删除指定文件
+			admin.DELETE("/media-library/:filename", func(c *gin.Context) {
+				filename := c.Param("filename")
+				if !isAllowedUploadImageFilename(filename) {
+					c.JSON(400, gin.H{"error": "文件名不合法"})
+					return
+				}
+				if refs := collectUploadMediaReferences()[filename]; len(refs) > 0 {
+					c.JSON(http.StatusConflict, gin.H{
+						"error":      "素材正在被使用，请先移除引用后再删除",
+						"references": refs,
+					})
+					return
+				}
+				fpath := filepath.Join("uploads", filename)
+				if _, err := os.Stat(fpath); os.IsNotExist(err) {
+					c.JSON(404, gin.H{"error": "文件不存在"})
+					return
+				}
+				if err := os.Remove(fpath); err != nil {
+					c.JSON(500, gin.H{"error": "删除失败: " + err.Error()})
+					return
+				}
+				c.JSON(200, gin.H{"status": "success"})
+			})
+
 			// 信息库广告位管理 API
 			admin.GET("/knowledge-ads", func(c *gin.Context) {
 				raw := LoadKnowledgeAdsConfig()
@@ -1039,8 +1120,8 @@ func initRouter(r *gin.Engine) {
 					c.JSON(400, gin.H{"error": "不支持的文件类型，仅支持 jpg/png/webp/gif"})
 					return
 				}
-				slotID := c.PostForm("slot_id")
-				imgType := c.PostForm("type")
+				slotID := safeUploadNamePart(c.PostForm("slot_id"))
+				imgType := safeUploadNamePart(c.PostForm("type"))
 				filename := fmt.Sprintf("kb_%s_%s_%d%s", slotID, imgType, time.Now().UnixMilli(), ext)
 				dstPath := filepath.Join("uploads", filename)
 				if err := c.SaveUploadedFile(file, dstPath); err != nil {

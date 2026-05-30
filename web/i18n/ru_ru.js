@@ -797,6 +797,7 @@ window.I18N && I18N.register("ru_ru", {
     "log.install.failed_with_reason": "Установка не выполнена: {message}",
 
     "disclaimer.title": "Отказ от ответственности",
+    "disclaimer.subtitle": "Пожалуйста, внимательно прочитайте условия перед использованием",
     "disclaimer.reject": "Отклонить",
     "disclaimer.agree": "Принять",
     "disclaimer.timer": "Пожалуйста, прочитайте отказ от ответственности. Принять можно через {seconds} с.",

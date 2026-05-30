@@ -797,6 +797,7 @@ window.I18N && I18N.register("zh_tw", {
     "log.install.failed_with_reason": "安裝失敗: {message}",
 
     "disclaimer.title": "免責聲明",
+    "disclaimer.subtitle": "使用前請仔細閱讀以下條款",
     "disclaimer.reject": "拒絕",
     "disclaimer.agree": "同意",
     "disclaimer.timer": "請閱讀免責聲明，{seconds} 秒後可同意",

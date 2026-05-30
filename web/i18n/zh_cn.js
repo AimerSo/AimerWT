@@ -833,6 +833,7 @@ window.I18N && I18N.register("zh_cn", {
     "log.install.failed_with_reason": "安装失败: {message}",
 
     "disclaimer.title": "免责声明",
+    "disclaimer.subtitle": "使用前请仔细阅读以下条款",
     "disclaimer.reject": "拒绝",
     "disclaimer.agree": "同意",
     "disclaimer.timer": "请阅读免责声明，{seconds} 秒后可同意",

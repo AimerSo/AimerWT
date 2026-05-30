@@ -3785,6 +3785,7 @@ const app = {
         this._adItems = [];
         this._adEditingIndex = -1;
         this.loadAdCarousel();
+        this.loadMediaLibrary();
         // 初始化 ImageCropper（延迟到编辑时首次创建）
         this._adCropper = null;
     },
@@ -3948,6 +3949,7 @@ const app = {
         this.cancelAdEdit();
         this._renderAdPreview();
         this.publishAdCarousel();
+        this.loadMediaLibrary();
     },
 
     deleteAdItem(index) {
@@ -4034,6 +4036,142 @@ const app = {
                 d.style.transform = i === index ? 'scale(1.2)' : 'scale(1)';
             });
         }
+    },
+
+    // ==================== 素材库 ====================
+
+    async loadMediaLibrary() {
+        const grid = document.getElementById('mediaLibraryGrid');
+        const countEl = document.getElementById('mediaItemCount');
+        if (!grid) return;
+        try {
+            const res = await fetch(`${this.config.apiBase}/admin/media-library`);
+            if (!res.ok) throw new Error('加载失败');
+            const data = await res.json();
+            const items = data.items || [];
+            if (countEl) countEl.textContent = `${items.length} 个文件`;
+            if (!items.length) {
+                grid.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:32px;grid-column:1/-1;"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;margin-bottom:8px;"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg><p style="font-size:13px;">暂无素材</p><p style="font-size:11px;">上传广告图片后会自动出现在这里</p></div>';
+                return;
+            }
+            const apiBase = this.config.apiBase || '';
+            const baseUrl = apiBase.replace(/\/admin.*/, '');
+            grid.innerHTML = items.map(item => {
+                const fullUrl = baseUrl + item.url;
+                const sizeStr = this._formatFileSize(item.size);
+                const refs = Array.isArray(item.references) ? item.references : [];
+                const refText = this._formatMediaReferences(refs);
+                const inUse = Boolean(item.in_use || refs.length);
+                const statusText = inUse ? `使用中：${refText}` : '未被引用';
+                const statusColor = inUse ? 'var(--warning)' : 'var(--text-muted)';
+                return `<div style="position:relative;border-radius:10px;overflow:hidden;border:1.5px solid var(--border);background:var(--bg);transition:all 0.2s;cursor:pointer;" data-media-card>
+                    <div style="width:100%;aspect-ratio:640/380;overflow:hidden;background:repeating-conic-gradient(rgba(0,0,0,.04) 0% 25%, transparent 0% 50%) 50% / 12px 12px;" data-media-action="use" data-media-url="${this.escapeHtmlSafe(fullUrl)}">
+                        <img src="${this.escapeHtmlSafe(fullUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy">
+                    </div>
+                    <div style="padding:6px 8px;">
+                        <div style="font-size:10px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;" title="${this.escapeHtmlSafe(item.filename)}">${this.escapeHtmlSafe(item.filename)}</div>
+                        <div style="font-size:9px;color:var(--text-muted);margin-top:2px;">${sizeStr} · ${String(item.mod_time || '').slice(0, 10)}</div>
+                        <div style="font-size:9px;color:${statusColor};margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${this.escapeHtmlSafe(statusText)}">${this.escapeHtmlSafe(statusText)}</div>
+                    </div>
+                    <div class="media-actions" style="position:absolute;top:4px;right:4px;display:flex;gap:4px;opacity:0;transition:opacity 0.2s;">
+                        <button style="width:26px;height:26px;border-radius:6px;border:none;background:rgba(37,99,235,0.9);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;" title="使用此素材" data-media-action="use" data-media-url="${this.escapeHtmlSafe(fullUrl)}">✓</button>
+                        <button style="width:26px;height:26px;border-radius:6px;border:none;background:rgba(239,68,68,0.9);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;" title="删除素材" data-media-action="delete" data-media-filename="${this.escapeHtmlSafe(item.filename)}" data-media-references="${this.escapeHtmlSafe(refText)}">✕</button>
+                    </div>
+                </div>`;
+            }).join('');
+            this._bindMediaLibraryActions(grid);
+        } catch {
+            grid.innerHTML = '<div style="text-align:center;color:var(--danger);padding:24px;grid-column:1/-1;">加载素材库失败</div>';
+        }
+    },
+
+    _bindMediaLibraryActions(grid) {
+        grid.querySelectorAll('[data-media-card]').forEach(card => {
+            card.addEventListener('mouseenter', () => {
+                card.style.borderColor = 'var(--primary)';
+                const actions = card.querySelector('.media-actions');
+                if (actions) actions.style.opacity = '1';
+            });
+            card.addEventListener('mouseleave', () => {
+                card.style.borderColor = 'var(--border)';
+                const actions = card.querySelector('.media-actions');
+                if (actions) actions.style.opacity = '0';
+            });
+        });
+        grid.querySelectorAll('[data-media-action="use"]').forEach(el => {
+            el.addEventListener('click', (event) => {
+                event.stopPropagation();
+                this.useMediaItem(el.dataset.mediaUrl || '');
+            });
+        });
+        grid.querySelectorAll('[data-media-action="delete"]').forEach(el => {
+            el.addEventListener('click', (event) => {
+                event.stopPropagation();
+                const refs = (el.dataset.mediaReferences || '').trim();
+                if (refs) {
+                    this.showAlert(`素材正在使用中：${refs}。请先移除引用后再删除。`, 'warning');
+                    return;
+                }
+                this.deleteMediaItem(el.dataset.mediaFilename || '');
+            });
+        });
+    },
+
+    _formatMediaReferences(refs) {
+        return (Array.isArray(refs) ? refs : [])
+            .map(ref => (ref && ref.label ? String(ref.label).trim() : ''))
+            .filter(Boolean)
+            .join('、');
+    },
+
+    useMediaItem(url) {
+        if (!url) return;
+        if (this._adEditingIndex < 0) {
+            if (this._adItems.length >= 4) {
+                this.showAlert('轮播广告已满，请先选择一条广告再使用素材', 'warning');
+                return;
+            }
+            this.addAdItem();
+        }
+        const cropper = this._ensureAdCropper();
+        if (cropper) {
+            cropper.loadImageUrl(url).then(() => {
+                this.showAlert('素材已加载到编辑器', 'success');
+                // 滚动到编辑区
+                const panel = document.getElementById('adEditPanel');
+                if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }).catch(() => {
+                this.showAlert('加载素材失败', 'danger');
+            });
+        } else {
+            this.showAlert('请先打开编辑表单', 'warning');
+        }
+    },
+
+    async deleteMediaItem(filename) {
+        if (!filename) return;
+        if (!confirm(`确定要永久删除素材「${filename}」吗？\n\n此操作不可恢复。`)) return;
+        try {
+            const res = await fetch(`${this.config.apiBase}/admin/media-library/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+            if (!res.ok) {
+                const d = await res.json().catch(() => ({}));
+                if (res.status === 409 && Array.isArray(d.references)) {
+                    throw new Error(`素材正在使用中：${this._formatMediaReferences(d.references)}。请先移除引用后再删除。`);
+                }
+                throw new Error(d.error || '删除失败');
+            }
+            this.showAlert('素材已删除', 'success');
+            this.loadMediaLibrary();
+        } catch (e) {
+            this.showAlert('删除失败: ' + e.message, 'danger');
+        }
+    },
+
+    _formatFileSize(bytes) {
+        bytes = Number(bytes) || 0;
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     },
 
     /**
