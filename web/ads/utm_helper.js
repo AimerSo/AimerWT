@@ -13,23 +13,30 @@
     'use strict';
 
     /**
-     * 为外部链接拼接 UTM 追踪参数
-     * @param {string} url     原始链接
-     * @param {string} medium  广告位类型: carousel / header_banner / notice
-     * @param {string} [content] 素材标识，如广告 id 或 banner 文字摘要
+     * 为外部链接拼接 UTM 来源标记
+     *
+     * 外部链接仅追加 utm_source=AimerWT，保持对广告商的 URL 简洁。
+     * 细粒度统计（广告位、素材 ID 等）由 reportClick() 独立上报到遥测服务器。
+     *
+     * @param {string} url      原始链接
+     * @param {string} _medium  （保留）广告位类型，当前未写入 URL
+     * @param {string} [_content] （保留）素材标识，当前未写入 URL
+     * @param {Object} [options] 扩展选项，预留供未来使用
+     * @param {boolean} [options.full_utm] 若为 true 则额外追加 utm_medium 和 utm_content
      * @returns {string} 拼好 UTM 的完整链接
      */
-    function appendUtm(url, medium, content) {
+    function appendUtm(url, _medium, _content, options) {
         if (!url || url === '#') return url;
         try {
-            var u = new URL(url);
-            u.searchParams.set('utm_source', 'aimerWT');
-            u.searchParams.set('utm_medium', medium || 'unknown');
-            if (!u.searchParams.has('utm_campaign')) {
-                u.searchParams.set('utm_campaign', content || 'default');
+            var finalUrl = String(url).trim();
+            if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(finalUrl)) {
+                finalUrl = 'https://' + finalUrl;
             }
-            if (content) {
-                u.searchParams.set('utm_content', content);
+            var u = new URL(finalUrl);
+            u.searchParams.set('utm_source', 'AimerWT');
+            if (options && options.full_utm) {
+                if (_medium) u.searchParams.set('utm_medium', _medium);
+                if (_content) u.searchParams.set('utm_content', _content);
             }
             return u.toString();
         } catch (e) {

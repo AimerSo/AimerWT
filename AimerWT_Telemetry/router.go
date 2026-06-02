@@ -1288,9 +1288,16 @@ func initRouter(r *gin.Engine) {
 					Scope          string  `json:"scope"`
 					TargetUsers    int64   `json:"target_users"`
 					DeliveredUsers int64   `json:"delivered_users"`
+					ClickCount     int64   `json:"click_count"`
+					ClickUsers     int64   `json:"click_users"`
 					CoverageTarget float64 `json:"coverage_target"`
 					CoverageTotal  float64 `json:"coverage_total"`
 					Active         bool    `json:"active"`
+				}
+
+				type clickFilter struct {
+					Medium string
+					AdID   string
 				}
 
 				var items []pushStatItem
@@ -1322,6 +1329,69 @@ func initRouter(r *gin.Engine) {
 					return count
 				}
 
+				countClicks := func(filters []clickFilter) (int64, int64) {
+					seenFilters := map[string]bool{}
+					mediumOnly := map[string]bool{}
+					type clickPair struct {
+						Medium string
+						AdID   string
+					}
+					var pairs []clickPair
+					for _, filter := range filters {
+						medium := strings.TrimSpace(filter.Medium)
+						adID := strings.TrimSpace(filter.AdID)
+						if medium == "" {
+							continue
+						}
+						filterKey := medium + "\x00" + adID
+						if seenFilters[filterKey] {
+							continue
+						}
+						seenFilters[filterKey] = true
+
+						if adID == "" {
+							mediumOnly[medium] = true
+							continue
+						}
+						pairs = append(pairs, clickPair{Medium: medium, AdID: adID})
+					}
+
+					if len(mediumOnly) == 0 && len(pairs) == 0 {
+						return 0, 0
+					}
+
+					var conditions []string
+					var args []interface{}
+					if len(mediumOnly) > 0 {
+						media := make([]string, 0, len(mediumOnly))
+						for medium := range mediumOnly {
+							media = append(media, medium)
+						}
+						conditions = append(conditions, "ad_medium IN ?")
+						args = append(args, media)
+					}
+					for _, pair := range pairs {
+						if mediumOnly[pair.Medium] {
+							continue
+						}
+						conditions = append(conditions, "(ad_medium = ? AND ad_id = ?)")
+						args = append(args, pair.Medium, pair.AdID)
+					}
+					if len(conditions) == 0 {
+						return 0, 0
+					}
+
+					var summary struct {
+						ClickCount int64
+						ClickUsers int64
+					}
+					db.Model(&AdClickEvent{}).
+						Select("COUNT(*) AS click_count, COUNT(DISTINCT CASE WHEN machine_id <> '' THEN machine_id END) AS click_users").
+						Where(strings.Join(conditions, " OR "), args...).
+						Scan(&summary)
+					return summary.ClickCount, summary.ClickUsers
+				}
+
 				calcCoverage := func(delivered, target int64) float64 {
 					if target <= 0 {
 						return 0
@@ -1335,10 +1405,24 @@ func initRouter(r *gin.Engine) {
 					scope := sysConfig.NoticeScope
 					target := countScopeUsers(scope)
 					delivered := countDelivered("header_banner", hash)
+					bannerClickFilters := make([]clickFilter, 0, len(sysConfig.BannerItems))
+					for _, banner := range sysConfig.BannerItems {
+						medium := ""
+						switch strings.TrimSpace(banner.TrackingType) {
+						case "ad":
+							medium = "header_banner_ad"
+						case "activity":
+							medium = "header_banner_activity"
+						}
+						if medium != "" && strings.TrimSpace(banner.TrackingID) != "" {
+							bannerClickFilters = append(bannerClickFilters, clickFilter{Medium: medium, AdID: banner.TrackingID})
+						}
+					}
+					clicks, clickUsers := countClicks(bannerClickFilters)
 					items = append(items, pushStatItem{
 						PushType: "header_banner", PushKey: hash,
 						Title: "Banner 轮播广告", Description: fmt.Sprintf("%d 条轮播项", len(sysConfig.BannerItems)),
-						Scope: scope, TargetUsers: target, DeliveredUsers: delivered,
+						Scope: scope, TargetUsers: target, DeliveredUsers: delivered, ClickCount: clicks, ClickUsers: clickUsers,
 						CoverageTarget: calcCoverage(delivered, target), CoverageTotal: calcCoverage(delivered, totalUsers),
 						Active: true,
 					})
@@ -1385,10 +1469,20 @@ func initRouter(r *gin.Engine) {
 				if len(adCarouselItems) > 0 {
 					hash := computePushContentHash(adCarouselItems)
 					delivered := countDelivered("ad_carousel", hash)
+					adClickFilters := make([]clickFilter, 0, len(adCarouselItems))
+					for _, item := range adCarouselItems {
+						if strings.TrimSpace(item.ID) != "" {
+							adClickFilters = append(adClickFilters, clickFilter{Medium: "carousel", AdID: item.ID})
+						}
+					}
+					if len(adClickFilters) == 0 {
+						adClickFilters = append(adClickFilters, clickFilter{Medium: "carousel"})
+					}
+					clicks, clickUsers := countClicks(adClickFilters)
 					items = append(items, pushStatItem{
 						PushType: "ad_carousel", PushKey: hash,
 						Title: "广告轮播", Description: fmt.Sprintf("%d 条轮播图", len(adCarouselItems)),
-						Scope: "all", TargetUsers: totalUsers, DeliveredUsers: delivered,
+						Scope: "all", TargetUsers: totalUsers, DeliveredUsers: delivered, ClickCount: clicks, ClickUsers: clickUsers,
 						CoverageTarget: calcCoverage(delivered, totalUsers), CoverageTotal: calcCoverage(delivered, totalUsers),
 						Active: true,
 					})
@@ -1409,10 +1503,17 @@ func initRouter(r *gin.Engine) {
 						}
 						hash := computePushContentHash(kbRaw)
 						delivered := countDelivered("knowledge_ad", hash)
+						kbClickFilters := make([]clickFilter, 0, enabledCount)
+						for _, item := range kbConfig.Items {
+							if item.Enabled && strings.TrimSpace(item.ID) != "" {
+								kbClickFilters = append(kbClickFilters, clickFilter{Medium: "knowledge_link", AdID: item.ID})
+							}
+						}
+						clicks, clickUsers := countClicks(kbClickFilters)
 						items = append(items, pushStatItem{
 							PushType: "knowledge_ad", PushKey: hash,
 							Title: "信息库广告", Description: fmt.Sprintf("%d/%d 个广告位启用", enabledCount, len(kbConfig.Items)),
-							Scope: "all", TargetUsers: totalUsers, DeliveredUsers: delivered,
+							Scope: "all", TargetUsers: totalUsers, DeliveredUsers: delivered, ClickCount: clicks, ClickUsers: clickUsers,
 							CoverageTarget: calcCoverage(delivered, totalUsers), CoverageTotal: calcCoverage(delivered, totalUsers),
 							Active: enabledCount > 0,
 						})
@@ -1427,10 +1528,11 @@ func initRouter(r *gin.Engine) {
 				for _, n := range latestNotices {
 					pushKey := noticePushKey(n)
 					delivered := countDelivered("notice", pushKey)
+					clicks, clickUsers := countClicks([]clickFilter{{Medium: "notice", AdID: fmt.Sprintf("notice_%d", n.ID)}})
 					items = append(items, pushStatItem{
 						PushType: "notice", PushKey: pushKey,
 						Title: "公告", Description: n.Title,
-						Scope: "all", TargetUsers: totalUsers, DeliveredUsers: delivered,
+						Scope: "all", TargetUsers: totalUsers, DeliveredUsers: delivered, ClickCount: clicks, ClickUsers: clickUsers,
 						CoverageTarget: calcCoverage(delivered, totalUsers), CoverageTotal: calcCoverage(delivered, totalUsers),
 						Active: true,
 					})

@@ -46,6 +46,7 @@
     }
 
     function openNoticeDetail(item, app) {
+        reportNoticeClick(item);
         if (window.NoticeModalModule && typeof window.NoticeModalModule.openNoticeDetail === 'function') {
             window.NoticeModalModule.openNoticeDetail(item);
             markNoticeRead(item.id);
@@ -57,6 +58,12 @@
             markNoticeRead(item.id);
             updateUnreadDots();
         }
+    }
+
+    function reportNoticeClick(item) {
+        if (!item || !item.id || !window.AimerUtm || typeof window.AimerUtm.reportClick !== 'function') return;
+        var noticeId = String(item.id);
+        window.AimerUtm.reportClick('notice', 'notice_' + noticeId, 'notice:' + noticeId);
     }
 
     /* 已读状态管理（localStorage） */

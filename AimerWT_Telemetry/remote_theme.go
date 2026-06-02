@@ -65,7 +65,9 @@ func computeRemoteThemeChecksum(themeData string) string {
 
 func normalizeRemoteThemeVisibility(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "public":
+	case "":
+		return "restricted"
+	case "public":
 		return "public"
 	case "restricted":
 		return "restricted"

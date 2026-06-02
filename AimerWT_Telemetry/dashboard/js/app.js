@@ -1466,13 +1466,14 @@ const app = {
                 return `版本: ${scope}`;
             };
 
-            let html = '<div style="overflow-x:auto;"><table style="width:100%;min-width:640px;table-layout:fixed;border-collapse:collapse;font-size:13px;">';
-            html += '<colgroup><col style="width:18%;"><col style="width:30%;"><col style="width:15%;"><col style="width:13%;"><col style="width:24%;"></colgroup>';
+            let html = '<div style="overflow-x:auto;"><table style="width:100%;min-width:760px;table-layout:fixed;border-collapse:collapse;font-size:13px;">';
+            html += '<colgroup><col style="width:16%;"><col style="width:28%;"><col style="width:14%;"><col style="width:12%;"><col style="width:13%;"><col style="width:27%;"></colgroup>';
             html += '<thead><tr style="border-bottom:1px solid var(--border);color:var(--text-muted);font-size:12px;">';
             html += '<th style="text-align:left;padding:8px 12px;font-weight:500;white-space:nowrap;">推送类型</th>';
             html += '<th style="text-align:left;padding:8px 12px;font-weight:500;white-space:nowrap;">推送内容</th>';
             html += '<th style="text-align:left;padding:8px 12px;font-weight:500;white-space:nowrap;">推送范围</th>';
             html += '<th style="text-align:right;padding:8px 12px;font-weight:500;white-space:nowrap;">已送达</th>';
+            html += '<th style="text-align:right;padding:8px 12px;font-weight:500;white-space:nowrap;">点击量</th>';
             html += '<th style="text-align:left;padding:8px 12px;font-weight:500;white-space:nowrap;">覆盖率</th>';
             html += '</tr></thead><tbody>';
 
@@ -1491,6 +1492,7 @@ const app = {
 
                 if (isActive) {
                     html += `<td style="padding:10px 12px;text-align:right;font-weight:600;white-space:nowrap;">${(item.delivered_users || 0).toLocaleString()} <span style="color:var(--text-muted);font-weight:400;font-size:12px;">/ ${(item.target_users || 0).toLocaleString()}</span></td>`;
+                    html += `<td style="padding:10px 12px;text-align:right;font-weight:600;white-space:nowrap;">${(item.click_count || 0).toLocaleString()} <span style="color:var(--text-muted);font-weight:400;font-size:12px;">/ ${(item.click_users || 0).toLocaleString()}人</span></td>`;
                     const pct = item.coverage_target || 0;
                     const barColor = pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444';
                     html += `<td style="padding:10px 12px;">`;
@@ -1499,6 +1501,7 @@ const app = {
                     html += `<span style="min-width:48px;text-align:right;font-weight:600;font-size:12px;">${pct.toFixed(1)}%</span>`;
                     html += `</div></td>`;
                 } else {
+                    html += '<td style="padding:10px 12px;text-align:right;color:var(--text-muted);">-</td>';
                     html += '<td style="padding:10px 12px;text-align:right;color:var(--text-muted);">-</td>';
                     html += '<td style="padding:10px 12px;color:var(--text-muted);">-</td>';
                 }
@@ -8189,6 +8192,7 @@ Aimer WT涂装系统：
             header_banner_ad: 'Banner 广告',
             header_banner_activity: 'Banner 活动',
             header_banner: '横幅（旧数据）',
+            knowledge_link: '信息库广告',
             notice: '公告'
         };
         return map[medium] || medium || '未知';
@@ -9731,7 +9735,7 @@ Object.assign(app, {
             remoteThemeAuthor: 'Aimer',
             remoteThemeVersion: '1.0.0',
             remoteThemeSortOrder: '100',
-            remoteThemeVisibility: 'public',
+            remoteThemeVisibility: 'restricted',
             remoteThemeStatus: 'active',
             remoteThemeDescription: '',
             remoteThemeData: `{
@@ -9764,7 +9768,7 @@ Object.assign(app, {
             remoteThemeAuthor: theme.author || '',
             remoteThemeVersion: theme.version || '',
             remoteThemeSortOrder: theme.sort_order || 100,
-            remoteThemeVisibility: theme.visibility || 'public',
+            remoteThemeVisibility: theme.visibility || 'restricted',
             remoteThemeStatus: theme.status || 'active',
             remoteThemeDescription: theme.description || '',
             remoteThemeData: this._formatRemoteThemeData(theme.theme_data)
@@ -9802,7 +9806,7 @@ Object.assign(app, {
             author: value('remoteThemeAuthor'),
             version: value('remoteThemeVersion'),
             sort_order: parseInt(value('remoteThemeSortOrder') || '100', 10),
-            visibility: value('remoteThemeVisibility') || 'public',
+            visibility: value('remoteThemeVisibility') || 'restricted',
             status: value('remoteThemeStatus') || 'active',
             description: value('remoteThemeDescription'),
             theme_data: value('remoteThemeData')

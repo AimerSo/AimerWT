@@ -554,17 +554,36 @@ class TelemetryManager:
                     "session_id": os.getpid()
                 }
 
-                response = requests.post(
+                headers = build_client_auth_headers(
                     self.report_url,
-                    json=payload,
-                    timeout=15,
-                    headers=build_client_auth_headers(
-                        self.report_url,
-                        method="POST",
-                        machine_id=self._machine_id,
-                        user_agent=f'AimerWT-Client/{self.app_version} ({platform.system()})',
-                    ),
+                    method="POST",
+                    machine_id=self._machine_id,
+                    user_agent=f'AimerWT-Client/{self.app_version} ({platform.system()})',
                 )
+                transient_errors = (
+                    requests.exceptions.SSLError,
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                )
+                response = None
+                last_error = None
+                for attempt in range(2):
+                    try:
+                        response = requests.post(
+                            self.report_url,
+                            json=payload,
+                            timeout=15,
+                            headers=headers,
+                        )
+                        break
+                    except transient_errors as e:
+                        last_error = e
+                        if attempt == 0:
+                            time.sleep(0.8)
+                            continue
+                        raise
+                if response is None and last_error is not None:
+                    raise last_error
 
                 if response.status_code == 200 or response.status_code == 503:
                     self._is_log_error = False
@@ -640,8 +659,16 @@ class TelemetryManager:
                 self._consecutive_failures += 1
                 if self._consecutive_failures >= self._DISCONNECT_THRESHOLD:
                     self._server_connected = False
-                if self._log_callback and not self._is_log_error:
-                    self._log_callback.error(f"[遥测] 服务交互异常: {type(e).__name__}")
+                if (
+                    self._consecutive_failures >= self._DISCONNECT_THRESHOLD
+                    and self._log_callback
+                    and not self._is_log_error
+                ):
+                    error_detail = str(e).strip().replace("\r", " ").replace("\n", " ")
+                    if len(error_detail) > 220:
+                        error_detail = error_detail[:220] + "..."
+                    error_text = f"{type(e).__name__}: {error_detail}" if error_detail else type(e).__name__
+                    self._log_callback.error(f"[遥测] 服务交互异常: {error_text}")
                     self._is_log_error = True
 
         t = threading.Thread(target=_do_report, daemon=True, name="TelemetryStartup")
