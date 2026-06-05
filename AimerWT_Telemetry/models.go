@@ -39,6 +39,8 @@ type StatsResponse struct {
 	LocaleStats    []map[string]any `json:"locale_stats"`
 	ScreenStats    []map[string]any `json:"screen_stats"`
 	GrowthData     []map[string]any `json:"growth_data"`
+	CompareGrowth  []map[string]any `json:"compare_growth_data,omitempty"`
+	TotalUserTrend []map[string]any `json:"total_user_trend"`
 	RecentUsers    []map[string]any `json:"recent_users"`
 	OSOptions      []map[string]any `json:"os_options"`
 	ArchOptions    []map[string]any `json:"arch_options"`

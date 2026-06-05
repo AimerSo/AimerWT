@@ -106,11 +106,13 @@
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
                         </div>
                         <div>
-                            <div class="panel-title">用户增长趋势</div>
-                            <div class="panel-sub" id="growthPeakInfo">峰值 -</div>
+                            <div class="panel-title" id="growthChartTitle">用户总量趋势</div>
+                            <div class="panel-sub" id="growthPeakInfo">当前 -</div>
                         </div>
                     </div>
                     <div class="panel-actions">
+                        <button class="btn primary" data-trend-mode="total" onclick="app.setTrendChartMode('total')">总量</button>
+                        <button class="btn" data-trend-mode="growth" onclick="app.setTrendChartMode('growth')">新增</button>
                         <select class="select" id="trendRange" onchange="app.applyFilters()">
                             <option value="7">近7天</option>
                             <option value="14">近14天</option>

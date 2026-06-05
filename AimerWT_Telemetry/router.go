@@ -44,6 +44,89 @@ func noticePushKey(item NoticeItem) string {
 	return fmt.Sprintf("notice_%d_%s", item.ID, hash)
 }
 
+type dailyStatRow struct {
+	Date     string `gorm:"column:date"`
+	Count    int64  `gorm:"column:count"`
+	NewCount int64  `gorm:"column:new_count"`
+}
+
+type createdAtRow struct {
+	CreatedAt time.Time `gorm:"column:created_at"`
+}
+
+func buildDailyStatRowsFromCreatedAt(rows []createdAtRow) []dailyStatRow {
+	countsByDate := make(map[string]int64)
+	for _, row := range rows {
+		date := dateOnly(row.CreatedAt).Format("2006-01-02")
+		countsByDate[date]++
+	}
+
+	result := make([]dailyStatRow, 0, len(countsByDate))
+	for date, count := range countsByDate {
+		result = append(result, dailyStatRow{
+			Date:     date,
+			Count:    count,
+			NewCount: count,
+		})
+	}
+	return result
+}
+
+func buildDailyGrowthData(startDate time.Time, days int, rows []dailyStatRow) []map[string]any {
+	if days <= 0 {
+		return []map[string]any{}
+	}
+	countsByDate := make(map[string]dailyStatRow, len(rows))
+	for _, row := range rows {
+		current := countsByDate[row.Date]
+		current.Date = row.Date
+		current.Count += row.Count
+		current.NewCount += row.NewCount
+		countsByDate[row.Date] = current
+	}
+
+	trend := make([]map[string]any, 0, days)
+	start := dateOnly(startDate)
+	for i := 0; i < days; i++ {
+		date := start.AddDate(0, 0, i).Format("2006-01-02")
+		row := countsByDate[date]
+		trend = append(trend, map[string]any{
+			"date":      date,
+			"count":     row.Count,
+			"new_count": row.NewCount,
+		})
+	}
+	return trend
+}
+
+func buildTotalUserTrend(startDate time.Time, days int, baseline int64, rows []dailyStatRow) []map[string]any {
+	if days <= 0 {
+		return []map[string]any{}
+	}
+	countsByDate := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		countsByDate[row.Date] += row.Count
+	}
+
+	total := baseline
+	trend := make([]map[string]any, 0, days)
+	start := dateOnly(startDate)
+	for i := 0; i < days; i++ {
+		date := start.AddDate(0, 0, i).Format("2006-01-02")
+		total += countsByDate[date]
+		trend = append(trend, map[string]any{
+			"date":  date,
+			"total": total,
+			"count": countsByDate[date],
+		})
+	}
+	return trend
+}
+
+func dateOnly(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
+}
+
 func requestBaseURL(c *gin.Context) string {
 	scheme := "http"
 	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
@@ -576,8 +659,10 @@ func initRouter(r *gin.Engine) {
 				onlineThreshold := time.Now().Add(-time.Duration(onlineThresholdMinutes) * time.Minute)
 				baseQuery.Session(&gorm.Session{}).Where("last_seen_at > ?", onlineThreshold).Count(&stats.OnlineUsers)
 
-				today := time.Now().Format("2006-01-02")
-				baseQuery.Session(&gorm.Session{}).Where("date(created_at) = ?", today).Count(&stats.TodayNew)
+				now := time.Now()
+				todayStart := dateOnly(now)
+				tomorrowStart := todayStart.AddDate(0, 0, 1)
+				baseQuery.Session(&gorm.Session{}).Where("created_at >= ? AND created_at < ?", todayStart, tomorrowStart).Count(&stats.TodayNew)
 
 				dauThreshold := time.Now().Add(-24 * time.Hour)
 				baseQuery.Session(&gorm.Session{}).Where("last_seen_at > ?", dauThreshold).Count(&stats.DAU)
@@ -596,17 +681,36 @@ func initRouter(r *gin.Engine) {
 				stats.LocaleStats = getDistribution("locale")
 				stats.ScreenStats = getDistribution("screen_res")
 
-				baseQuery.Session(&gorm.Session{}).Raw(`
-					SELECT 
-						date(created_at) as date, 
-						count(*) as count,
-						sum(case when date(last_seen_at) = date(created_at) then 1 else 0 end) as new_count
-					FROM telemetry_records 
-					WHERE created_at > date('now', '-' || ? || ' days')
-					`+buildWhereClause(c)+`
-					GROUP BY date 
-					ORDER BY date ASC
-				`, days).Scan(&stats.GrowthData)
+				startDate := todayStart.AddDate(0, 0, -days+1)
+
+				var createdRows []createdAtRow
+				baseQuery.Session(&gorm.Session{}).
+					Select("created_at").
+					Where("created_at >= ? AND created_at < ?", startDate, tomorrowStart).
+					Scan(&createdRows)
+				growthRows := buildDailyStatRowsFromCreatedAt(createdRows)
+				stats.GrowthData = buildDailyGrowthData(startDate, days, growthRows)
+
+				var totalTrendBaseline int64
+				baseQuery.Session(&gorm.Session{}).Where("created_at < ?", startDate).Count(&totalTrendBaseline)
+				stats.TotalUserTrend = buildTotalUserTrend(startDate, days, totalTrendBaseline, growthRows)
+
+				compareStartRaw := strings.TrimSpace(c.Query("compare_start_date"))
+				compareEndRaw := strings.TrimSpace(c.Query("compare_end_date"))
+				if compareStartRaw != "" && compareEndRaw != "" {
+					compareStart, startErr := time.ParseInLocation("2006-01-02", compareStartRaw, now.Location())
+					compareEnd, endErr := time.ParseInLocation("2006-01-02", compareEndRaw, now.Location())
+					if startErr == nil && endErr == nil && !compareEnd.Before(compareStart) {
+						compareEndExclusive := compareEnd.AddDate(0, 0, 1)
+						compareDays := int(compareEnd.Sub(compareStart).Hours()/24) + 1
+						var compareCreatedRows []createdAtRow
+						baseQuery.Session(&gorm.Session{}).
+							Select("created_at").
+							Where("created_at >= ? AND created_at < ?", compareStart, compareEndExclusive).
+							Scan(&compareCreatedRows)
+						stats.CompareGrowth = buildDailyGrowthData(compareStart, compareDays, buildDailyStatRowsFromCreatedAt(compareCreatedRows))
+					}
+				}
 
 				var recentRecs []TelemetryRecord
 				baseQuery.Session(&gorm.Session{}).Order("last_seen_at desc").Limit(50).Find(&recentRecs)

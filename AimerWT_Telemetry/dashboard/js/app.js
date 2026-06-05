@@ -34,7 +34,8 @@ const app = {
         userWeightConfig: null,
         userWeightTags: [],
         userWeightFormula: null,
-        runtimeNoticeConfig: null
+        runtimeNoticeConfig: null,
+        trendChartMode: 'total'
     },
 
     // 颜色配置
@@ -627,7 +628,7 @@ const app = {
      */
     updateDashboard(data) {
         this.updateStatCards(data);
-        this.renderGrowthChart(data.growth_data || [], data.compare_growth_data || [], data.video_release_date || data.video_release_at);
+        this.renderGrowthChart(data.total_user_trend || [], data.growth_data || [], data.compare_growth_data || [], data.video_release_date || data.video_release_at);
         this.renderNewVsDauChart(data.growth_data || [], data.compare_growth_data || []);
         this.renderPieChart('osChart', data.os_stats || []);
         this.renderPieChart('archChart', data.arch_stats || []);
@@ -703,13 +704,51 @@ const app = {
     },
 
     /**
-     * 渲染增长图表
+     * 切换左侧趋势图展示口径
      */
-    renderGrowthChart(growthData, compareData, releaseDate) {
-        if (!growthData.length || !this.state.charts.growthChart) return;
+    setTrendChartMode(mode) {
+        this.state.trendChartMode = mode === 'growth' ? 'growth' : 'total';
+        this.syncTrendModeButtons();
+        const data = this.state.dashboardData;
+        if (data) {
+            this.renderGrowthChart(data.total_user_trend || [], data.growth_data || [], data.compare_growth_data || [], data.video_release_date || data.video_release_at);
+        }
+    },
 
-        const peak = this.findPeak(growthData);
-        const dates = growthData.map(d => d.date);
+    syncTrendModeButtons() {
+        const mode = this.state.trendChartMode === 'growth' ? 'growth' : 'total';
+        document.querySelectorAll('[data-trend-mode]').forEach(btn => {
+            const active = btn.dataset.trendMode === mode;
+            btn.classList.toggle('primary', active);
+        });
+    },
+
+    /**
+     * 渲染用户趋势图表
+     */
+    renderGrowthChart(totalTrendData, growthData, compareData, releaseDate) {
+        const chart = this.state.charts.growthChart;
+        if (!chart) return;
+
+        const mode = this.state.trendChartMode === 'growth' ? 'growth' : 'total';
+        const isGrowthMode = mode === 'growth';
+        const sourceData = isGrowthMode ? growthData : totalTrendData;
+        const valueKey = isGrowthMode ? 'count' : 'total';
+        const seriesName = isGrowthMode ? '新增用户' : '用户总量';
+        const chartColor = isGrowthMode ? '#10b981' : '#3b82f6';
+        this.syncTrendModeButtons();
+        this.setText('growthChartTitle', isGrowthMode ? '用户增长趋势' : '用户总量趋势');
+        if (!sourceData.length) {
+            chart.clear();
+            this.setText('growthPeakInfo', isGrowthMode ? '峰值 -' : '当前 -');
+            return;
+        }
+
+        const peak = this.findPeak(sourceData, valueKey);
+        const dates = sourceData.map(d => d.date);
+        const values = sourceData.map(d => Number(d[valueKey] || 0));
+        const firstValue = values[0] || 0;
+        const currentValue = values[values.length - 1] || 0;
 
         const option = {
             grid: { left: 48, right: 24, top: 48, bottom: 36, containLabel: false },
@@ -756,29 +795,22 @@ const app = {
             },
             series: [
                 {
-                    name: '用户增长',
+                    name: seriesName,
                     type: 'line',
-                    data: growthData.map(d => d.count),
+                    data: values,
                     smooth: 0.4,
                     symbol: 'circle',
                     symbolSize: 4,
                     showSymbol: false,
                     emphasis: { focus: 'series', itemStyle: { borderWidth: 3, borderColor: '#fff', shadowBlur: 8, shadowColor: 'rgba(37, 99, 235, 0.35)' } },
-                    lineStyle: { color: '#3b82f6', width: 2.5, shadowBlur: 6, shadowColor: 'rgba(37, 99, 235, 0.2)', shadowOffsetY: 4 },
-                    itemStyle: { color: '#3b82f6' },
+                    lineStyle: { color: chartColor, width: 2.5, shadowBlur: 6, shadowColor: 'rgba(37, 99, 235, 0.2)', shadowOffsetY: 4 },
+                    itemStyle: { color: chartColor },
                     areaStyle: {
                         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                            { offset: 0, color: 'rgba(59, 130, 246, 0.25)' },
-                            { offset: 0.6, color: 'rgba(59, 130, 246, 0.06)' },
-                            { offset: 1, color: 'rgba(59, 130, 246, 0)' }
+                            { offset: 0, color: isGrowthMode ? 'rgba(16, 185, 129, 0.22)' : 'rgba(59, 130, 246, 0.25)' },
+                            { offset: 0.6, color: isGrowthMode ? 'rgba(16, 185, 129, 0.06)' : 'rgba(59, 130, 246, 0.06)' },
+                            { offset: 1, color: isGrowthMode ? 'rgba(16, 185, 129, 0)' : 'rgba(59, 130, 246, 0)' }
                         ])
-                    },
-                    markPoint: {
-                        symbol: 'circle',
-                        symbolSize: 10,
-                        itemStyle: { color: '#f59e0b', borderColor: '#fff', borderWidth: 2, shadowBlur: 6, shadowColor: 'rgba(245, 158, 11, 0.4)' },
-                        label: { show: true, position: 'top', color: '#f59e0b', fontWeight: 700, fontSize: 12, formatter: (params) => this.formatNumber(params.value) },
-                        data: [{ name: '峰值', coord: [peak.index, peak.value], value: peak.value }]
                     },
                     sampling: 'lttb',
                     large: true,
@@ -787,7 +819,17 @@ const app = {
             ]
         };
 
-        if (compareData && compareData.length) {
+        if (isGrowthMode) {
+            option.series[0].markPoint = {
+                symbol: 'circle',
+                symbolSize: 10,
+                itemStyle: { color: '#f59e0b', borderColor: '#fff', borderWidth: 2, shadowBlur: 6, shadowColor: 'rgba(245, 158, 11, 0.4)' },
+                label: { show: true, position: 'top', color: '#f59e0b', fontWeight: 700, fontSize: 12, formatter: (params) => this.formatNumber(params.value) },
+                data: [{ name: '峰值', coord: [peak.index, peak.value], value: peak.value }]
+            };
+        }
+
+        if (isGrowthMode && compareData && compareData.length) {
             option.series.push({
                 name: '对比周期',
                 type: 'line',
@@ -804,6 +846,9 @@ const app = {
             });
         }
 
+        let summary = isGrowthMode
+            ? `峰值 ${peak.date} · ${this.formatNumber(peak.value)}`
+            : `当前 ${this.formatNumber(currentValue)} · 起点 ${this.formatNumber(firstValue)}`;
         if (releaseDate) {
             const releaseIndex = dates.findIndex(d => d === releaseDate);
             if (releaseIndex >= 0) {
@@ -814,25 +859,26 @@ const app = {
                     lineStyle: { color: '#f59e0b', type: [4, 4], width: 1.5 },
                     data: [{ xAxis: releaseIndex }]
                 };
-                this.setText('growthPeakInfo', `峰值 ${peak.date} · 视频发布 ${releaseDate}`);
-            } else {
-                this.setText('growthPeakInfo', `峰值 ${peak.date}`);
+                summary += ` · 视频发布 ${releaseDate}`;
             }
-        } else {
-            this.setText('growthPeakInfo', `峰值 ${peak.date}`);
         }
 
-        this.state.charts.growthChart.setOption(option);
+        this.setText('growthPeakInfo', summary);
+        chart.setOption(option, true);
     },
 
     /**
      * 查找峰值
      */
-    findPeak(data) {
-        let maxVal = 0, maxIdx = 0, maxDate = '';
+    findPeak(data, valueKey = 'count') {
+        if (!data.length) return { value: 0, index: 0, date: '' };
+        let maxVal = Number(data[0][valueKey] || 0);
+        let maxIdx = 0;
+        let maxDate = data[0].date || '';
         data.forEach((d, i) => {
-            if (d.count > maxVal) {
-                maxVal = d.count;
+            const value = Number(d[valueKey] || 0);
+            if (value > maxVal) {
+                maxVal = value;
                 maxIdx = i;
                 maxDate = d.date;
             }
