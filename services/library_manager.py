@@ -25,6 +25,7 @@ import re
 from pathlib import Path
 from typing import Any
 from utils.logger import get_logger
+from utils.sevenzip import find_7z_executable
 from utils.utils import get_app_data_dir
 from wt.wt_sound import VoiceType, Country
 
@@ -948,14 +949,7 @@ class LibraryManager:
             return False
 
     def _find_7z(self):
-        return (
-                shutil.which("7z")
-                or shutil.which("7z.exe")
-                or shutil.which("7za")
-                or shutil.which("7za.exe")
-                or shutil.which("7zr")
-                or shutil.which("7zr.exe")
-        )
+        return find_7z_executable()
 
     def _run_7z(self, args):
         result = subprocess.run(

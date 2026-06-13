@@ -1,0 +1,152 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+  <META http-equiv="Content-Type" content="text/html; charset=Windows-1252">
+  <TITLE>-i (Include filenames) switch</TITLE>
+  <LINK href="style.css" rel="stylesheet" type="text/css">
+</HEAD>
+
+<BODY>
+
+<H1>-i (Include filenames) switch</H1>
+
+<P>Specifies additional include filenames and wildcards.</P>
+<P>Multiple include switches are supported.</P>
+
+<H4>Syntax</H4>
+
+<PRE class="syntax">
+-i[<A class="parameter" href="#recurse_type">&lt;recurse_type></A>][<A class="parameter" href="#mark_type">&lt;mark_type></A>][<A class="parameter" href="#wildcard_type">&lt;wildcard_type></A>]<A class="parameter" href="#file_ref">&lt;file_ref></A>
+
+<A class="parameter" href="#recurse_type">&lt;recurse_type></A> ::= r[- | 0]
+<A class="parameter" href="#mark_type">&lt;mark_type></A> ::= m[- | 2]
+<A class="parameter" href="#wildcard_type">&lt;wildcard_type></A> ::= w[-]
+<A class="parameter" href="#file_ref">&lt;file_ref></A> ::= @{listfile} | !{wildcard}
+</PRE>
+
+<H4>Parameters</H4>
+
+<DL>
+  <DT><A name="recurse_type"></A>&lt;recurse_type></DT>
+<PRE class="syntax">
+&lt;recurse_type> ::= r[- | 0]
+</PRE>
+  <DD><P>Specifies how wildcards and file names in this switch must
+         be used for recursive search of files and directories. 
+         If this option is not given, then the global value will be used, that can 
+         be changed by the <A href="recurse.htm">-r (Recurse)</A> switch.</P>
+
+	<P>Note: The "r" option rules affect only searching phase of item 
+   (file or directory) with specified names.
+   And if the directory is found for processing, 7-Zip will process also all 
+   subdirectories and all files of that directory and files of subdirectories,
+   even if the search recursion is switched off with "r-" option.
+   See <A href="recurse.htm">-r (Recurse)</A> switch description for more details.</A>
+	</P>
+
+<TABLE>
+  <TR><TH width="40">Option</TH> <TH>Description</TH></TR>
+  <TR><TD>r</TD> <TD>Enable recurse subdirectories for item search.</TD></TR>
+  <TR><TD>r-</TD> <TD>Disable recurse subdirectories for item search. This option is default for 
+         all commands, if was not changed in global level.</TD></TR>
+  <TR><TD>r0</TD> <TD>Enable recurse subdirectories  for item search only for wildcard names.</TD></TR>
+</TABLE>
+  </DD>
+
+
+  <DT><A name="mark_type"></A>&lt;mark_type></DT>
+  <DD>
+<PRE class="syntax">
+&lt;mark_type> ::= m[- | 2]
+</PRE>
+  <P>Enables the mode that requires directory path separator mark (character) 
+     at the end of path for directory items.
+     The path separator mark (character) is backslash (\) in Windows or slash (/) in Linux.
+     So this switch option allows to exclude directories from processing, if path separator
+     mark is not specified at the end of path of wildcard or name.
+		 If this option is not given, then the global mode is used,
+		 that can be changed with <A href="spm.htm">-spm</A> switch.</P>
+<TABLE>
+  <TR> <TH width="40">Option</TH> <TH>Description</TH> </TR>
+  <TR> <TD>m</TD> <TD>allow directories only with path separator mark at the end.</TD> </TR>
+  <TR> <TD>m2</TD> <TD>allow directories with path separator mark and directories for 
+                       non-wildcard paths.</TD> </TR>
+  <TR> <TD>m-</TD> <TD>allow directories for any path. This option is default, if was not changed in global level.</TD> </TR>
+</TABLE>
+  </DD>
+
+
+  
+  <DT><A name="wildcard_type"></A>&lt;wildcard_type></DT>
+  <DD>
+<PRE class="syntax">
+&lt;wildcard_type> ::= w[-]
+</PRE>
+   <P>Enables or disables wildcard matching mode for names in this switch.
+         If this option is not given, then the global wildcard mode is used.
+         By default global wildcard mode is enabled.
+         Global wildcard mode can be disabled by global -spd switch.
+         </P>
+   <TABLE>
+     <TR> <TH width="40">Option</TH> <TH>Description</TH> </TR>
+     <TR> <TD>w</TD> <TD>Enables wildcard mode. It's default mode, if was not changed in global level.</TD></TR>
+     <TR> <TD>w-</TD> <TD>Disables wildcard mode.</TD></TR>
+   </TABLE>
+  </DD>
+
+
+
+ <DT><A name="file_ref"></A>&lt;file_ref></DT>
+ <DD>
+   <P>Specifies filenames and wildcards, or a list file, for files to be processed.</P>
+<PRE class="syntax">
+&lt;file_ref> ::= @{listfile} | !{wildcard}
+</PRE>
+   <TABLE>
+     <TR> <TH width="120">Option</TH> <TH>Description</TH> </TR>
+     <TR> <TD>{listfile}</TD> <TD>Specifies name of list file. See
+                  <A href = ../syntax.htm#ListFile>List file</A> description.</TD> </TR>
+     <TR> <TD>{wildcard}</TD> <TD>Specifies wildcard or filename.</TD> </TR>
+   </TABLE>
+ </DD>
+</DL>
+
+
+
+<H4>Examples</H4>
+
+<PRE class="example">
+7z a -tzip src.zip *.txt -ir!DIR1\*.cpp
+</PRE>
+
+<P>adds to <SPAN class="filename">src.zip</SPAN> archive all
+  <SPAN class="filename">*.txt</SPAN> files only from current directory
+  and all <SPAN class="filename">*.cpp</SPAN>
+  files from directory <SPAN class="filename">DIR1</SPAN>
+  and from all it's subdirectories.</P>
+
+<H4>Commands that can be used with this switch</H4>
+
+<P>
+  <A href="../commands/add.htm">a (Add)</A>,
+  <A href="../commands/delete.htm">d (Delete)</A>,
+  <A href="../commands/extract.htm">e (Extract)</A>,
+  <A href="../commands/hash.htm">h (Hash)</A>,
+  <A href="../commands/list.htm">l (List)</A>,
+  <A href="../commands/rename.htm">rn (Rename)</A>,
+  <A href="../commands/test.htm">t (Test)</A>,
+  <A href="../commands/update.htm">u (Update)</A>,
+  <A href="../commands/extract_full.htm">x (Extract with full paths)</A>
+</P>
+
+<H4>See also</H4>
+
+<P>
+  <B>Switches:</B>
+  <A href="recurse.htm">-r (Recurse)</A>,
+  <A href="spm.htm">-m (Path Separator Mark)</A>,
+  <A href="exclude.htm">-x (Exclude)</A>
+</P>
+
+</BODY>
+</HTML>

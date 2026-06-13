@@ -30,6 +30,7 @@ from typing import Callable, Any
 
 from services.resource_index_cache import ResourceIndexCache
 from utils.logger import get_logger
+from utils.sevenzip import find_7z_executable
 
 try:
     import winreg
@@ -945,14 +946,7 @@ class SkinsManager:
             log.warning(f"磁盘空间检查失败（已跳过）: {e}")
 
     def _find_7z(self) -> str | None:
-        return (
-            shutil.which("7z")
-            or shutil.which("7z.exe")
-            or shutil.which("7za")
-            or shutil.which("7za.exe")
-            or shutil.which("7zr")
-            or shutil.which("7zr.exe")
-        )
+        return find_7z_executable()
 
     def _run_7z(self, args: list[str]) -> tuple[int, str]:
         try:

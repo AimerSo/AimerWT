@@ -1,0 +1,72 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+  <META http-equiv="Content-Type" content="text/html; charset=Windows-1252">
+  <TITLE>-spf (Require path separator mark for directory path) switch</TITLE>
+  <LINK href="style.css" rel="stylesheet" type="text/css">
+</HEAD>
+
+<BODY>
+
+<H1>-spm (Require path separator mark for directory path) switch</H1>
+
+<H4>Syntax</H4>
+
+<PRE class="syntax">
+-spm[- | 2]
+</PRE>
+
+<TABLE>
+  <TR> <TH width="50">Switch</TH> <TH>Description</TH> </TR>
+  <TR> <TD>-spm</TD> <TD>allow directories only with path separator mark at the end.</TD> </TR>
+  <TR> <TD>-spm2</TD> <TD>allow directories with path separator mark and directories for 
+                          non-wildcard paths.</TD> </TR>
+  <TR> <TD>-spm-</TD> <TD>allow directories for any path. This option is default.</TD> </TR>
+</TABLE>
+
+<P>-spm enables the mode that requires path separator mark at the end of path for directory items.
+So this switch allows to exclude directories from processing, if path separator
+mark is not specified for path.
+The path separator mark is backslash (\) in Windows or slash (/) in Linux.
+
+
+<H4>Examples</H4>
+
+<PRE class="example">
+7z a a.7z -spm n*
+</PRE>
+
+<P>stores all <SPAN class="filename">n*</SPAN> files but doesn't process any directory.</P> 
+
+<PRE class="example">
+7z a a.7z -spm n* SomeDir*\
+</PRE>
+
+<P>stores all <SPAN class="filename">n*</SPAN> files  and <SPAN class="filename">SomeDir*</SPAN> 
+directories, but doesn't process another directories.</P>
+
+<PRE class="example">
+7z a a.7z -spm2 n* SomeItem
+</PRE>
+
+<P>stores all <SPAN class="filename">n*</SPAN> files  and <SPAN class="filename">SomeItem</SPAN> 
+file or directory, but doesn't process another directories.</P>
+
+
+<H4>Commands that can be used with this switch</H4>
+
+<P>
+  <A href="../commands/add.htm">a (Add)</A>,
+  <A href="../commands/delete.htm">d (Delete)</A>,
+  <A href="../commands/extract.htm">e (Extract)</A>,
+  <A href="../commands/hash.htm">h (Hash)</A>,
+  <A href="../commands/list.htm">l (List)</A>,
+  <A href="../commands/rename.htm">rn (Rename)</A>,
+  <A href="../commands/test.htm">t (Test)</A>,
+  <A href="../commands/update.htm">u (Update)</A>,
+  <A href="../commands/extract_full.htm">x (Extract with full paths)</A>
+</P>
+
+</BODY>
+</HTML>
+

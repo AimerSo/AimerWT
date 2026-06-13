@@ -1,0 +1,103 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+  <META http-equiv="Content-Type" content="text/html; charset=Windows-1252">
+  <TITLE>-o (set Output directory) switch</TITLE>
+  <LINK href="style.css" rel="stylesheet" type="text/css">
+</HEAD>
+
+<BODY>
+
+<H1>-o (set Output directory) switch</H1>
+
+<P>Specifies a destination directory where files are to be extracted.</P>
+<P>This switch can be used only with extraction commands.</P>
+
+<H4>Syntax</H4>
+
+<PRE class="syntax">
+-o{dir_path}
+</PRE>
+
+<DL>
+  <DT>{dir_path}</DT>
+  <DD>This is the destination directory path.
+  It is not necessary to end the path with a path separator (backslash in Windows).
+  If you include an asterisk (*) in {dir_path}, 7-Zip will replace the asterisk with the 
+  archive name in the path.
+  </DD>
+</DL>
+
+<P>In Linux, you can use -spod switch to disable replacing asterisk (*) in {dir_path}.</P>
+
+<H1>-spo (set Output directory mode) switch</H1>
+
+<P>Specifies the path generation mode for the output directory for archive extraction.
+The output directory path is generated from the path specified in the <B>-o{dir_path}</B> 
+switch and the name of the archive being unpacked.</P>
+
+<H4>Syntax</H4>
+
+<PRE class="syntax">
+-spo[d | c | r]
+</PRE>
+
+<TABLE>
+  <TR> <TH width="80">Switch</TH> <TH>Description</TH> </TR>
+  <TR> <TD>-spod</TD> <TD>for Linux/Posix/macOS: -o{dir_path} specifies the direct path to the output directory.
+  The asterisk (*) character in {dir_path} will not be replaced by the archive name.</TD> </TR>
+  <TR> <TD>-spoc</TD> <TD>7-Zip will concatenate the path specified in -o{dir_path} with the archive name 
+       to form the final path to the output directory.</TD> </TR>
+  <TR> <TD>-spor</TD> <TD>7-Zip will replace asterisk (*) character in the path specified in 
+        the -o{dir_path} with the archive name. This is the default option.</TD> </TR>
+</TABLE>
+
+
+<H4>Examples</H4>
+
+<PRE class="example">
+7z x "-oc:\Doc" archive.zip
+</PRE>
+
+<P>extracts all files from the <SPAN class="filename">archive.zip</SPAN> archive
+to the <SPAN class="filename">c:\Doc</SPAN> directory.</P>
+
+<PRE class="example">
+7z x "-o*" "*.zip"
+</PRE>
+or
+<PRE class="example">
+7z x -spoc "*.zip"
+</PRE>
+
+<P>extracts all <SPAN class="filename">*.zip</SPAN> archives to subfolders
+with names of these archives.</P>
+
+
+<PRE class="example">
+7z x -spoc "-oname1\name2" "*.zip"
+</PRE>
+
+<P>extracts all <SPAN class="filename">*.zip</SPAN> archives to 
+<SPAN class="filename">name1\name2\*</SPAN> subfolders. 
+7-Zip will concatenate <SPAN class="filename">name1\name2\</SPAN> 
+with the archive name to form the final path to the output directory.</P>
+
+<PRE class="example">
+7z x -spod "-oname1/long*name" archive.zip 
+</PRE>
+
+<P>For Linux/Posix/macOS: it extracts <SPAN class="filename">archive.zip</SPAN> archives 
+to <SPAN class="filename">name1/long*name</SPAN> directory. 
+In that case 7-Zip doesn't replace the asterisk (*) character with the archive name.
+
+
+<H4>Commands that can be used with this switch</H4>
+
+<P>
+  <A href="../commands/extract.htm">e (Extract)</A>,
+  <A href="../commands/extract_full.htm">x (Extract with full paths)</A>
+</P>
+
+</BODY>
+</HTML>

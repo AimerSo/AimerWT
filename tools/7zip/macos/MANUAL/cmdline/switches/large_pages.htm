@@ -1,0 +1,86 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+  <META http-equiv="Content-Type" content="text/html; charset=Windows-1252">
+  <TITLE>-slp (Set Large Pages mode) switch</TITLE>
+  <LINK href="style.css" rel="stylesheet" type="text/css">
+</HEAD>
+
+<BODY>
+
+<H1>-slp (Set Large Pages mode) switch</H1>
+
+<P>Sets "Large Pages" mode.</P>
+
+<H4>Syntax</H4>
+
+<PRE class="syntax">
+-slp[-]
+-slp[:ps{N}][:min{N}][:nohuge]
+</PRE>
+
+
+<TABLE>
+  <TR><TH width="120">Switch</TH> <TH>Description</TH></TR>
+  <TR><TD>-slp</TD> <TD>Enables "Large Pages" mode. This is the default option for all commands in Linux.</TD></TR>
+  <TR><TD>-slp-</TD> <TD>Disables "Large Pages" mode. This is the default option for all commands in Windows.</TD></TR>
+  <TR><TD>-slp:ps{N}</TD> <TD>Sets the page size: 2^{N} bytes. {N}=21 is the default value, meaning a page size of 2 MiB.</TD></TR>
+  <TR><TD>-slp:min{N}</TD> <TD>Sets the minimum threshold for allocating large pages: 2^{N} bytes. 
+      The default threshold value is half the page size: {N}=20 means the threshold value is 1 MiB.</TD></TR>
+  <TR><TD>-slp:nohuge</TD> <TD>for Linux : it forces the program to use small pages (4 KB) instead of huge pages (2 MB).</TD></TR>
+</TABLE>
+
+<P>"Large Pages" mode can increase the speed of 7z/xz/LZMA/LZMA2/PPMd and some other code by 5%-10%.</P>
+<P>If "Large Pages" mode is selected, but 7-Zip cannot use large pages, it will use regular 
+small pages without notifying the user.</P>
+
+<P>7-Zip uses large pages only if the allocated memory block size exceeds the minimum memory allocation threshold.
+This minimum allocation threshold can be changed using the -slp:min{N} switch.</P>
+
+<H2>Windows</H2> 
+<P>To monitor memory usage, you can use the Windows Task Manager or the -bt switch in 7-Zip command line.
+
+<TABLE>
+  <TR><TH width="120">Task Manager</TH> <TH width="120">-bt switch</TH> <TH>Description</TH></TR>
+  <TR><TD>Working set</TD> <TD> Physical Memory </TD> <TD>This value doesn't include large pages used by the program.</TD></TR>
+  <TR><TD>Commit size</TD> <TD> Virtual Memory </TD> <TD>This value includes large pages used by the program.</TD></TR>
+</TABLE>
+
+<P>If 7-Zip uses "Large Pages", the displayed value for "Physical Memory" (Working set)  
+will be less than the value for "Virtual Memory" (Commit size).</P>
+
+<P>In order for 7-zip to be able to use "Large Pages", 
+the "Large Pages" feature must be installed on your system if it isn't already installed by 
+7-Zip or other software. 
+To install the "Large Pages" feature, you must run 7-Zip File Manager at least once with 
+administrator rights, close 7-Zip, and then reboot your system.</P>
+
+<P>Note: On some older versions of Windows, 7-Zip can only use "Large Pages" 
+when running with administrator rights.</P>
+
+<H2>Linux</H2> 
+
+<P>In the Linux version of 7-Zip, the -slp (Huge Pages) mode is used by default. 
+In this mode, 7-Zip uses "madvise" function to advise the kernel to use "huge pages" for allocated memory.
+Thus, the system can use huge pages, if the "transparent huge pages" (THP) parameter in system is set 
+to "madvise" or "always".<P>
+
+<P>You can force the program to use small pages instead of "huge pages" using the "-slp:nohuge" switch.</P>
+
+<H4>Examples</H4>
+
+<PRE class="example">
+7z a -slp archive.7z a.iso
+</PRE>
+
+<P>compresses <SPAN class="filename">a.iso</SPAN> file with "Large Pages" mode.</P>
+
+<PRE class="example">
+7z a -slp:ps25:min21 archive.7z a.iso
+</PRE>
+
+<P>compresses <SPAN class="filename">a.iso</SPAN> file with "Large Pages" (Huge Pages) mode, 
+the page size is 2^25 = 32 MiB, and the minimum allocation threshold is 2^21 = 2 MiB.</P>
+
+</BODY>
+</HTML>

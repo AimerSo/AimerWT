@@ -1,0 +1,101 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+  <META http-equiv="Content-Type" content="text/html; charset=Windows-1252">
+  <TITLE>h (Hash) command</TITLE>
+  <LINK href="style.css" rel="stylesheet" type="text/css">
+</HEAD>
+
+<BODY>
+
+<H1>h (Hash) command</H1>
+
+<P>Calculate hash values for files.</P>
+
+<H4>Syntax</H4>
+
+<PRE class="syntax">
+h [-scrc{Method}] [-slf[h][s][n]]
+</PRE>
+
+<P>Supported methods: CRC32, CRC64, MD5, SHA1, SHA256, SHA384, SHA512, SHA3-256, XXH64, BLAKE2sp. Default method is CRC32.</P>
+
+<P>Optional -slf[h][s][n] switch determines which fields should be displayed: h: hash, s: size, n: file name.
+By default (without -slf switch) all these fields will be displayed.</P>
+
+<H4>Examples</H4>
+
+<PRE class="example">
+7z h a.txt
+</PRE>
+
+<P>calculates CRC32 for <SPAN class="filename">a.txt</SPAN>.</P>
+
+<PRE class="example">
+7z h -scrcsha256 a.iso
+</PRE>
+
+<P>calculates SHA256 for <SPAN class="filename">a.iso</SPAN>.</P>
+
+
+<PRE class="example">
+7z h -scrcsha256 -slfh -ba a.iso
+</PRE>
+
+<P>calculates SHA256 for <SPAN class="filename">a.iso</SPAN> and shows only hash value.
+It doesn't show additional information about 7-zip program and about file size and file name.</P>
+
+
+<PRE class="example">
+7z h *
+</PRE>
+
+<P>calculates CRC32 for all files in current folder and all subfolders.</P>
+
+<H4>Notes</H4>
+
+<P>7-Zip shows the hash value for each file.
+   It also shows the sum of the hash values and 
+   a sum that includes all hash values of data and all hash values for filenames.</P>
+
+<P>7-Zip represents the hash value in one of two ways:</P>
+<UL>
+<LI>7-Zip represents the hash value as an integer in hexadecimal format 
+    (in uppercase letters), if the hash digest length is less than or equal to 64 bits:
+    CRC32, CRC64 XXH64.
+<LI>7-Zip represents the hash value as a sequence of bytes in hexadecimal format
+    (in lowercase letters), if the hash digest length is greater than 64 bits: 
+    MD5, SHA1, SHA256, SHA384, SHA512, SHA3-256, BLAKE2sp.
+</UL>
+<P>These two methods of presentation may look similar, but there is actually 
+   a difference between them,  as there is a difference between big-endian 
+   and little-endian encodings.
+   The difference is in the order of the hexadecimal digits in the value shown.
+</P>
+
+<P>If more than one file is processed, 7-Zip also calculates 
+   the arithmetic sum of the calculated hash values. 
+   This arithmetic sum does not depend on the order of the files. 
+   So you can compare these arithmetic sum values calculated in different 
+   folders on different file systems.</P>
+
+<P>The arithmetic sum value is longer than a single hash value. 
+   Therefore, the additional hexadecimal digits of the sum value 
+   are displayed after the minus sign: example for CRC32: "F461DFE5-0000001D".</P>
+
+
+<H4>Switches that can be used with this command</H4>
+
+<P>
+  <A href="../switches/include.htm">-i (Include)</A><BR>
+  <A href="../switches/method.htm">-m (Method)</A><BR>
+  <A href="../switches/recurse.htm">-r (Recurse)</A><BR>
+  <A href="../switches/scrc.htm">-scrc (Set hash method)</A><BR>
+  <A href="../switches/stdin.htm">-si (use StdIn)</A><BR>
+  <A href="../switches/sns.htm">-sns (Store NTFS alternate Streams)</A><BR>
+  <A href="../switches/shared.htm">-ssw (Compress shared files)</A><BR>
+  <A href="../switches/exclude.htm">-x (Exclude)</A>
+</P>
+
+</BODY>
+</HTML>

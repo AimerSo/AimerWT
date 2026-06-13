@@ -1,0 +1,186 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+  <META http-equiv="Content-Type" content="text/html; charset=Windows-1252">
+  <TITLE>b (Benchmark) command</TITLE>
+  <LINK href="style.css" rel="stylesheet" type="text/css">
+</HEAD>
+
+<BODY>
+
+<H1>b (Benchmark) command</H1>
+
+<P>Measures speed of the CPU.</P>
+<P>Benchmark execution also can be used to check RAM for errors.</P>
+
+<H4>Syntax</H4>
+
+<PRE class="syntax">
+b [number_of_iterations] [-mmt={N}] [-md{N}] [-mm={Method}] [-mtime={N}]
+</PRE>
+
+<P>The LZMA benchmark is default benchmark for benchmark command.</P>
+<P>There are two tests for LZMA benchmark:<P>
+<OL>
+  <LI>Compressing with LZMA method
+  <LI>Decompressing with LZMA method
+</OL>
+
+<P>The LZMA benchmark shows a rating in MIPS (million instructions per second). 
+The rating value is calculated from the measured speed, and it is normalized 
+with results of Intel Core 2 CPU with multi-threading option switched off. 
+So if you have modern CPU from Intel or AMD, rating values in single-thread mode 
+must be close to real CPU frequency.</P>
+
+<P>You can change the upper dictionary size to increase memory usage by -md{N} switch.
+Also, you can change the number of threads by -mmt{N} switch.</P>
+
+<P>The <B>Dict</B> column shows dictionary size. For example, 21 means 2^21 = 2 MB.</P>
+
+<P>The <B>Usage</B> column shows the percentage of time the processor is working.
+It's normalized for a one-thread load. For example, 180% CPU Usage for 2 threads
+can mean that average CPU usage is about 90% for each thread.</P>
+
+<P>The <B>R / U</B> column shows the rating normalized for 100% of CPU usage.
+That column shows the performance of one average CPU thread.</P>
+
+<P><B>Avr</B> shows averages for different dictionary sizes.</P>
+<P><B>Tot</B> shows averages of the compression and decompression ratings.</P>
+
+<P>The test data that is used for compression in that test is produced with special 
+algorithm, that creates data stream that has some properties of real data, 
+like text or execution code. 
+Note that the speed of LZMA for real data can be slightly different.</P>
+
+<H3> LZMA benchmark details </H3>
+
+<P><B>Compression speed</B> strongly depends from memory (RAM) latency, 
+Data Cache size/speed and TLB.
+Out-of-Order execution feature of CPU is also important for that test.</P>
+
+<P><B>Decompression speed</B> strongly depends on CPU integer operations.
+The most important things for that test are: branch misprediction penalty 
+(the length of pipeline) and the latencies of 32-bit instructions ("multiply", 
+"shift", "add" and other). 
+The decompression test has very high number of unpredictable branches.
+Note that some CPU architectures (for example, 32-bit ARM) support instructions that 
+can be conditionally executed. So such CPUs can work without branches 
+(and without pipeline flushing) in many cases in LZMA decompression code.
+And such CPUs can have some speed advantages over other architectures 
+that don't support complex conditionally execution.
+Out-of-Order execution capability is not so important for LZMA Decompression.
+</P>
+
+<P>The test code doesn't use FPU and SSE. Most of the code is 32-bit integer code. 
+Only some minor part in compression code uses also 64-bit integers. 
+RAM and Cache bandwidth are not so important for these tests.
+The latencies are much more important.</P>
+
+<P>The CPU's IPC (Instructions per cycle) rate is not very high for these 
+tests. The estimated value of test's IPC is 1 (one instruction per cycle) 
+for modern CPU. The compression test has big number of random accesses to RAM and Data Cache. 
+So big part of execution time the CPU waits the data from Data Cache or from RAM. 
+The decompression test has big number of pipeline flushes after mispredicted branches. 
+Such low IPC means that there are some unloaded CPU resources. 
+But the CPU with Hyper-Threading feature can load these CPU resources using two threads. 
+So Hyper-Threading provides pretty big improvement in these tests.</P>
+
+<H3> LZMA benchmark in multithreading mode </H3>
+
+<P>When you  specify (N*2) threads for test, the program creates 
+N copies of LZMA encoder, and each LZMA encoder instance compresses separated block of 
+test data. Each LZMA encoder instance creates 3 unsymmetrical execution threads:
+two big threads and one small thread. 
+The total CPU load for these 3 threads can vary from 140% to 200%. 
+To provide better CPU load during compression, you can test the mode, where the 
+number of benchmark threads is larger than the number of hardware threads.</P>
+
+<P>Each LZMA encoder instance in multithreading mode divides the task of compression 
+into 3 different tasks, where each task is executed in separated thread. 
+Each of these tasks is simpler than original task, and it uses less memory. 
+So each thread uses the data cache and TLB more effectively in multithreading mode.
+And LZMA encoder is slightly more effective in multithreading mode in value of 
+"the Speed" divided to "CPU usage".</P>
+
+<P>Note that there is some data traffic between 3 threads of LZMA encoder.
+So data exchange bandwidth via memory between CPU threads is also can be important,
+especially in multi-core system with big number of cores or CPUs.</P>
+
+
+<P>All LZMA decoder threads are symmetrical and independent. So the decompression 
+test uses all hardware threads, if the number of hardware threads is used.</P>
+
+
+<H2>7-Zip benchmark</H2>
+
+<P>With -mm=* switch you can run a complex benchmark for 7-Zip code.
+It tests hash calculation methods, compression and encryption codecs of 7-Zip.
+Note that the tests of LZMA have big weight in "total" results.
+And the results are normalized with AMD K8 cpu in that complex benchmark.</P> 
+
+<P>The <B>CPU</B> rows show CPU frequency. It's measured for sequence of simple 
+    CPU instructions. Note: It can be inaccurate, if hyper-threading is used.</P>
+<P>The <B>Effec</B> column shows Efficiency - the Rating normalized to CPU frequency.</P>
+<P>The <B>E / U</B> column shows the Efficiency normalized for 100% of CPU usage.</P>
+
+
+<H4>Examples</H4>
+
+<PRE class="example">
+7z b
+</PRE>
+runs benchmarking.
+
+<PRE class="example">
+7z b -mmt1 -md26
+</PRE>
+runs benchmarking with one thread and 64 MB dictionary.
+
+<PRE class="example">
+7z b 30
+</PRE>
+<P>runs benchmarking for 30 iterations. It can be used to check RAM for errors.</P>
+
+<PRE class="example">
+7z b -mm=*
+</PRE>
+<P>runs complex 7-Zip benchmark.</P>
+
+<PRE class="example">
+7z b -mm=* -mmt=*
+</PRE>
+<P>runs complex 7-Zip benchmark for different number of threads : (1, max/2, max),
+where max is number of available hardware threads. So it can test 3 main modes: 
+single-thread, multi-thread without hyper-threading, multi-thread with hyper-threading.</P>
+
+<PRE class="example">
+7z b -mm=* -mmt1 -mtime=1
+</PRE>
+<P>runs complex 7-Zip benchmark for 1 thread. Also it tries to reduce the execution time 
+of each workload to 1 second, if it's possible.
+So it's a fast way to check the performance of most of codecs in 7-Zip.</P>
+
+<PRE class="example">
+7z b -mm=xxh64 -mtic=32
+</PRE>
+<P>runs XXH64 benchmark for different number of threads. Also benchmark comptexity
+is reduced to (2^32) ticks.
+xxh64 is fast hash calculation method that uses integer 64-bit MULTIPLY operations.
+for multiple threads and big block, it can be limited memory reading bandwidth.
+So result can show available Memory Reading bandwidth.</P>
+</P>
+
+<PRE class="example">
+7z b -mm=swap4 -mtic=31
+</PRE>
+<P>runs swap4 filter encoding decoding for different number of threads. Also 
+benchmark comptexity is reduced to (2^31) ticks.
+swap4 is filter that changes the order of bytes in each 4-bytes block of data.
+It can use vector instructions (SSE*/AVX2/NEON).
+The results can be limited memory reading/writing bandwidth.
+So result can show available Cache/RAM bandwidth. Note: real bandwidth of memory
+is 2 times larger than reported value, because 2 memory operations (read and write)
+are counted as one operation in benchmark results.</P>
+
+</BODY>
+</HTML>

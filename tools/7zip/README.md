@@ -1,0 +1,18 @@
+# Bundled 7-Zip CLI
+
+Version: 26.01
+
+Official release:
+https://github.com/ip7z/7zip/releases/tag/26.01
+
+Downloaded assets:
+
+| File | SHA256 |
+| --- | --- |
+| `downloads/7z2601-extra.7z` | `05CDA5442075A7C6CE246CA1BBB9B1F1D6F1787A9559156F9B8B2DAD29A86971` |
+| `downloads/7zr.exe` | `ABCF64AE1CBAFDDB5395E4CDD3BDC7E3E0561D54A0C6380E3DD43BDBFFE519A2` |
+| `downloads/7z2601-linux-x64.tar.xz` | `8EA0FC8A135E7B848E80A4116FE22DFF56C8C4518DDE1F43CCE67F4E340B437A` |
+| `downloads/7z2601-linux-arm64.tar.xz` | `39F8C9070C300A63C7484D9A983119EF3EDF841E1DDF69F1AFFAE29FDEC5F612` |
+| `downloads/7z2601-mac.tar.xz` | `0B6B930DBF82742E3F1014C35072A6B8B3AAB183FECE348E7F723675F1C5BEA2` |
+
+Keep upstream `License.txt` files with redistributed binaries.

@@ -32,6 +32,7 @@ import zipfile
 from pathlib import Path
 from typing import Callable, Any
 from utils.logger import get_logger
+from utils.sevenzip import find_7z_executable
 from services.resource_index_cache import ResourceIndexCache
 
 log = get_logger(__name__)
@@ -644,14 +645,7 @@ class SightsManager:
             return False
 
     def _find_7z(self) -> str | None:
-        return (
-            shutil.which("7z")
-            or shutil.which("7z.exe")
-            or shutil.which("7za")
-            or shutil.which("7za.exe")
-            or shutil.which("7zr")
-            or shutil.which("7zr.exe")
-        )
+        return find_7z_executable()
 
     def _run_7z(self, args: list[str]) -> tuple[int, str]:
         try:
