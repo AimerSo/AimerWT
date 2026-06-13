@@ -956,6 +956,24 @@ class LibraryManager:
                 or shutil.which("7zr")
                 or shutil.which("7zr.exe")
         )
+    
+    def inplaced_7z(self):
+        # 本地兜底目录，应从仓库根目录查找 tools/7-Zip
+        root_dir = Path(__file__).resolve().parents[1]
+        fallback_dir = root_dir / "tools" / "7-Zip"
+        # 按系统选择可执行文件名
+        if platform.system() == "Windows":
+            names = {"7z.exe", "7za.exe", "7zr.exe"}
+        else:
+            names = {"7z", "7za", "7zr"}
+
+        if fallback_dir.exists():
+            # 搜索目录及子目录中的可执行文件，兼容 tools/7z/7-Zip 结构
+            for path in fallback_dir.rglob("*"):
+                if path.is_file() and path.name.lower() in names:
+                    return str(path)
+        self.log(f"系统内置 7-Zip 组件缺失，请检查文件完整性", "WARN")
+        return None
 
     def _run_7z(self, args):
         result = subprocess.run(
@@ -969,7 +987,7 @@ class LibraryManager:
 
     def _extract_with_7z(self, archive_path, target_dir, progress_callback=None, base_progress=0, share_progress=100,
                          password=None):
-        seven_zip = self._find_7z()
+        seven_zip = self._find_7z() or self.inplaced_7z()
         if not seven_zip:
             raise Exception("未检测到 7z 解压组件，请安装 7-Zip 后重试")
 
