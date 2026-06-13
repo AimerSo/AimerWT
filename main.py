@@ -60,7 +60,7 @@ from services.telemetry_manager import (
     set_client_device_token,
     submit_feedback,
 )
-from utils.utils import get_docs_data_dir
+from utils.utils import get_docs_data_dir, open_logs_directory
 from services.remote_asset_cache import RemoteAssetCache
 try:
     from services.theme_unlock import ThemeUnlockService
@@ -3463,6 +3463,9 @@ class AppApi:
             self._model_mgr.open_model_library_folder()
         elif folder_type == "hangar_library":
             self._hangar_mgr.open_hangar_library_folder()
+        elif folder_type == "logs":
+            open_logs_directory()
+        
 
         # 未列入允许名单的 folder_type 不执行任何操作
 
