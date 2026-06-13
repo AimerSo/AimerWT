@@ -3463,6 +3463,20 @@ class AppApi:
             self._model_mgr.open_model_library_folder()
         elif folder_type == "hangar_library":
             self._hangar_mgr.open_hangar_library_folder()
+        elif folder_type == "logs":
+            # 打开应用日志目录
+            try:
+                from utils.utils import get_docs_data_dir
+                log_dir = Path(get_docs_data_dir()) / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                if platform.system() == "Windows":
+                    os.startfile(str(log_dir))
+                elif platform.system() == "Darwin":
+                    subprocess.Popen(["open", str(log_dir)])
+                else:
+                    subprocess.Popen(["xdg-open", str(log_dir)])
+            except Exception as e:
+                log.error(f"打开日志目录失败: {e}")
 
         # 未列入允许名单的 folder_type 不执行任何操作
 
