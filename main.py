@@ -3616,7 +3616,7 @@ class AppApi:
 
                 # 完成后通知前端刷新列表
                 if self._window:
-                    self._window.evaluate_js("app.refreshLibrary()")
+                    self._window.evaluate_js("app.refreshLibrary({ manual : true })")
                     self._update_loading_i18n(100, "loading.import.done")
             except ArchivePasswordCanceled:
                 log.warning("已取消输入密码，导入已终止")
@@ -3681,7 +3681,7 @@ class AppApi:
 
                     # 完成后通知前端刷新列表
                     if self._window:
-                        self._window.evaluate_js("app.refreshLibrary()")
+                        self._window.evaluate_js("app.refreshLibrary({ manual: true })")
                         self._update_loading_i18n(100, "loading.import.done")
                 except ArchivePasswordCanceled:
                     log.warning("已取消输入密码，导入已终止")
@@ -3729,7 +3729,7 @@ class AppApi:
                 )
 
                 if self._window:
-                    self._window.evaluate_js("app.refreshLibrary()")
+                    self._window.evaluate_js("app.refreshLibrary({ manual: true })")
                     self._update_loading_i18n(100, "loading.import.done")
             except ArchivePasswordCanceled:
                 log.warning("已取消输入密码，导入已终止")
@@ -5805,6 +5805,10 @@ class AppApi:
                 raise Exception("非法路径")
             shutil.rmtree(target)
             log.info(f"已从库中删除语音包: {mod_name}")
+
+            # 完成后通知前端刷新
+            if self._window:
+                self._window.evaluate_js("app.refreshLibrary({ manual : true })")
             return {"success": True, "msg": f"已从库中删除: {mod_name}"}
         except Exception as e:
             log.error(f"删除库文件失败: {e}")
@@ -5906,6 +5910,9 @@ class AppApi:
             else:
                 log.warning(f"库文件不存在: {mod_name}")
 
+            # 完成后通知前端刷新
+            if self._window:
+                self._window.evaluate_js("app.refreshLibrary({ manual : true })")
             return {"success": True, "msg": f"已完全删除: {mod_name}"}
         except Exception as e:
             log.error(f"完全删除失败: {e}")
