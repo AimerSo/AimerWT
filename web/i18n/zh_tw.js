@@ -74,6 +74,7 @@ window.I18N && I18N.register("zh_tw", {
     "home.log_title": "執行記錄",
     "home.log_ready": "[System] 介面 UI 引擎載入完成...",
     "home.log_waiting": "[System] 等待使用者指令...",
+    "home.open_logs": "開啟記錄所在目錄",
     "home.ready_status": "目前準備狀態",
     "home.ready.not_ready": "尚未就緒：請先選擇路徑",
     "home.ready.connected": "連線正常",

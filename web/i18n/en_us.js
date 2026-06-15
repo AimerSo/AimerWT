@@ -74,6 +74,7 @@ window.I18N && I18N.register("en_us", {
     "home.log_title": "System Log",
     "home.log_ready": "[System] UI engine loaded.",
     "home.log_waiting": "[System] Waiting for input...",
+    "home.open_logs": "Open logs folder",
     "home.ready_status": "Ready Status",
     "home.ready.not_ready": "Not ready: choose the game path first",
     "home.ready.connected": "Ready",

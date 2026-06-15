@@ -74,6 +74,7 @@ window.I18N && I18N.register("zh_cn", {
     "home.log_title": "运行日志",
     "home.log_ready": "[System] 界面 UI 引擎加载完毕...",
     "home.log_waiting": "[System] 等待用户指令...",
+    "home.open_logs": "打开日志所在目录",
     "home.ready_status": "当前准备状态",
     "home.ready.not_ready": "未就绪：请先选择路径",
     "home.ready.connected": "连接正常",

@@ -60,29 +60,6 @@ def get_app_data_dir() -> Path:
         return Path(sys.executable).parent
     else:
         return Path(__file__).parent
-    
-
-
-def open_logs_directory() -> None:
-    """
-    打开应用日志目录（跨平台）。
-    根据不同操作系统使用相应的方式打开文件夹。
-    
-    Raises:
-        Exception: 打开目录失败时记录错误
-    """
-    try:
-        log_dir = Path(get_docs_data_dir()) / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        
-        if platform.system() == "Windows":
-            os.startfile(str(log_dir))
-        elif platform.system() == "Darwin":
-            subprocess.Popen(["open", str(log_dir)])
-        else:
-            subprocess.Popen(["xdg-open", str(log_dir)])
-    except Exception as e:
-        log.error(f"打开日志目录失败: {e}")
 
 
 # ==================== 多编码兼容工具 ====================
