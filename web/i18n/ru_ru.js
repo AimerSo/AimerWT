@@ -74,6 +74,7 @@ window.I18N && I18N.register("ru_ru", {
     "home.log_title": "Журнал",
     "home.log_ready": "[System] UI-движок загружен.",
     "home.log_waiting": "[System] Ожидание ввода...",
+    "home.open_logs": "Открыть папку журнала",
     "home.ready_status": "Готовность",
     "home.ready.not_ready": "Не готово: сначала выберите путь к игре",
     "home.ready.connected": "Готово",

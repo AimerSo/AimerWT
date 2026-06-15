@@ -74,6 +74,7 @@ window.I18N && I18N.register("de_de", {
     "home.log_title": "Systemprotokoll",
     "home.log_ready": "[System] UI-Engine geladen.",
     "home.log_waiting": "[System] Warte auf Eingabe...",
+    "home.open_logs": "Protokollordner öffnen",
     "home.ready_status": "Bereitschaft",
     "home.ready.not_ready": "Nicht bereit: zuerst Spielpfad wählen",
     "home.ready.connected": "Bereit",
