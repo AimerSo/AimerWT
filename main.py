@@ -60,7 +60,7 @@ from services.telemetry_manager import (
     set_client_device_token,
     submit_feedback,
 )
-from utils.utils import get_docs_data_dir
+from utils.utils import get_docs_data_dir, get_log_dir, open_folder_cross_platform
 from services.remote_asset_cache import RemoteAssetCache
 try:
     from services.theme_unlock import ThemeUnlockService
@@ -3470,10 +3470,8 @@ class AppApi:
         # 未列入允许名单的 folder_type 不执行任何操作
 
 
-    def open_log_folder(self,*args, **kwargs):
-        from utils.logger import _get_log_dir
-        log_dir = Path(_get_log_dir())
-        self._lib_mgr._open_folder_cross_platform(log_dir)
+    def open_log_folder(self):
+        open_folder_cross_platform(get_log_dir())
 
 
     def open_mod_folder(self, mod_name):

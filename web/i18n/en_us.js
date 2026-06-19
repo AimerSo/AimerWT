@@ -621,7 +621,7 @@ window.I18N && I18N.register("en_us", {
     "info.license": "License",
     "info.tech_stack": "Tech Stack",
     "info.last_update": "Last Updated",
-    "info.last_update_value": "March 11, 2026",
+    "info.last_update_value": "June 19, 2026",
     "info.status": "Status",
     "info.active_development": "Active Development",
 
