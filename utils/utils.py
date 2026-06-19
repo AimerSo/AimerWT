@@ -59,7 +59,7 @@ def get_app_data_dir() -> Path:
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).parent
     else:
-        return Path(__file__).parent
+        return Path(__file__).resolve().parent.parent
 
 
 # ==================== 多编码兼容工具 ====================
@@ -221,3 +221,44 @@ def safe_filename(filename: str, replacement: str = "_") -> str:
     return filename
 
 
+def open_folder_cross_platform(path: Path) -> None:
+    """
+    跨平台打开文件夹。
+
+    Args:
+        path: 文件夹路径
+    """
+    try:
+        path_str = str(path)
+        system = platform.system()
+
+        if system == "Windows":
+            os.startfile(path_str)
+        elif system == "Darwin":  # macOS
+            subprocess.Popen(["open", path_str])
+        else:  # Linux
+            subprocess.Popen(["xdg-open", path_str])
+    except FileNotFoundError as e:
+        log.error(f"无法打开文件夹（路径不存在）: {e}")
+    except PermissionError as e:
+        log.error(f"无法打开文件夹（权限不足）: {e}")
+    except Exception as e:
+        log.error(f"无法打开文件夹: {type(e).__name__}: {e}")
+
+
+def get_log_dir() -> Path:
+    """获取日志存储目录，确保目录存在。"""
+    base_dir = get_docs_data_dir()
+    log_dir = base_dir / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        # 回退到临时目录
+        import tempfile
+        log_dir = Path(tempfile.gettempdir()) / "WT_Voice_Manager_logs"
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        sys.stderr.write(f"无法创建日志目录，使用临时目录: {log_dir} (原因: {e})\n")
+    return log_dir

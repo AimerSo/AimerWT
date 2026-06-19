@@ -621,7 +621,7 @@ window.I18N && I18N.register("ru_ru", {
     "info.license": "Лицензия",
     "info.tech_stack": "Стек технологий",
     "info.last_update": "Последнее обновление",
-    "info.last_update_value": "11 марта 2026 г.",
+    "info.last_update_value": "19 июня 2026 г.",
     "info.status": "Статус",
     "info.active_development": "Активная разработка",
 

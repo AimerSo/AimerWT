@@ -25,6 +25,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, TypeVar, ParamSpec
 
+from utils.utils import get_log_dir
+
 APP_LOGGER_NAME = "WT_Voice_Manager"
 
 _ui_callback: Callable[[str, logging.LogRecord], None] | None = None
@@ -291,23 +293,7 @@ def format_exception(e: Exception, include_traceback: bool = False) -> str:
 
 
 def _get_log_dir() -> Path:
-    """获取日志存储目录，确保目录存在。"""
-    from utils.utils import get_docs_data_dir
-    base_dir = get_docs_data_dir()
-    log_dir = base_dir / "logs"
-    try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        # 回退到临时目录
-        import tempfile
-        log_dir = Path(tempfile.gettempdir()) / "WT_Voice_Manager_logs"
-        try:
-            log_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        sys.stderr.write(f"无法创建日志目录，使用临时目录: {log_dir} (原因: {e})\n")
-    return log_dir
-
+    return get_log_dir()
 
 def setup_logger(name: str = APP_LOGGER_NAME) -> logging.Logger:
     """

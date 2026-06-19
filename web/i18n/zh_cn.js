@@ -680,7 +680,7 @@ window.I18N && I18N.register("zh_cn", {
     "info.license": "开源协议",
     "info.tech_stack": "技术栈",
     "info.last_update": "最后更新",
-    "info.last_update_value": "2026 年 3 月 11 日",
+    "info.last_update_value": "2026 年 6 月 19 日",
     "info.status": "状态",
     "info.active_development": "活跃开发中",
 

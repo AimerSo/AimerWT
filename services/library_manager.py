@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 from utils.logger import get_logger
 from utils.sevenzip import find_7z_executable
-from utils.utils import get_app_data_dir
+from utils.utils import get_app_data_dir, open_folder_cross_platform
 from wt.wt_sound import VoiceType, Country
 
 log = get_logger(__name__)
@@ -249,28 +249,7 @@ class LibraryManager:
             log.info(msg)
 
     def _open_folder_cross_platform(self, path: Path) -> None:
-        """
-        跨平台打开文件夹。
-        
-        Args:
-            path: 文件夹路径
-        """
-        try:
-            path_str = str(path)
-            system = platform.system()
-
-            if system == "Windows":
-                os.startfile(path_str)
-            elif system == "Darwin":  # macOS
-                subprocess.Popen(["open", path_str])
-            else:  # Linux
-                subprocess.Popen(["xdg-open", path_str])
-        except FileNotFoundError as e:
-            self.log(f"无法打开文件夹（路径不存在）: {e}", "ERROR")
-        except PermissionError as e:
-            self.log(f"无法打开文件夹（权限不足）: {e}", "ERROR")
-        except Exception as e:
-            self.log(f"无法打开文件夹: {type(e).__name__}: {e}", "ERROR")
+        open_folder_cross_platform(path)
 
     def open_pending_folder(self) -> None:
         """打开待解压区目录，供用户手动放入压缩包。"""

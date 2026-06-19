@@ -621,7 +621,7 @@ window.I18N && I18N.register("zh_tw", {
     "info.license": "開源授權",
     "info.tech_stack": "技術棧",
     "info.last_update": "最後更新",
-    "info.last_update_value": "2026 年 3 月 11 日",
+    "info.last_update_value": "2026 年 6 月 19 日",
     "info.status": "狀態",
     "info.active_development": "積極開發中",
 
