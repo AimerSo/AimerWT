@@ -10,6 +10,19 @@
     gap: 8px;
 }
 
+.custom-text-actions .app-dropdown-wrapper {
+    flex: 0 0 auto;
+}
+
+.custom-text-actions .app-dropdown-trigger {
+    font-size: 14px;
+}
+
+#custom-text-csv-file-dropdown .app-dropdown-menu,
+#custom-text-language-dropdown .app-dropdown-menu {
+    max-height: 400px;
+}
+
 .custom-text-select {
     height: 34px;
     min-width: 130px;
@@ -18,6 +31,10 @@
     background: var(--bg-card);
     color: var(--text-main);
     padding: 0 10px;
+}
+
+.custom-text-native-select {
+    display: none;
 }
 
 .custom-text-wrap {

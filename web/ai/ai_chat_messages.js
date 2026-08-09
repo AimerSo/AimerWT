@@ -262,6 +262,70 @@ const AIChatMessages = {
         }, 200);
     },
 
+    sanitizeUrl(value) {
+        const url = String(value || '').trim();
+        if (!url) return '';
+
+        if (url.startsWith('#') || url.startsWith('/') || url.startsWith('./') || url.startsWith('../')) {
+            return url;
+        }
+
+        try {
+            const parsed = new URL(url);
+            return ['http:', 'https:', 'mailto:'].includes(parsed.protocol) ? url : '';
+        } catch (_) {
+            return '';
+        }
+    },
+
+    sanitizeHtml(html) {
+        const template = document.createElement('template');
+        template.innerHTML = String(html || '');
+
+        const allowedTags = new Set([
+            'A', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DEL', 'EM', 'H1', 'H2', 'H3',
+            'H4', 'H5', 'H6', 'HR', 'I', 'IMG', 'LI', 'OL', 'P', 'PRE', 'S',
+            'STRONG', 'TABLE', 'TBODY', 'TD', 'TH', 'THEAD', 'TR', 'U', 'UL'
+        ]);
+
+        Array.from(template.content.querySelectorAll('*')).forEach((element) => {
+            if (!allowedTags.has(element.tagName)) {
+                element.replaceWith(document.createTextNode(element.textContent || ''));
+                return;
+            }
+
+            Array.from(element.attributes).forEach((attribute) => {
+                const name = attribute.name.toLowerCase();
+                const allowed = (element.tagName === 'A' && ['href', 'title'].includes(name))
+                    || (element.tagName === 'IMG' && ['src', 'alt', 'title'].includes(name))
+                    || (element.tagName === 'CODE' && name === 'class' && /^language-[a-z0-9_-]+$/i.test(attribute.value));
+                if (!allowed) element.removeAttribute(attribute.name);
+            });
+
+            if (element.tagName === 'A') {
+                const safeHref = this.sanitizeUrl(element.getAttribute('href'));
+                if (safeHref) {
+                    element.setAttribute('href', safeHref);
+                    element.setAttribute('target', '_blank');
+                    element.setAttribute('rel', 'noopener noreferrer');
+                } else {
+                    element.removeAttribute('href');
+                }
+            }
+
+            if (element.tagName === 'IMG') {
+                const safeSrc = this.sanitizeUrl(element.getAttribute('src'));
+                if (safeSrc) {
+                    element.setAttribute('src', safeSrc);
+                } else {
+                    element.replaceWith(document.createTextNode(element.getAttribute('alt') || ''));
+                }
+            }
+        });
+
+        return template.innerHTML;
+    },
+
     // 格式化消息（支持Markdown）
     formatMessage(text) {
         // 情绪标签转换
@@ -276,9 +340,7 @@ const AIChatMessages = {
         if (typeof marked !== 'undefined') {
             try {
                 let html = marked.parse(text, { breaks: true, gfm: true });
-                // 为链接添加安全属性
-                html = html.replace(/<a\s+href=/g, '<a target="_blank" rel="noopener noreferrer" href=');
-                return html;
+                return this.sanitizeHtml(html);
             } catch (e) {
                 console.warn('[AIChatMessages] marked.parse 失败，降级渲染:', e);
             }

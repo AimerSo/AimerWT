@@ -32,17 +32,18 @@
                 <input class="input" style="width: 70px; text-align: center;" id="bannerInterval" type="number" min="3" max="30" value="6" placeholder="秒">
                 <span style="font-size: 12px; color: var(--text-muted);">秒</span>
             </div>
-            <div style="width: 1px; height: 20px; background: var(--border);"></div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <label style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">推送范围</label>
-                <select class="select" style="width: 160px; font-size: 12px;" id="bannerScope">
-                    <option value="all">all（全部用户）</option>
-                </select>
-            </div>
             <div style="margin-left: auto; display: flex; gap: 8px;">
                 <button class="btn primary" onclick="app.submitBanner()">发布 Banner</button>
                 <button class="btn" onclick="app.clearBanner()">清除全部</button>
             </div>
+        </div>
+
+        <div class="panel" style="padding: 16px 20px;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px;">
+                <div class="panel-title" style="font-size: 14px;">受众规则</div>
+                <div style="font-size: 11px; color: var(--text-muted);">版本、用户组和特殊组均为可选项</div>
+            </div>
+            <div id="bannerTargeting" class="audience-rule-editor"></div>
         </div>
 
         <!-- 列表 + 编辑器 -->
@@ -114,6 +115,14 @@
                                 <input type="color" id="bannerEditIconColorPicker" value="#f59e0b" style="width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; padding: 0;" onchange="document.getElementById('bannerEditIconColor').value = this.value">
                             </div>
                         </div>
+                    </div>
+                    <div class="form-group" style="margin: 0;">
+                        <label style="margin-bottom: 6px;">背景颜色</label>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input class="input" style="flex: 1;" id="bannerEditBackgroundColor" placeholder="如 #eff6ff 或留空">
+                            <input type="color" id="bannerEditBackgroundColorPicker" value="#eff6ff" style="width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; padding: 0;" onchange="document.getElementById('bannerEditBackgroundColor').value = this.value">
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-muted); margin-top: 5px;">留空时继续使用当前类型的主题默认背景。</div>
                     </div>
                     <div class="form-group" style="margin: 0;">
                         <label style="margin-bottom: 6px;">点击动作</label>

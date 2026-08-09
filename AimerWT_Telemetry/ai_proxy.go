@@ -288,8 +288,68 @@ func (dl *dailyLimiter) getBonusCredits(machineID string) int {
 
 func isUserBanned(machineID string) bool {
 	var count int64
-	db.Model(&AIUserBan{}).Where("machine_id = ?", machineID).Count(&count)
+	db.Model(&AIUserBan{}).
+		Where("machine_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", strings.TrimSpace(machineID), time.Now()).
+		Count(&count)
 	return count > 0
+}
+
+func isFeedbackUserBanned(machineID string) bool {
+	var count int64
+	db.Model(&FeedbackUserBan{}).
+		Where("machine_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", strings.TrimSpace(machineID), time.Now()).
+		Count(&count)
+	return count > 0
+}
+
+func migrateScopedBanIndexes() error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		statements := []string{
+			`DROP INDEX IF EXISTS idx_ai_user_bans_machine_id`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_user_ban_active_unique ON ai_user_bans(machine_id) WHERE revoked_at IS NULL`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_user_ban_active_unique ON feedback_user_bans(machine_id) WHERE revoked_at IS NULL`,
+		}
+		for _, statement := range statements {
+			if err := tx.Exec(statement).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func upsertAIUserBan(machineID, reason string, expiresAt *time.Time) (*AIUserBan, error) {
+	var created AIUserBan
+	err := db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		if err := tx.Model(&AIUserBan{}).Where("machine_id = ? AND revoked_at IS NULL", machineID).Update("revoked_at", now).Error; err != nil {
+			return err
+		}
+		created = AIUserBan{MachineID: machineID, Reason: reason, ExpiresAt: expiresAt}
+		return tx.Create(&created).Error
+	})
+	return &created, err
+}
+
+func revokeAIUserBan(id uint, revokedAt time.Time) error {
+	return db.Model(&AIUserBan{}).Where("id = ? AND revoked_at IS NULL", id).Update("revoked_at", revokedAt).Error
+}
+
+func upsertFeedbackUserBan(machineID, reason string, expiresAt *time.Time) (*FeedbackUserBan, error) {
+	var created FeedbackUserBan
+	err := db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		if err := tx.Model(&FeedbackUserBan{}).Where("machine_id = ? AND revoked_at IS NULL", machineID).Update("revoked_at", now).Error; err != nil {
+			return err
+		}
+		created = FeedbackUserBan{MachineID: machineID, Reason: reason, ExpiresAt: expiresAt}
+		return tx.Create(&created).Error
+	})
+	return &created, err
+}
+
+func revokeFeedbackUserBan(id uint, revokedAt time.Time) error {
+	return db.Model(&FeedbackUserBan{}).Where("id = ? AND revoked_at IS NULL", id).Update("revoked_at", revokedAt).Error
 }
 
 // ─── 客户端请求结构 ───
@@ -518,6 +578,107 @@ func streamToClient(c *gin.Context, messages []map[string]interface{}, machineID
 
 // ─── 仪表盘管理 API ───
 
+func setAIUserDailyLimit(machineID string, dailyLimit int) (*AIUserLimit, error) {
+	machineID = strings.TrimSpace(machineID)
+	if machineID == "" {
+		return nil, fmt.Errorf("machine_id 不能为空")
+	}
+	if dailyLimit < 0 || dailyLimit > 100000 {
+		return nil, fmt.Errorf("每日限额必须在 0-100000 之间")
+	}
+
+	eventID, err := newClientCommandID()
+	if err != nil {
+		return nil, fmt.Errorf("生成额度流水编号失败: %w", err)
+	}
+	payload, _ := json.Marshal(map[string]interface{}{"daily_limit": dailyLimit})
+	var updated AIUserLimit
+	err = db.Transaction(func(tx *gorm.DB) error {
+		existing, err := getOrCreateAIUserLimit(tx, machineID)
+		if err != nil {
+			return err
+		}
+		before := existing.DailyLimit
+		if err := tx.Model(existing).Update("daily_limit", dailyLimit).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("machine_id = ?", machineID).First(&updated).Error; err != nil {
+			return err
+		}
+		return recordRewardLedger(tx, RewardLedger{
+			EventID:         "admin:" + eventID,
+			MachineID:       machineID,
+			SourceType:      "admin_adjustment",
+			RewardType:      "daily_limit",
+			Delta:           updated.DailyLimit - before,
+			BalanceBefore:   before,
+			BalanceAfter:    updated.DailyLimit,
+			PayloadSnapshot: string(payload),
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func adjustAIUserBonusCredits(machineID string, amount int, mode string) (*AIUserLimit, error) {
+	machineID = strings.TrimSpace(machineID)
+	if machineID == "" {
+		return nil, fmt.Errorf("machine_id 不能为空")
+	}
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		mode = "add"
+	}
+	if mode != "add" && mode != "set" {
+		return nil, fmt.Errorf("mode 仅支持 add 或 set")
+	}
+	if amount < -100000 || amount > 100000 || (mode == "set" && amount < 0) {
+		return nil, fmt.Errorf("额度数值超出允许范围")
+	}
+
+	eventID, err := newClientCommandID()
+	if err != nil {
+		return nil, fmt.Errorf("生成额度流水编号失败: %w", err)
+	}
+	payload, _ := json.Marshal(map[string]interface{}{"amount": amount, "mode": mode})
+	var updated AIUserLimit
+	err = db.Transaction(func(tx *gorm.DB) error {
+		existing, err := getOrCreateAIUserLimit(tx, machineID)
+		if err != nil {
+			return err
+		}
+		before := existing.BonusCredits
+		var updateErr error
+		if mode == "set" {
+			updateErr = tx.Model(existing).Update("bonus_credits", amount).Error
+		} else {
+			updateErr = tx.Model(existing).Update("bonus_credits", gorm.Expr("MAX(0, bonus_credits + ?)", amount)).Error
+		}
+		if updateErr != nil {
+			return updateErr
+		}
+		if err := tx.Where("machine_id = ?", machineID).First(&updated).Error; err != nil {
+			return err
+		}
+		return recordRewardLedger(tx, RewardLedger{
+			EventID:         "admin:" + eventID,
+			MachineID:       machineID,
+			SourceType:      "admin_adjustment",
+			RewardType:      "bonus_credits",
+			Delta:           updated.BonusCredits - before,
+			BalanceBefore:   before,
+			BalanceAfter:    updated.BonusCredits,
+			PayloadSnapshot: string(payload),
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
 func initAIRoutes(admin *gin.RouterGroup) {
 	ai := admin.Group("/ai")
 	{
@@ -739,7 +900,7 @@ func initAIRoutes(admin *gin.RouterGroup) {
 		// 封禁列表
 		ai.GET("/bans", func(c *gin.Context) {
 			var bans []AIUserBan
-			db.Order("created_at DESC").Find(&bans)
+			db.Where("revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", time.Now()).Order("created_at DESC").Find(&bans)
 
 			result := make([]map[string]interface{}, len(bans))
 			for i, b := range bans {
@@ -750,6 +911,7 @@ func initAIRoutes(admin *gin.RouterGroup) {
 					"machine_id": b.MachineID,
 					"alias":      alias,
 					"reason":     b.Reason,
+					"expires_at": b.ExpiresAt,
 					"created_at": b.CreatedAt.Format("2006-01-02 15:04:05"),
 				}
 			}
@@ -759,28 +921,52 @@ func initAIRoutes(admin *gin.RouterGroup) {
 		// 添加封禁
 		ai.POST("/bans", func(c *gin.Context) {
 			var req struct {
-				MachineID string `json:"machine_id"`
-				Reason    string `json:"reason"`
+				MachineID    string `json:"machine_id"`
+				Reason       string `json:"reason"`
+				DurationDays int    `json:"duration_days"`
+				Permanent    bool   `json:"permanent"`
 			}
 			if err := c.ShouldBindJSON(&req); err != nil {
 				c.JSON(400, gin.H{"error": "请求数据格式错误"})
 				return
 			}
-			ban := AIUserBan{MachineID: req.MachineID, Reason: req.Reason}
-			if err := db.Create(&ban).Error; err != nil {
-				c.JSON(500, gin.H{"error": "已在封禁列表中或保存失败"})
+			req.MachineID = strings.TrimSpace(req.MachineID)
+			req.Reason = strings.TrimSpace(req.Reason)
+			if req.MachineID == "" || req.Reason == "" || len([]rune(req.Reason)) > 500 {
+				c.JSON(400, gin.H{"error": "machine_id 和 1-500 字封禁原因必填"})
 				return
 			}
+			var expiresAt *time.Time
+			if !req.Permanent && req.DurationDays > 0 {
+				if req.DurationDays > 3650 {
+					c.JSON(400, gin.H{"error": "封禁天数必须在 1-3650 之间"})
+					return
+				}
+				expires := time.Now().Add(time.Duration(req.DurationDays) * 24 * time.Hour)
+				expiresAt = &expires
+			}
+			ban, err := upsertAIUserBan(req.MachineID, req.Reason, expiresAt)
+			if err != nil {
+				c.JSON(500, gin.H{"error": "封禁保存失败"})
+				return
+			}
+			WriteAuditLogAsync("moderation", "admin", "admin", req.MachineID, ban.ID, "ban_ai",
+				auditDetail(map[string]interface{}{"reason": req.Reason, "expires_at": expiresAt}), "", c.ClientIP())
 			c.JSON(200, gin.H{"status": "success", "ban": ban})
 		})
 
 		// 解除封禁
 		ai.DELETE("/bans/:id", func(c *gin.Context) {
-			id := c.Param("id")
-			if err := db.Delete(&AIUserBan{}, id).Error; err != nil {
-				c.JSON(500, gin.H{"error": "删除失败"})
+			id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+			if err != nil || id == 0 {
+				c.JSON(400, gin.H{"error": "无效的封禁 ID"})
 				return
 			}
+			if err := revokeAIUserBan(uint(id), time.Now()); err != nil {
+				c.JSON(500, gin.H{"error": "解除封禁失败"})
+				return
+			}
+			WriteAuditLogAsync("moderation", "admin", "admin", "", uint(id), "unban_ai", "{}", "", c.ClientIP())
 			c.JSON(200, gin.H{"status": "success"})
 		})
 
@@ -795,27 +981,24 @@ func initAIRoutes(admin *gin.RouterGroup) {
 				return
 			}
 
-			if req.DailyLimit <= 0 {
-				// 删除自定义限额，回退到全局默认
-				db.Where("machine_id = ?", req.MachineID).Delete(&AIUserLimit{})
-				c.JSON(200, gin.H{"status": "success", "message": "已恢复默认限额"})
+			updated, err := setAIUserDailyLimit(req.MachineID, req.DailyLimit)
+			if err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
 				return
 			}
-
-			var existing AIUserLimit
-			if err := db.Where("machine_id = ?", req.MachineID).First(&existing).Error; err != nil {
-				existing = AIUserLimit{MachineID: req.MachineID, DailyLimit: req.DailyLimit}
-				db.Create(&existing)
-			} else {
-				db.Model(&existing).Update("daily_limit", req.DailyLimit)
-			}
-			c.JSON(200, gin.H{"status": "success"})
+			WriteAuditLogAsync("moderation", "admin", "admin", strings.TrimSpace(req.MachineID), 0, "set_ai_daily_limit",
+				auditDetail(map[string]interface{}{"daily_limit": updated.DailyLimit}), "", c.ClientIP())
+			c.JSON(200, gin.H{"status": "success", "daily_limit": updated.DailyLimit})
 		})
 
 		// 删除单用户限额
 		ai.DELETE("/user-limit/:machine_id", func(c *gin.Context) {
-			mid := c.Param("machine_id")
-			db.Where("machine_id = ?", mid).Delete(&AIUserLimit{})
+			mid := strings.TrimSpace(c.Param("machine_id"))
+			if _, err := setAIUserDailyLimit(mid, 0); err != nil {
+				c.JSON(500, gin.H{"error": "恢复默认限额失败"})
+				return
+			}
+			WriteAuditLogAsync("moderation", "admin", "admin", mid, 0, "reset_ai_daily_limit", "{}", "", c.ClientIP())
 			c.JSON(200, gin.H{"status": "success"})
 		})
 
@@ -831,29 +1014,14 @@ func initAIRoutes(admin *gin.RouterGroup) {
 				return
 			}
 
-			var existing AIUserLimit
-			if err := db.Where("machine_id = ?", req.MachineID).First(&existing).Error; err != nil {
-				existing = AIUserLimit{MachineID: req.MachineID, DailyLimit: 0}
-				db.Create(&existing)
+			updated, err := adjustAIUserBonusCredits(req.MachineID, req.Amount, req.Mode)
+			if err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
 			}
-
-			if req.Mode == "set" {
-				if req.Amount < 0 {
-					req.Amount = 0
-				}
-				db.Model(&existing).Update("bonus_credits", req.Amount)
-			} else {
-				// 默认累加模式
-				newVal := existing.BonusCredits + req.Amount
-				if newVal < 0 {
-					newVal = 0
-				}
-				db.Model(&existing).Update("bonus_credits", newVal)
-			}
-
-			// 查询更新后的值
-			db.Where("machine_id = ?", req.MachineID).First(&existing)
-			c.JSON(200, gin.H{"status": "success", "bonus_credits": existing.BonusCredits})
+			WriteAuditLogAsync("moderation", "admin", "admin", strings.TrimSpace(req.MachineID), 0, "adjust_ai_bonus_credits",
+				auditDetail(map[string]interface{}{"mode": req.Mode, "amount": req.Amount, "balance": updated.BonusCredits}), "", c.ClientIP())
+			c.JSON(200, gin.H{"status": "success", "bonus_credits": updated.BonusCredits})
 		})
 	}
 }

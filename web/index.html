@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-feedback-style="soft" data-feedback-motion="slide-up" data-feedback-placement="bottom-right">
 
 <head>
     <meta charset="UTF-8">
@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="assets/remixicon/remixicon.css">
     <link rel="stylesheet" href="style.css?v=20260524_author_works">
     <link rel="stylesheet" href="css_fix.css?v=20260521_2">
+    <link rel="stylesheet" href="css/feedback/soft.css?v=20260706_1">
     <link rel="stylesheet" href="css/notice_template_general.css?v=20260331_1">
     <link rel="stylesheet" href="css/notice_template_update.css?v=20260331_1">
     <link rel="stylesheet" href="css/notice_community.css?v=20260331_1">
@@ -19,7 +20,7 @@
     <link rel="stylesheet" href="css/pages/task_library.css">
     <link rel="stylesheet" href="css/pages/model_library.css">
     <link rel="stylesheet" href="css/pages/hangar.css">
-    <link rel="stylesheet" href="css/pages/resource_common.css?v=20260520_resource_ui">
+    <link rel="stylesheet" href="css/pages/resource_common.css?v=20260801_loading_state_2">
     <link rel="stylesheet" href="css/pages/custom_text.css">
     <link rel="stylesheet" href="css/import-result-modal.css">
     <link rel="stylesheet" href="css/header_banner.css">
@@ -65,7 +66,7 @@
             </div>
             <div class="app-brand-wrapper">
                 <span class="app-brand-text">Aimer WT</span>
-                <span class="app-version-text" data-i18n="app.version">v3 Beta</span>
+                <span class="app-version-text" data-i18n="app.version">v3.1 Beta</span>
             </div>
         </div>
 
@@ -412,44 +413,61 @@
 
                     <!-- 炮镜视图 -->
                     <div class="resource-view" id="view-sights">
-                        <div class="res-toolbar">
-                            <div class="res-search-box">
-                                <i class="ri-search-2-line"></i>
-                                <input type="text" placeholder="搜索炮镜名称或描述" data-i18n-placeholder="resource.search_sights" id="sights-search-input" oninput="app.filterSightsNew(this.value)">
+                        <div class="sight-library-list-view" id="sight-library-list-view">
+                        <div class="sights-mode-tabs" aria-label="炮镜库分类与工具栏">
+                            <div class="sights-mode-tab-list" role="tablist" aria-label="炮镜库分类">
+                                <button class="sights-mode-tab" type="button" role="tab" data-sights-mode="single" aria-selected="false" onclick="app.setSightsLibraryMode('single')" data-i18n="resource.sight_tab_single">单独炮镜</button>
+                                <button class="sights-mode-tab active" type="button" role="tab" data-sights-mode="packages" aria-selected="true" onclick="app.setSightsLibraryMode('packages')" data-i18n="resource.sight_tab_packages">炮镜包</button>
+                                <button class="sights-mode-tab" type="button" role="tab" data-sights-mode="enabled" aria-selected="false" onclick="app.setSightsLibraryMode('enabled')" data-i18n="resource.sight_tab_enabled">已启用</button>
                             </div>
-                            <div class="res-toolbar-inline-controls">
-                                <div class="res-filter-wrapper">
-                                    <i class="ri-filter-3-line res-filter-icon"></i>
-                                    <span data-i18n="resource.filter_label">筛选:</span>
-                                    <div class="res-sort-menu" id="sights-filter-dropdown"></div>
-                                    <select class="res-native-filter" id="sights-filter-select" onchange="app.filterSightsStatus(this.value)" aria-hidden="true" tabindex="-1">
-                                        <option value="all" data-i18n="resource.filter_all">全部</option>
-                                        <option value="enabled" data-i18n="resource.filter_enabled">已启用</option>
-                                        <option value="disabled" data-i18n="resource.filter_disabled">已禁用</option>
-                                    </select>
+                            <div class="res-toolbar sights-toolbar-compact">
+                                <div class="res-search-box">
+                                    <i class="ri-search-2-line"></i>
+                                    <input type="text" placeholder="搜索炮镜名称或描述" data-i18n-placeholder="resource.search_sights" id="sights-search-input" oninput="app.filterSightsNew(this.value)">
                                 </div>
-                                <div class="res-sort-wrapper">
-                                    <i class="ri-sort-desc"></i> <span data-i18n="resource.sort_label">排序:</span>
-                                    <div class="res-sort-menu" id="sights-sort-dropdown"></div>
-                                    <select class="res-native-sort" id="sights-sort-select" onchange="app.sortSightsNew(this.value)" aria-hidden="true" tabindex="-1">
-                                        <option value="update_time" data-i18n="resource.sort_updated">更新时间</option>
-                                        <option value="name" data-i18n="resource.sort_name">名称</option>
-                                        <option value="size" data-i18n="resource.sort_size">大小</option>
-                                    </select>
+                                <div class="res-toolbar-inline-controls">
+                                    <div class="res-filter-wrapper">
+                                        <i class="ri-filter-3-line res-filter-icon"></i>
+                                        <span data-i18n="resource.filter_label">筛选:</span>
+                                        <div class="res-sort-menu" id="sights-filter-dropdown"></div>
+                                        <select class="res-native-filter" id="sights-filter-select" onchange="app.filterSightsStatus(this.value)" aria-hidden="true" tabindex="-1">
+                                            <option value="all" data-i18n="resource.filter_all">全部</option>
+                                            <option value="enabled" data-i18n="resource.filter_enabled">已启用</option>
+                                            <option value="disabled" data-i18n="resource.filter_stopped">已停用</option>
+                                            <option value="with_meta" data-i18n="resource.filter_with_meta">有元数据</option>
+                                            <option value="without_meta" data-i18n="resource.filter_without_meta">无元数据</option>
+                                            <option value="with_source" data-i18n="resource.filter_with_source">有来源尾注</option>
+                                            <option value="tag_historical" data-i18n="resource.filter_tag_historical">史实瞄具</option>
+                                            <option value="tag_competitive" data-i18n="resource.filter_tag_competitive">竞技瞄具</option>
+                                            <option value="tag_fun" data-i18n="resource.filter_tag_fun">娱乐瞄具</option>
+                                            <option value="ammo_apfsds" data-i18n="resource.filter_ammo_apfsds">APFSDS</option>
+                                            <option value="ammo_heatfs" data-i18n="resource.filter_ammo_heatfs">HEAT-FS</option>
+                                            <option value="ammo_atgm" data-i18n="resource.filter_ammo_atgm">ATGM</option>
+                                        </select>
+                                    </div>
+                                    <div class="res-sort-wrapper">
+                                        <i class="ri-sort-desc"></i> <span data-i18n="resource.sort_label">排序:</span>
+                                        <div class="res-sort-menu" id="sights-sort-dropdown"></div>
+                                        <select class="res-native-sort" id="sights-sort-select" onchange="app.sortSightsNew(this.value)" aria-hidden="true" tabindex="-1">
+                                            <option value="update_time" data-i18n="resource.sort_updated">更新时间</option>
+                                            <option value="name" data-i18n="resource.sort_name">名称</option>
+                                            <option value="size" data-i18n="resource.sort_sight_count">炮镜数量</option>
+                                        </select>
+                                    </div>
+                                    <button class="res-sort-order-btn" id="sights-sort-order-btn" title="切换排序方向" data-i18n-title="resource.sort_direction" onclick="app.toggleSightsSortOrder()">
+                                        <i class="ri-sort-desc"></i>
+                                    </button>
                                 </div>
-                                <button class="res-sort-order-btn" id="sights-sort-order-btn" title="切换排序方向" data-i18n-title="resource.sort_direction" onclick="app.toggleSightsSortOrder()">
-                                    <i class="ri-sort-desc"></i>
-                                </button>
-                            </div>
-                            <div class="res-toolbar-right">
-                                <label class="res-select-all"><input type="checkbox" id="sights-select-all"> <span data-i18n="resource.select_all">全选</span></label>
-                                <div class="res-view-toggle is-card-mode" data-resource-type="sights">
-                                    <button class="active" type="button" onclick="app.switchResourceViewMode('sights', 'card')" title="卡片视图" aria-label="卡片视图" data-i18n-title="resource.view_card" data-i18n-aria-label="resource.view_card">
-                                        <i class="ri-layout-grid-line"></i><span class="res-view-label" data-i18n="resource.view_card">卡片视图</span>
-                                    </button>
-                                    <button type="button" onclick="app.switchResourceViewMode('sights', 'list')" title="列表视图" aria-label="列表视图" data-i18n-title="resource.view_list" data-i18n-aria-label="resource.view_list">
-                                        <i class="ri-list-unordered"></i><span class="res-view-label" data-i18n="resource.view_list">列表视图</span>
-                                    </button>
+                                <div class="res-toolbar-right sights-toolbar-reserved" data-sights-toolbar-slot="selection-view">
+                                    <label class="res-select-all"><input type="checkbox" id="sights-select-all"> <span data-i18n="resource.select_all">全选</span></label>
+                                    <div class="res-view-toggle is-card-mode" data-resource-type="sights">
+                                        <button class="active" type="button" onclick="app.switchResourceViewMode('sights', 'card')" title="卡片视图" aria-label="卡片视图" data-i18n-title="resource.view_card" data-i18n-aria-label="resource.view_card">
+                                            <i class="ri-layout-grid-line"></i><span class="res-view-label" data-i18n="resource.view_card">卡片视图</span>
+                                        </button>
+                                        <button type="button" onclick="app.switchResourceViewMode('sights', 'list')" title="列表视图" aria-label="列表视图" data-i18n-title="resource.view_list" data-i18n-aria-label="resource.view_list">
+                                            <i class="ri-list-unordered"></i><span class="res-view-label" data-i18n="resource.view_list">列表视图</span>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -474,11 +492,11 @@
                                         <button id="sights-op-open" onclick="app.open_selected_resource_folder('sights')" title="打开" data-i18n-title="resource.action_open">
                                             <i class="ri-folder-open-line"></i> <span data-i18n="resource.action_open">打开</span>
                                         </button>
-                                        <button id="sights-op-enable" onclick="app.enable_selected_resources('sights')" title="启用" data-i18n-title="resource.action_enable">
+                                        <button id="sights-op-enable" onclick="app.enableSelectedSights()" title="启用" data-i18n-title="resource.action_enable">
                                             <i class="ri-play-circle-line"></i> <span data-i18n="resource.action_enable">启用</span>
                                         </button>
-                                        <button id="sights-op-disable" onclick="app.disable_selected_resources('sights')" title="禁用" data-i18n-title="resource.action_disable">
-                                            <i class="ri-forbid-line"></i> <span data-i18n="resource.action_disable">禁用</span>
+                                        <button id="sights-op-disable" onclick="app.disableSelectedSights()" title="停用" data-i18n-title="resource.action_stop">
+                                            <i class="ri-forbid-line"></i> <span data-i18n="resource.action_stop">停用</span>
                                         </button>
                                         <button id="sights-op-delete" class="danger-action" onclick="app.delete_selected_resources('sights')" title="删除" data-i18n-title="resource.action_delete">
                                             <i class="ri-delete-bin-line"></i> <span data-i18n="resource.action_delete">删除</span>
@@ -509,6 +527,9 @@
                                         <button class="res-quick-link" id="btn-sights-primary" onclick="app.selectSightsPath()">
                                             <i class="ri-folder-2-line"></i> <span data-i18n="tools.manual_select_path">手动选择路径</span>
                                         </button>
+                                        <button class="res-quick-link" id="btn-adopt-external-sights" onclick="app.adoptExternalSights()">
+                                            <i class="ri-inbox-archive-line"></i> <span>批量纳管外部炮镜</span>
+                                        </button>
                                         <button class="res-quick-link" onclick="app.refreshSights({manual:true})" id="btn-refresh-sights">
                                             <i class="ri-refresh-line"></i> <span data-i18n="resource.refresh_list">刷新列表</span>
                                         </button>
@@ -516,6 +537,9 @@
                                 </div>
                             </div>
                         </div>
+                        </div>
+                        <section class="sight-package-detail-view" id="sight-package-detail-view" hidden></section>
+                        <section class="sight-single-detail-view" id="sight-single-detail-view" hidden></section>
                     </div>
 
                     <!-- 任务库视图 -->
@@ -1079,6 +1103,16 @@
                                         <div class="contributor-role" data-i18n="info.role_software_support">软件技术支持</div>
                                     </div>
                                 </a>
+                                <a class="contributor-card" href="https://b23.tv/uVn165q"
+                                    onclick="app.openExternal('https://b23.tv/uVn165q'); return false;">
+                                    <div class="contributor-avatar">
+                                        <img src="assets/tanks/8.DaiSongSong.jpg" alt="DaiSongSong">
+                                    </div>
+                                    <div>
+                                        <div class="contributor-name">DaiSongSong 大松松</div>
+                                        <div class="contributor-role">测试、炮镜技术支持</div>
+                                    </div>
+                                </a>
 
                             </div>
                         </div>
@@ -1408,11 +1442,11 @@
             <!-- 分隔區域 -->
             <div class="settings-section-divider"></div>
 
-            <!-- 語音包庫路徑設置 -->
+            <!-- AimerWT 资源库路径设置 -->
             <div class="card" id="library-path-card">
                 <div class="card-header">
-                    <h2 data-i18n="settings.voice_library_path">语音包库路径</h2>
-                    <span class="subtitle">Voice Pack Library Location</span>
+                    <h2 data-i18n="settings.resource_root_path">AimerWT资源库位置</h2>
+                    <span class="subtitle">Resource Library Location</span>
                 </div>
                 <div class="path-settings-body">
                     <!-- 待解壓區 -->
@@ -1443,12 +1477,12 @@
                         </div>
                     </div>
 
-                    <!-- 語音包庫 -->
+                    <!-- AimerWT 资源库根目录 -->
                     <div class="path-field">
                         <label class="path-label">
-                            <i class="ri-folder-music-line"></i>
-                            <span data-i18n="settings.voice_library_path">语音包库路径</span>
-                            <span class="path-label-hint" data-i18n="settings.library_path_hint">(存放已解压的语音包)</span>
+                            <i class="ri-folder-settings-line"></i>
+                            <span data-i18n="settings.resource_root_path">AimerWT资源库位置</span>
+                            <span class="path-label-hint" data-i18n="settings.resource_root_path_hint">(统一存放语音包、炮镜、任务、模型、机库和备份)</span>
                         </label>
                         <div class="path-input-row">
                             <div class="path-input-wrapper">
@@ -1468,6 +1502,111 @@
                             <button class="btn secondary" onclick="app.resetLibraryDir()" title="重置为默认" data-i18n-title="settings.reset_default_title">
                                 <i class="ri-refresh-line"></i>
                             </button>
+                        </div>
+                    </div>
+
+                    <div class="resource-subdir-list">
+                        <div class="path-field resource-subdir-field">
+                            <label class="path-label">
+                                <i class="ri-folder-music-line"></i>
+                                <span>WT语音包库</span>
+                            </label>
+                            <div class="path-input-row">
+                                <div class="path-input-wrapper">
+                                    <input type="text" id="resource-voice-dir-input" class="path-input" readonly>
+                                    <button class="path-copy-btn" onclick="app.copyPathToClipboard('resource-voice-dir-input')" title="复制路径" data-i18n-title="settings.copy_path_title">
+                                        <i class="ri-file-copy-line"></i>
+                                    </button>
+                                </div>
+                                <button class="btn secondary" onclick="app.openResourceSubdir('voice')" title="打开文件夹" data-i18n-title="settings.open_folder_title">
+                                    <i class="ri-folder-open-line"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="path-field resource-subdir-field">
+                            <label class="path-label">
+                                <i class="ri-crosshair-2-line"></i>
+                                <span>WT炮镜库</span>
+                            </label>
+                            <div class="path-input-row">
+                                <div class="path-input-wrapper">
+                                    <input type="text" id="resource-sights-dir-input" class="path-input" readonly>
+                                    <button class="path-copy-btn" onclick="app.copyPathToClipboard('resource-sights-dir-input')" title="复制路径" data-i18n-title="settings.copy_path_title">
+                                        <i class="ri-file-copy-line"></i>
+                                    </button>
+                                </div>
+                                <button class="btn secondary" onclick="app.openResourceSubdir('sights')" title="打开文件夹" data-i18n-title="settings.open_folder_title">
+                                    <i class="ri-folder-open-line"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="path-field resource-subdir-field">
+                            <label class="path-label">
+                                <i class="ri-task-line"></i>
+                                <span>WT任务库</span>
+                            </label>
+                            <div class="path-input-row">
+                                <div class="path-input-wrapper">
+                                    <input type="text" id="resource-task-dir-input" class="path-input" readonly>
+                                    <button class="path-copy-btn" onclick="app.copyPathToClipboard('resource-task-dir-input')" title="复制路径" data-i18n-title="settings.copy_path_title">
+                                        <i class="ri-file-copy-line"></i>
+                                    </button>
+                                </div>
+                                <button class="btn secondary" onclick="app.openResourceSubdir('tasks')" title="打开文件夹" data-i18n-title="settings.open_folder_title">
+                                    <i class="ri-folder-open-line"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="path-field resource-subdir-field">
+                            <label class="path-label">
+                                <i class="ri-box-3-line"></i>
+                                <span>WT模型库</span>
+                            </label>
+                            <div class="path-input-row">
+                                <div class="path-input-wrapper">
+                                    <input type="text" id="resource-model-dir-input" class="path-input" readonly>
+                                    <button class="path-copy-btn" onclick="app.copyPathToClipboard('resource-model-dir-input')" title="复制路径" data-i18n-title="settings.copy_path_title">
+                                        <i class="ri-file-copy-line"></i>
+                                    </button>
+                                </div>
+                                <button class="btn secondary" onclick="app.openResourceSubdir('models')" title="打开文件夹" data-i18n-title="settings.open_folder_title">
+                                    <i class="ri-folder-open-line"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="path-field resource-subdir-field">
+                            <label class="path-label">
+                                <i class="ri-plane-line"></i>
+                                <span>WT机库</span>
+                            </label>
+                            <div class="path-input-row">
+                                <div class="path-input-wrapper">
+                                    <input type="text" id="resource-hangar-dir-input" class="path-input" readonly>
+                                    <button class="path-copy-btn" onclick="app.copyPathToClipboard('resource-hangar-dir-input')" title="复制路径" data-i18n-title="settings.copy_path_title">
+                                        <i class="ri-file-copy-line"></i>
+                                    </button>
+                                </div>
+                                <button class="btn secondary" onclick="app.openResourceSubdir('hangars')" title="打开文件夹" data-i18n-title="settings.open_folder_title">
+                                    <i class="ri-folder-open-line"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="path-field resource-subdir-field">
+                            <label class="path-label">
+                                <i class="ri-archive-line"></i>
+                                <span>WT备份</span>
+                            </label>
+                            <div class="path-input-row">
+                                <div class="path-input-wrapper">
+                                    <input type="text" id="resource-backup-dir-input" class="path-input" readonly>
+                                    <button class="path-copy-btn" onclick="app.copyPathToClipboard('resource-backup-dir-input')" title="复制路径" data-i18n-title="settings.copy_path_title">
+                                        <i class="ri-file-copy-line"></i>
+                                    </button>
+                                </div>
+                                <button class="btn secondary" onclick="app.openResourceSubdir('backup')" title="打开文件夹" data-i18n-title="settings.open_folder_title">
+                                    <i class="ri-folder-open-line"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -2124,44 +2263,7 @@
         </div>
     </div>
 
-    <div id="toast-error" class="toast-error">
-        <div class="toast-error-content">
-            <i class="ri-error-warning-line toast-error-icon"></i>
-            <div class="toast-error-text">
-                <div class="toast-error-title" data-i18n="common.error">错误</div>
-                <div class="toast-error-message"></div>
-            </div>
-            <button class="toast-error-close" id="toast-error-close">
-                <i class="ri-close-line"></i>
-            </button>
-        </div>
-    </div>
-
-    <div id="toast-warn" class="toast-warn">
-        <div class="toast-warn-content">
-            <i class="ri-alert-line toast-warn-icon"></i>
-            <div class="toast-warn-text">
-                <div class="toast-warn-title" data-i18n="common.warn">警告</div>
-                <div class="toast-warn-message"></div>
-            </div>
-            <button class="toast-warn-close" id="toast-warn-close">
-                <i class="ri-close-line"></i>
-            </button>
-        </div>
-    </div>
-
-    <div id="toast-info" class="toast-info">
-        <div class="toast-info-content">
-            <i class="ri-information-line toast-info-icon"></i>
-            <div class="toast-info-text">
-                <div class="toast-info-title" data-i18n="common.info">提示</div>
-                <div class="toast-info-message"></div>
-            </div>
-            <button class="toast-info-close" id="toast-info-close">
-                <i class="ri-close-line"></i>
-            </button>
-        </div>
-    </div>
+    <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
 
     <!-- 自定义提示弹窗 (替代原生 alert) -->
     <div class="modal-overlay" id="modal-alert">
@@ -2204,8 +2306,10 @@
     <script src="i18n/de_de.js"></script>
     <script src="loading_voice_package.js"></script>
     <script src="components/AppDropdownMenu.js"></script>
+    <script src="components/ResourceLibraryLoading.js?v=20260801_loading_state_2"></script>
     <!-- 新功能模块脚本 -->
     <script src="js/pages/custom_text.js"></script>
+    <script src="js/pages/custom_text_import.js"></script>
     <script src="js/vendor/marked.min.js"></script>
     <script src="js/vendor/highlight.min.js"></script>
     <script src="js/notice/markdown_renderer.js?v=20260330_1"></script>
@@ -2255,6 +2359,9 @@
     <script src="ai/ai_chat.js"></script>
     <script src="ai/index.js"></script>
     <script src="js/pages/user_profile.js"></script>
-</body>
+    <datalist id="sight-vehicle-catalog">
+        <option value="cn_ztz_99a">ZTZ99A</option>
+        <option value="cn_wz_1001">WZ1001(E) LCT</option>
+    </datalist></body>
 
 </html>

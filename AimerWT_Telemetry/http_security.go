@@ -81,7 +81,7 @@ func applyCORSHeaders(c *gin.Context) bool {
 		c.Header("Vary", "Origin")
 	}
 	c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-AimerWT-Client, X-AimerWT-Timestamp, X-AimerWT-Machine, X-AimerWT-Signature, X-AimerWT-Device-Token")
+	c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-AimerWT-Client, X-AimerWT-Timestamp, X-AimerWT-Machine, X-AimerWT-Signature, X-AimerWT-Device-Token, X-AimerWT-Community-Protocol, X-AimerWT-Command-Protocol")
 
 	if c.Request.Method == "OPTIONS" {
 		if origin != "" && !isAllowedOrigin(c.Request, origin) {

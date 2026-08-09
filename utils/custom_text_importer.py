@@ -2,6 +2,8 @@ import re
 import zipfile
 import shutil
 import csv
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -87,117 +89,174 @@ def match_csv_to_standard(csv_name: str, standard_names: list[str]) -> Optional[
     return None
 
 
-def merge_csv_files(original_csv_path: Path, mod_csv_path: Path, output_csv_path: Path, encoding: str = 'utf-8-sig') -> tuple[bool, str, dict]:
+def _normalize_csv_header(value: str) -> str:
+    return str(value or "").strip().strip('"').strip().strip("<>").strip().lower()
+
+
+def _find_csv_id_index(header: list[str]) -> int:
+    for index, value in enumerate(header):
+        normalized = _normalize_csv_header(value)
+        if normalized == "id" or "readonly" in normalized:
+            return index
+    return -1
+
+
+def _load_csv_rows(csv_path: Path) -> tuple[list[list[str]], str]:
+    encodings = ["utf-8-sig", "utf-8", "gbk", "gb18030", "cp1252", "latin-1"]
+    last_error = None
+    for encoding in encodings:
+        try:
+            with open(csv_path, "r", encoding=encoding, newline="") as file_obj:
+                rows = list(csv.reader(file_obj, delimiter=";", quotechar='"', strict=True))
+            return rows, encoding
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"读取 CSV 失败: {last_error}")
+
+
+def validate_csv_file(csv_path: Path) -> tuple[bool, str, list[list[str]], str]:
+    try:
+        rows, encoding = _load_csv_rows(csv_path)
+    except Exception as exc:
+        return False, str(exc), [], ""
+
+    if len(rows) < 2 or len(rows[0]) < 2:
+        return False, "CSV 文件缺少表头或数据行", [], ""
+
+    header = rows[0]
+    id_index = _find_csv_id_index(header)
+    if id_index < 0:
+        return False, "CSV 文件缺少 ID 列", [], ""
+
+    seen_ids = set()
+    data_count = 0
+    for row_number, row in enumerate(rows[1:], start=2):
+        if not row or not any(str(value).strip() for value in row):
+            continue
+        if id_index >= len(row):
+            return False, f"CSV 第 {row_number} 行缺少 ID", [], ""
+        text_id = str(row[id_index]).strip()
+        if not text_id:
+            return False, f"CSV 第 {row_number} 行 ID 为空", [], ""
+        normalized_id = text_id.casefold()
+        if normalized_id in seen_ids:
+            return False, f"CSV 包含重复 ID: {text_id}", [], ""
+        seen_ids.add(normalized_id)
+        data_count += 1
+
+    if data_count == 0:
+        return False, "CSV 文件没有有效数据行", [], ""
+
+    return True, "CSV 校验通过", rows, encoding
+
+
+def write_csv_rows_atomic(output_csv_path: Path, rows: list[list[str]], encoding: str) -> None:
+    output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding=encoding,
+            newline="",
+            delete=False,
+            dir=str(output_csv_path.parent),
+            prefix=f".{output_csv_path.name}.",
+            suffix=".tmp",
+        ) as file_obj:
+            temp_path = Path(file_obj.name)
+            writer = csv.writer(
+                file_obj,
+                delimiter=";",
+                quotechar='"',
+                quoting=csv.QUOTE_ALL,
+                lineterminator="\n",
+            )
+            writer.writerows(rows)
+        os.replace(temp_path, output_csv_path)
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
+def merge_csv_files(original_csv_path: Path, mod_csv_path: Path, output_csv_path: Path, encoding: str = "utf-8-sig") -> tuple[bool, str, dict]:
     """
-    合并模组CSV和原始CSV
-
-    策略：
-    - 保留原始CSV的所有行
-    - 如果模组CSV中的ID在原始CSV中存在，更新该行
-    - 如果模组CSV中的ID在原始CSV中不存在，添加新行
-
-    返回: (success, message, stats)
-    stats: {"added": int, "modified": int, "total": int}
+    以当前有效 CSV 为基线，按表头名称合并模组 CSV，保留模组未提供的列和行。
     """
     try:
-        # 读取原始CSV
-        original_rows = []
-        original_encoding = encoding
-        encodings = ["utf-8-sig", "utf-8", "cp1252", "latin-1", "gbk"]
+        original_ok, original_message, original_rows, original_encoding = validate_csv_file(original_csv_path)
+        if not original_ok:
+            return False, f"原始 {original_message}", {}
 
-        for enc in encodings:
-            try:
-                with open(original_csv_path, "r", encoding=enc, newline="") as f:
-                    original_rows = list(csv.reader(f, delimiter=';', quotechar='"'))
-                    original_encoding = enc
-                break
-            except Exception:
-                continue
-
-        if not original_rows:
-            return False, "无法读取原始CSV文件", {}
-
-        # 读取模组CSV
-        mod_rows = []
-        for enc in encodings:
-            try:
-                with open(mod_csv_path, "r", encoding=enc, newline="") as f:
-                    mod_rows = list(csv.reader(f, delimiter=';', quotechar='"'))
-                break
-            except Exception:
-                continue
-
-        if not mod_rows:
-            return False, "无法读取模组CSV文件", {}
-
-        # 获取表头
-        if len(original_rows) < 1 or len(mod_rows) < 1:
-            return False, "CSV文件格式错误", {}
+        mod_ok, mod_message, mod_rows, _mod_encoding = validate_csv_file(mod_csv_path)
+        if not mod_ok:
+            return False, f"模组 {mod_message}", {}
 
         original_header = original_rows[0]
         mod_header = mod_rows[0]
+        original_id_index = _find_csv_id_index(original_header)
+        mod_id_index = _find_csv_id_index(mod_header)
+        original_columns = {
+            _normalize_csv_header(value): index
+            for index, value in enumerate(original_header)
+            if _normalize_csv_header(value)
+        }
+        mod_columns = {
+            _normalize_csv_header(value): index
+            for index, value in enumerate(mod_header)
+            if _normalize_csv_header(value)
+        }
 
-        # 找到ID列索引
-        id_idx = 0
-        for i, col in enumerate(original_header):
-            col_lower = str(col).lower()
-            if 'id' in col_lower or 'readonly' in col_lower:
-                id_idx = i
-                break
-
-        # 构建原始数据的ID映射
         original_data = {}
-        for i, row in enumerate(original_rows[1:], start=1):
-            if row and id_idx < len(row):
-                text_id = str(row[id_idx]).strip()
-                if text_id:
-                    original_data[text_id] = i
-
-        # 统计信息
-        stats = {"added": 0, "modified": 0, "total": 0}
-
-        # 处理模组数据
-        for mod_row in mod_rows[1:]:
-            if not mod_row or id_idx >= len(mod_row):
+        for row_index, row in enumerate(original_rows[1:], start=1):
+            if original_id_index >= len(row):
                 continue
+            text_id = str(row[original_id_index]).strip()
+            if text_id:
+                original_data[text_id.casefold()] = row_index
 
-            text_id = str(mod_row[id_idx]).strip()
+        stats = {"added": 0, "modified": 0, "total": 0}
+        for mod_row in mod_rows[1:]:
+            if mod_id_index >= len(mod_row):
+                continue
+            text_id = str(mod_row[mod_id_index]).strip()
             if not text_id:
                 continue
 
-            if text_id in original_data:
-                # 更新现有行
-                row_idx = original_data[text_id]
-                # 确保行长度一致
-                while len(mod_row) < len(original_header):
-                    mod_row.append("")
-                original_rows[row_idx] = mod_row[:len(original_header)]
-                stats["modified"] += 1
+            lookup_id = text_id.casefold()
+            existing_index = original_data.get(lookup_id)
+            if existing_index is None:
+                merged_row = [""] * len(original_header)
             else:
-                # 添加新行
-                while len(mod_row) < len(original_header):
-                    mod_row.append("")
-                original_rows.append(mod_row[:len(original_header)])
+                merged_row = list(original_rows[existing_index])
+                if len(merged_row) < len(original_header):
+                    merged_row.extend([""] * (len(original_header) - len(merged_row)))
+                merged_row = merged_row[:len(original_header)]
+
+            for column_name, mod_index in mod_columns.items():
+                target_index = original_columns.get(column_name)
+                if target_index is None:
+                    continue
+                merged_row[target_index] = str(mod_row[mod_index]) if mod_index < len(mod_row) else ""
+
+            merged_row[original_id_index] = text_id
+            if existing_index is None:
+                original_rows.append(merged_row)
+                original_data[lookup_id] = len(original_rows) - 1
                 stats["added"] += 1
+            elif original_rows[existing_index] != merged_row:
+                original_rows[existing_index] = merged_row
+                stats["modified"] += 1
 
         stats["total"] = len(original_rows) - 1
-
-        # 写入合并后的文件
-        output_csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_csv_path, "w", encoding=original_encoding, newline="") as f:
-            writer = csv.writer(f, delimiter=';', quotechar='"', quoting=csv.QUOTE_ALL, lineterminator="\n")
-            writer.writerows(original_rows)
-
+        write_csv_rows_atomic(output_csv_path, original_rows, original_encoding or encoding)
         return True, "合并成功", stats
-
-    except Exception as e:
-        return False, f"合并失败: {e}", {}
+    except Exception as exc:
+        return False, f"合并失败: {exc}", {}
 
 
 def extract_archive(archive_path: Path, extract_to: Path) -> tuple[bool, str]:
     """
-    解压压缩包
-    支持 zip, rar (需要 rarfile 库)
+    解压 ZIP 压缩包
     """
     try:
         extract_to.mkdir(parents=True, exist_ok=True)

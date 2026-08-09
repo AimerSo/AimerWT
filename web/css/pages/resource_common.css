@@ -1067,3 +1067,117 @@
         transform: translateY(0);
     }
 }
+
+/* 卡片资源库公共加载状态：在内容区内反馈，不遮挡页面操作。 */
+.resource-inline-loading {
+    display: grid;
+    flex: 0 0 auto;
+    align-content: center;
+    justify-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 96px;
+    margin: 0;
+    padding: 20px;
+    color: var(--text-sec);
+    text-align: center;
+    box-sizing: border-box;
+}
+
+.resource-inline-loading:has(+ .res-card-grid.is-resource-loading),
+.resource-inline-loading:has(+ .res-card-grid:empty) {
+    flex: 1 1 auto;
+    min-height: 240px;
+}
+
+.res-card-grid.is-resource-loading {
+    display: none;
+}
+
+.resource-inline-loading[hidden] {
+    display: none;
+}
+
+.resource-inline-loading-copy {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.resource-inline-loading-copy i {
+    flex: 0 0 auto;
+    color: var(--primary);
+    font-size: 16px;
+    animation: resource-inline-loading-spin 0.9s linear infinite;
+}
+
+.resource-inline-loading-track {
+    position: relative;
+    width: 168px;
+    max-width: 100%;
+    height: 3px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 14%, var(--border-color));
+}
+
+.resource-inline-loading-track span {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 38%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, transparent, var(--primary), transparent);
+    animation: resource-inline-loading-slide 1.1s ease-in-out infinite;
+}
+
+.resource-inline-loading-track.is-determinate span {
+    width: var(--resource-loading-progress, 0%);
+    background: var(--primary);
+    transform: none;
+    animation: none;
+    transition: width 0.18s ease-out;
+}
+
+.resource-inline-loading-count {
+    min-width: 82px;
+    color: var(--text-sec);
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.resource-inline-loading-count[hidden] {
+    display: none;
+}
+@keyframes resource-inline-loading-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes resource-inline-loading-slide {
+    from {
+        transform: translateX(-110%);
+    }
+    to {
+        transform: translateX(290%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .resource-inline-loading-copy i,
+    .resource-inline-loading-track span {
+        animation: none;
+    }
+
+    .resource-inline-loading-track span {
+        width: 100%;
+        background: var(--primary);
+    }
+}

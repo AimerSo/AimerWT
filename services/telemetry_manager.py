@@ -39,9 +39,45 @@ _PLACEHOLDER_REPORT_URLS = {
 
 _DEVICE_TOKEN_FILE = get_docs_data_dir() / "telemetry_device_token.json"
 _MACHINE_ID_FILE = get_docs_data_dir() / "telemetry_machine_id.json"
+_COMMAND_STATE_FILE = get_docs_data_dir() / "telemetry_command_state.json"
 _MAX_MACHINE_ID_CANDIDATES = 64
 _device_token_lock = threading.Lock()
 _machine_id_lock = threading.Lock()
+_command_state_lock = threading.Lock()
+
+
+def _load_processed_command_ids() -> set[str]:
+    try:
+        if not _COMMAND_STATE_FILE.exists():
+            return set()
+        with open(_COMMAND_STATE_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        values = payload.get("processed_command_ids", [])
+        return {str(value).strip() for value in values if str(value).strip()}
+    except Exception:
+        return set()
+
+
+_processed_command_ids = _load_processed_command_ids()
+
+
+def _remember_processed_command_id(command_id: str) -> None:
+    normalized = str(command_id or "").strip()
+    if not normalized:
+        return
+    with _command_state_lock:
+        _processed_command_ids.add(normalized)
+        recent_ids = list(_processed_command_ids)[-100:]
+        _processed_command_ids.clear()
+        _processed_command_ids.update(recent_ids)
+        try:
+            _COMMAND_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = _COMMAND_STATE_FILE.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump({"processed_command_ids": recent_ids}, f, ensure_ascii=False)
+            tmp_path.replace(_COMMAND_STATE_FILE)
+        except Exception:
+            pass
 
 
 def _load_device_token() -> str:
@@ -207,6 +243,8 @@ def build_client_auth_headers(path_or_url: str, method: str = "POST", machine_id
     """
     headers: dict[str, str] = {
         "X-AimerWT-Client": "1",
+        "X-AimerWT-Community-Protocol": "2",
+        "X-AimerWT-Command-Protocol": "1",
     }
     if user_agent:
         headers["User-Agent"] = user_agent
@@ -251,6 +289,8 @@ class TelemetryManager:
         self.app_version = app_version
 
         self.report_url = resolve_report_url(report_url)
+        self._report_lock = threading.Lock()
+        self._report_in_flight = False
         self._candidate_lock = threading.Lock()
         self._machine_id_candidates = self._generate_fast_hwid_candidates()
         self._full_candidates_ready = False
@@ -276,6 +316,56 @@ class TelemetryManager:
     def set_user_command_callback(self, callback):
         """设置接收特定用户指令的回调函数 (command: str) -> None"""
         self._cmd_callback = callback
+
+    def _acknowledge_command(self, command_id: str, status: str, error_message: str = "") -> bool:
+        command_id = str(command_id or "").strip()
+        if not command_id:
+            return False
+        ack_url = resolve_related_endpoint(self.report_url, "/command-ack")
+        if not ack_url:
+            return False
+        try:
+            response = requests.post(
+                ack_url,
+                json={
+                    "machine_id": self._machine_id,
+                    "command_id": command_id,
+                    "status": status,
+                    "error": str(error_message or "")[:500],
+                },
+                timeout=10,
+                headers=build_client_auth_headers(
+                    ack_url,
+                    method="POST",
+                    machine_id=self._machine_id,
+                    user_agent=f'AimerWT-Client/{self.app_version} ({platform.system()})',
+                ),
+            )
+            return response.status_code == 200
+        except Exception:
+            return False
+
+    def complete_user_command(self, command_id: str, success: bool, error_message: str = "") -> bool:
+        if success:
+            _remember_processed_command_id(command_id)
+        return self._acknowledge_command(command_id, "success" if success else "error", error_message)
+
+    def _handle_user_command(self, user_command: str, command_id: str) -> None:
+        command_id = str(command_id or "").strip()
+        if command_id and command_id in _processed_command_ids:
+            self._acknowledge_command(command_id, "success")
+            return
+        if not self._cmd_callback:
+            return
+        try:
+            result = self._cmd_callback(user_command)
+            if result is False or (isinstance(result, dict) and result.get("success") is False):
+                message = result.get("message", "命令执行失败") if isinstance(result, dict) else "命令执行失败"
+                self.complete_user_command(command_id, False, message)
+                return
+            self.complete_user_command(command_id, True)
+        except Exception as exc:
+            self.complete_user_command(command_id, False, f"{type(exc).__name__}: {exc}")
 
     def set_log_callback(self, callback):
         """设置日志回调 (msg: str, level: str) -> None"""
@@ -517,6 +607,11 @@ class TelemetryManager:
         if not self.report_url:
             return
 
+        with self._report_lock:
+            if self._report_in_flight:
+                return
+            self._report_in_flight = True
+
         def _do_report():
             try:
                 self._wait_for_machine_id_candidates()
@@ -556,7 +651,8 @@ class TelemetryManager:
                     "screen_res": screen_res,
                     "python_version": sys.version.split()[0],
                     "locale": user_locale,
-                    "session_id": os.getpid()
+                    "session_id": os.getpid(),
+                    "command_protocol": 1,
                 }
                 if self._content_cache_keys_callback:
                     try:
@@ -651,8 +747,9 @@ class TelemetryManager:
                                 self._msg_callback(sys_config)
 
                         user_cmd = data.get("user_command")
-                        if user_cmd and self._cmd_callback:
-                            self._cmd_callback(user_cmd)
+                        command_id = data.get("command_id")
+                        if user_cmd:
+                            self._handle_user_command(user_cmd, command_id)
 
                         seq_id = data.get("user_seq_id")
                         if seq_id:
@@ -689,9 +786,17 @@ class TelemetryManager:
                     error_text = f"{type(e).__name__}: {error_detail}" if error_detail else type(e).__name__
                     self._log_callback.error(f"[遥测] 服务交互异常: {error_text}")
                     self._is_log_error = True
+            finally:
+                with self._report_lock:
+                    self._report_in_flight = False
 
         t = threading.Thread(target=_do_report, daemon=True, name="TelemetryStartup")
-        t.start()
+        try:
+            t.start()
+        except Exception:
+            with self._report_lock:
+                self._report_in_flight = False
+            raise
 
     def start_heartbeat_loop(self):
         """

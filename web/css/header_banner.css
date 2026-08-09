@@ -100,14 +100,14 @@
 
 /* 更新提示样式 */
 .header_banner[data-type="update"] {
-    background: rgba(239, 68, 68, 0.1);
+    background: var(--banner_background_color, rgba(239, 68, 68, 0.1));
     color: #EF4444;
     justify-content: center;
     margin-left: 30px;
 }
 
 .header_banner[data-type="update"]:hover {
-    background: rgba(239, 68, 68, 0.16);
+    background: var(--banner_background_color, rgba(239, 68, 68, 0.16));
 }
 
 .header_banner[data-type="update"] .header_banner_text_clip {
@@ -135,23 +135,23 @@
 
 /* 系统公告样式 */
 .header_banner[data-type="announcement"] {
-    background: rgba(59, 130, 246, 0.12);
+    background: var(--banner_background_color, rgba(59, 130, 246, 0.12));
     color: #3B82F6;
 }
 
 .header_banner[data-type="announcement"]:hover {
-    background: rgba(59, 130, 246, 0.2);
+    background: var(--banner_background_color, rgba(59, 130, 246, 0.2));
 }
 
 /* 广告词/标语样式 */
 .header_banner[data-type="slogan"] {
-    background: transparent;
+    background: var(--banner_background_color, transparent);
     color: var(--text-sec);
     cursor: default;
 }
 
 .header_banner[data-type="slogan"]:hover {
-    background: rgba(0, 0, 0, 0.03);
+    background: var(--banner_background_color, rgba(0, 0, 0, 0.03));
 }
 
 .header_banner[data-type="slogan"]:active {
@@ -221,12 +221,12 @@
 
 /* 深色模式适配 */
 [data-theme="dark"] .header_banner[data-type="update"] {
-    background: rgba(248, 113, 113, 0.12);
+    background: var(--banner_background_color, rgba(248, 113, 113, 0.12));
     color: #F87171;
 }
 
 [data-theme="dark"] .header_banner[data-type="update"]:hover {
-    background: rgba(248, 113, 113, 0.2);
+    background: var(--banner_background_color, rgba(248, 113, 113, 0.2));
 }
 
 [data-theme="dark"] .header_banner[data-type="update"] .header_banner_dot {
@@ -234,12 +234,12 @@
 }
 
 [data-theme="dark"] .header_banner[data-type="announcement"] {
-    background: rgba(96, 165, 250, 0.12);
+    background: var(--banner_background_color, rgba(96, 165, 250, 0.12));
     color: #60A5FA;
 }
 
 [data-theme="dark"] .header_banner[data-type="announcement"]:hover {
-    background: rgba(96, 165, 250, 0.2);
+    background: var(--banner_background_color, rgba(96, 165, 250, 0.2));
 }
 
 [data-theme="dark"] .header_banner[data-type="announcement"] .header_banner_dot {
@@ -251,7 +251,7 @@
 }
 
 [data-theme="dark"] .header_banner[data-type="slogan"]:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--banner_background_color, rgba(255, 255, 255, 0.04));
 }
 
 /* 更新提示关闭按钮 */

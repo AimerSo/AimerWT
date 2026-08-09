@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def load_csv_rows_with_fallback(csv_path: Path):
-    encodings = ["utf-8-sig", "utf-8", "cp1252", "latin-1", "gbk"]
+    encodings = ["utf-8-sig", "utf-8", "gbk", "gb18030", "cp1252", "latin-1"]
     last_error = None
     for enc in encodings:
         try:

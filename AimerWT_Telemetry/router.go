@@ -1,11 +1,13 @@
 package main
 
 import (
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,6 +21,134 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+const clientCommandProtocolHeader = "X-AimerWT-Command-Protocol"
+
+func supportsClientCommandAcknowledgement(c *gin.Context) bool {
+	protocol, err := strconv.Atoi(strings.TrimSpace(c.GetHeader(clientCommandProtocolHeader)))
+	return err == nil && protocol >= 1
+}
+
+func newClientCommandID() (string, error) {
+	randomBytes := make([]byte, 16)
+	if _, err := cryptorand.Read(randomBytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(randomBytes), nil
+}
+
+func enqueueClientCommandTx(tx *gorm.DB, machineID, payload, sourceType string, sourceID, userCommandLogID uint) (*ClientCommand, error) {
+	machineID = strings.TrimSpace(machineID)
+	payload = strings.TrimSpace(payload)
+	if machineID == "" || payload == "" {
+		return nil, errors.New("命令缺少用户或载荷")
+	}
+	commandID := ""
+	var raw map[string]interface{}
+	if json.Unmarshal([]byte(payload), &raw) == nil {
+		commandID = strings.TrimSpace(fmt.Sprint(raw["command_id"]))
+		if commandID == "<nil>" {
+			commandID = ""
+		}
+	}
+	if commandID == "" {
+		var err error
+		commandID, err = newClientCommandID()
+		if err != nil {
+			return nil, err
+		}
+	}
+	command := ClientCommand{
+		CommandID:        commandID,
+		MachineID:        machineID,
+		Payload:          payload,
+		SourceType:       sourceType,
+		SourceID:         sourceID,
+		UserCommandLogID: userCommandLogID,
+		Status:           "pending",
+	}
+	if err := tx.Create(&command).Error; err != nil {
+		return nil, err
+	}
+	return &command, nil
+}
+
+func loadPendingClientCommand(machineID string) (*ClientCommand, error) {
+	var command ClientCommand
+	err := db.Where("machine_id = ? AND status = ?", strings.TrimSpace(machineID), "pending").Order("id asc").First(&command).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if err := db.Model(&ClientCommand{}).Where("id = ? AND status = ?", command.ID, "pending").Updates(map[string]interface{}{
+		"attempts":          gorm.Expr("attempts + 1"),
+		"last_delivered_at": now,
+	}).Error; err != nil {
+		return nil, err
+	}
+	command.Attempts++
+	command.LastDeliveredAt = &now
+	return &command, nil
+}
+
+func deliverLegacyPendingCommand(machineID, payload string, logID uint) (bool, error) {
+	query := db.Model(&TelemetryRecord{}).Where("machine_id = ? AND pending_command = ? AND pending_command_log_id = ?", machineID, payload, logID)
+	result := query.Updates(map[string]interface{}{"pending_command": "", "pending_command_log_id": 0})
+	if result.Error != nil || result.RowsAffected == 0 {
+		return false, result.Error
+	}
+	now := time.Now()
+	if logID > 0 {
+		if err := db.Model(&UserCommandLog{}).Where("id = ?", logID).Updates(map[string]interface{}{
+			"status": "delivered", "delivered_at": now,
+		}).Error; err != nil {
+			return false, err
+		}
+	}
+	if err := db.Model(&ClientCommand{}).Where("machine_id = ? AND status = ? AND payload = ?", machineID, "pending", payload).
+		Updates(map[string]interface{}{"status": "acknowledged", "acknowledged_at": now}).Error; err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func acknowledgeClientCommand(machineID, commandID, status, errorMessage string, acknowledgedAt time.Time) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var command ClientCommand
+		if err := tx.Where("machine_id = ? AND command_id = ?", machineID, commandID).First(&command).Error; err != nil {
+			return err
+		}
+		if command.Status == "acknowledged" {
+			return nil
+		}
+		if status != "success" {
+			return tx.Model(&command).Updates(map[string]interface{}{
+				"last_error": strings.TrimSpace(errorMessage),
+			}).Error
+		}
+		if err := tx.Model(&command).Updates(map[string]interface{}{
+			"status": "acknowledged", "acknowledged_at": acknowledgedAt, "last_error": "",
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&TelemetryRecord{}).
+			Where("machine_id = ? AND pending_command = ?", machineID, command.Payload).
+			Updates(map[string]interface{}{"pending_command": "", "pending_command_log_id": 0}).Error; err != nil {
+			return err
+		}
+		if command.UserCommandLogID > 0 {
+			if err := tx.Model(&UserCommandLog{}).Where("id = ?", command.UserCommandLogID).Updates(map[string]interface{}{
+				"status": "delivered", "delivered_at": acknowledgedAt,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
 
 // computePushContentHash 对推送内容 JSON 序列化后取 SHA256 前 12 位
 func computePushContentHash(data interface{}) string {
@@ -345,6 +475,9 @@ func parseBannerItems(raw any) ([]BannerItem, error) {
 		return nil, err
 	}
 	for i := range items {
+		items[i].Color = normalizeBannerColor(items[i].Color)
+		items[i].IconColor = normalizeBannerColor(items[i].IconColor)
+		items[i].BackgroundColor = normalizeBannerColor(items[i].BackgroundColor)
 		items[i].TrackingType = normalizeBannerTrackingType(items[i].TrackingType)
 		items[i].TrackingID = strings.TrimSpace(items[i].TrackingID)
 		if len(items[i].TrackingID) > 64 {
@@ -510,6 +643,7 @@ func initRouter(r *gin.Engine) {
 		if path == "/telemetry" ||
 			path == "/feedback" ||
 			path == "/redeem" ||
+			path == "/command-ack" ||
 			path == "/user-profile" ||
 			path == "/notice-reaction" ||
 			path == "/notice-comment" ||
@@ -569,6 +703,7 @@ func initRouter(r *gin.Engine) {
 			"/notice-reaction":     true,
 			"/notice-comment":      true,
 			"/notice-comment-like": true,
+			"/command-ack":         true,
 			"/api/themes":          true,
 		}
 		protectedByPrefix := strings.HasPrefix(path, "/notice-comments/") ||
@@ -903,6 +1038,16 @@ func initRouter(r *gin.Engine) {
 					}
 
 				case "alert":
+					if raw_targeting, exists := req["alert_targeting"]; exists {
+						targeting, err := parseAudienceTargeting(raw_targeting)
+						if err != nil {
+							c.JSON(400, gin.H{"error": "紧急通知受众规则格式无效: " + err.Error()})
+							return
+						}
+						sysConfig.AlertTargeting = targeting
+					} else if _, scope_exists := req["scope"]; scope_exists {
+						sysConfig.AlertTargeting = AudienceTargeting{}
+					}
 					if val, ok := req["alert_active"].(bool); ok {
 						sysConfig.AlertActive = val
 					}
@@ -917,6 +1062,16 @@ func initRouter(r *gin.Engine) {
 					}
 
 				case "notice":
+					if raw_targeting, exists := req["notice_targeting"]; exists {
+						targeting, err := parseAudienceTargeting(raw_targeting)
+						if err != nil {
+							c.JSON(400, gin.H{"error": "公告受众规则格式无效: " + err.Error()})
+							return
+						}
+						sysConfig.NoticeTargeting = targeting
+					} else if _, scope_exists := req["scope"]; scope_exists {
+						sysConfig.NoticeTargeting = AudienceTargeting{}
+					}
 					if val, ok := req["notice_active"].(bool); ok {
 						sysConfig.NoticeActive = val
 					}
@@ -962,6 +1117,16 @@ func initRouter(r *gin.Engine) {
 					}
 
 				case "update":
+					if raw_targeting, exists := req["update_targeting"]; exists {
+						targeting, err := parseAudienceTargeting(raw_targeting)
+						if err != nil {
+							c.JSON(400, gin.H{"error": "更新通知受众规则格式无效: " + err.Error()})
+							return
+						}
+						sysConfig.UpdateTargeting = targeting
+					} else if _, scope_exists := req["scope"]; scope_exists {
+						sysConfig.UpdateTargeting = AudienceTargeting{}
+					}
 					if val, ok := req["update_active"].(bool); ok {
 						sysConfig.UpdateActive = val
 					}
@@ -1067,15 +1232,15 @@ func initRouter(r *gin.Engine) {
 						BroadcastMaintenance(sysConfig.Maintenance, sysConfig.MaintenanceMsg)
 					case "alert":
 						if sysConfig.AlertActive {
-							BroadcastAlert(sysConfig.AlertTitle, sysConfig.AlertContent, sysConfig.AlertScope)
+							BroadcastAlertToAudience(sysConfig.AlertTitle, sysConfig.AlertContent, sysConfig.AlertScope, sysConfig.AlertTargeting)
 						}
 					case "notice":
 						if sysConfig.NoticeActive {
-							BroadcastNotice(sysConfig.NoticeContent, sysConfig.NoticeScope)
+							BroadcastNoticeToAudience(sysConfig.NoticeContent, sysConfig.NoticeScope, sysConfig.NoticeTargeting)
 						}
 					case "update":
 						if sysConfig.UpdateActive {
-							BroadcastUpdate(sysConfig.UpdateContent, sysConfig.UpdateUrl, sysConfig.UpdateScope)
+							BroadcastUpdateToAudience(sysConfig.UpdateContent, sysConfig.UpdateUrl, sysConfig.UpdateScope, sysConfig.UpdateTargeting)
 						}
 					}
 				}
@@ -1157,6 +1322,9 @@ func initRouter(r *gin.Engine) {
 						Status:      "pending",
 					}
 					if err := tx.Create(&logEntry).Error; err != nil {
+						return err
+					}
+					if _, err := enqueueClientCommandTx(tx, machineID, command, "admin", 0, logEntry.ID); err != nil {
 						return err
 					}
 
@@ -1432,23 +1600,18 @@ func initRouter(r *gin.Engine) {
 
 				var items []pushStatItem
 
-				// 计算特定 scope 下的目标用户数
-				countScopeUsers := func(scope string) int64 {
-					if scope == "" || scope == "all" {
+				var audience_records []TelemetryRecord
+				db.Select("machine_id", "version", "tags", "is_starred", "is_admin").Find(&audience_records)
+
+				countAudienceUsers := func(targeting AudienceTargeting, legacy_scope string) int64 {
+					if audienceTargetsEveryone(targeting, legacy_scope) {
 						return totalUsers
 					}
 					var count int64
-					query := db.Model(&TelemetryRecord{})
-					switch {
-					case scope == "star":
-						query.Where("is_starred = ?", true).Count(&count)
-					case scope == "admin":
-						query.Where("is_admin = ?", true).Count(&count)
-					case strings.HasPrefix(scope, "tag:"):
-						tagName := strings.TrimPrefix(scope, "tag:")
-						query.Where("tags LIKE ?", "%\""+tagName+"\"%").Count(&count)
-					default:
-						query.Where("version = ?", scope).Count(&count)
+					for _, record := range audience_records {
+						if matchAudienceTargeting(targeting, legacy_scope, record) {
+							count++
+						}
 					}
 					return count
 				}
@@ -1531,9 +1694,11 @@ func initRouter(r *gin.Engine) {
 
 				// Header Banner 轮播
 				if sysConfig.NoticeActive && len(sysConfig.BannerItems) > 0 {
-					hash := computePushContentHash(sysConfig.BannerItems)
-					scope := sysConfig.NoticeScope
-					target := countScopeUsers(scope)
+					hash := computePushContentHash(map[string]any{
+						"items": sysConfig.BannerItems, "scope": sysConfig.NoticeScope, "targeting": sysConfig.NoticeTargeting,
+					})
+					scope := describeAudienceTargeting(sysConfig.NoticeTargeting, sysConfig.NoticeScope)
+					target := countAudienceUsers(sysConfig.NoticeTargeting, sysConfig.NoticeScope)
 					delivered := countDelivered("header_banner", hash)
 					bannerClickFilters := make([]clickFilter, 0, len(sysConfig.BannerItems))
 					for _, banner := range sysConfig.BannerItems {
@@ -1562,9 +1727,11 @@ func initRouter(r *gin.Engine) {
 
 				// 紧急弹窗通知
 				if sysConfig.AlertActive && sysConfig.AlertContent != "" {
-					hash := computePushContentHash(map[string]string{"title": sysConfig.AlertTitle, "content": sysConfig.AlertContent})
-					scope := sysConfig.AlertScope
-					target := countScopeUsers(scope)
+					hash := computePushContentHash(map[string]any{
+						"title": sysConfig.AlertTitle, "content": sysConfig.AlertContent, "scope": sysConfig.AlertScope, "targeting": sysConfig.AlertTargeting,
+					})
+					scope := describeAudienceTargeting(sysConfig.AlertTargeting, sysConfig.AlertScope)
+					target := countAudienceUsers(sysConfig.AlertTargeting, sysConfig.AlertScope)
 					delivered := countDelivered("alert", hash)
 					items = append(items, pushStatItem{
 						PushType: "alert", PushKey: hash,
@@ -1579,9 +1746,11 @@ func initRouter(r *gin.Engine) {
 
 				// 更新提示
 				if sysConfig.UpdateActive && sysConfig.UpdateContent != "" {
-					hash := computePushContentHash(map[string]string{"content": sysConfig.UpdateContent, "url": sysConfig.UpdateUrl})
-					scope := sysConfig.UpdateScope
-					target := countScopeUsers(scope)
+					hash := computePushContentHash(map[string]any{
+						"content": sysConfig.UpdateContent, "url": sysConfig.UpdateUrl, "scope": sysConfig.UpdateScope, "targeting": sysConfig.UpdateTargeting,
+					})
+					scope := describeAudienceTargeting(sysConfig.UpdateTargeting, sysConfig.UpdateScope)
+					target := countAudienceUsers(sysConfig.UpdateTargeting, sysConfig.UpdateScope)
 					delivered := countDelivered("update", hash)
 					items = append(items, pushStatItem{
 						PushType: "update", PushKey: hash,
@@ -1952,6 +2121,7 @@ func initRouter(r *gin.Engine) {
 		}
 
 		initAIRoutes(admin)
+		initFeedbackBanRoutes(admin)
 
 		// 兑换码管理路由
 		initRedeemRoutes(admin)
@@ -2309,6 +2479,43 @@ func initRouter(r *gin.Engine) {
 	// 客户端兑换码提交（使用与 /telemetry 相同的 UA 校验）
 	r.POST("/redeem", handleRedeem)
 
+	// 3.1 客户端命令确认；失败确认保留命令以便后续重投。
+	r.POST("/command-ack", func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
+		var req struct {
+			MachineID string `json:"machine_id"`
+			CommandID string `json:"command_id"`
+			Status    string `json:"status"`
+			Error     string `json:"error"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请求数据格式错误"})
+			return
+		}
+		req.MachineID = strings.TrimSpace(req.MachineID)
+		req.CommandID = strings.TrimSpace(req.CommandID)
+		req.Status = strings.TrimSpace(req.Status)
+		if req.MachineID == "" || req.CommandID == "" || (req.Status != "success" && req.Status != "error") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "machine_id、command_id 和有效 status 为必填"})
+			return
+		}
+		if !ensureClientMachineBinding(c, req.MachineID) {
+			return
+		}
+		if len([]rune(req.Error)) > 500 {
+			req.Error = string([]rune(req.Error)[:500])
+		}
+		if err := acknowledgeClientCommand(req.MachineID, req.CommandID, req.Status, req.Error, time.Now()); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "命令不存在"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "命令确认失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "success"})
+	})
+
 	// 客户端反馈提交（使用与 /telemetry 相同的 UA 校验）
 	r.POST("/feedback", handleFeedback)
 
@@ -2316,6 +2523,9 @@ func initRouter(r *gin.Engine) {
 	r.POST("/notice-reaction", func(c *gin.Context) {
 		if !sysConfig.NoticeReactionEnabled {
 			c.JSON(403, gin.H{"error": "公告表情互动已关闭"})
+			return
+		}
+		if !requireCommunityWriteProtocol(c) {
 			return
 		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
@@ -2333,12 +2543,12 @@ func initRouter(r *gin.Engine) {
 		}
 		req.MachineID = strings.TrimSpace(req.MachineID)
 		req.Emoji = strings.TrimSpace(req.Emoji)
-		if req.NoticeID == 0 || req.Emoji == "" || req.MachineID == "" {
-			c.JSON(400, gin.H{"error": "notice_id、machine_id、emoji 为必填"})
+		if req.NoticeID == 0 || req.MachineID == "" {
+			c.JSON(400, gin.H{"error": "notice_id、machine_id 为必填"})
 			return
 		}
 
-		status := "added"
+		status := "unchanged"
 		if err := db.Transaction(func(tx *gorm.DB) error {
 			var existingReactions []NoticeReaction
 			if err := tx.Select("id", "emoji").
@@ -2355,6 +2565,21 @@ func initRouter(r *gin.Engine) {
 				}
 			}
 
+			if req.Emoji == "" {
+				if len(existingReactions) > 0 {
+					if err := tx.Where("notice_id = ? AND machine_id = ?", req.NoticeID, req.MachineID).
+						Delete(&NoticeReaction{}).Error; err != nil {
+						return err
+					}
+				}
+				status = "removed"
+				return nil
+			}
+			if hasSameEmoji && len(existingReactions) == 1 {
+				status = "added"
+				return nil
+			}
+
 			if len(existingReactions) > 0 {
 				if err := tx.Where("notice_id = ? AND machine_id = ?", req.NoticeID, req.MachineID).
 					Delete(&NoticeReaction{}).Error; err != nil {
@@ -2362,12 +2587,10 @@ func initRouter(r *gin.Engine) {
 				}
 			}
 
-			if hasSameEmoji {
-				status = "removed"
-				return nil
-			}
 			if len(existingReactions) > 0 {
 				status = "replaced"
+			} else {
+				status = "added"
 			}
 
 			return tx.Create(&NoticeReaction{
@@ -2379,7 +2602,7 @@ func initRouter(r *gin.Engine) {
 			c.JSON(500, gin.H{"error": "保存失败"})
 			return
 		}
-		c.JSON(200, gin.H{"status": status})
+		c.JSON(200, gin.H{"status": status, "emoji": req.Emoji})
 	})
 
 	r.GET("/notice-reactions/:notice_id", func(c *gin.Context) {
@@ -2633,36 +2856,27 @@ func initRouter(r *gin.Engine) {
 			return
 		}
 
-		clientConfig := sysConfig
+		clientConfig := filterSystemConfigForAudience(sysConfig, dbRecord)
 
-		if !matchScope(sysConfig.AlertScope, dbRecord) {
-			clientConfig.AlertActive = false
-			clientConfig.AlertTitle = ""
-			clientConfig.AlertContent = ""
-		}
-		if !matchScope(sysConfig.NoticeScope, dbRecord) {
-			clientConfig.NoticeActive = false
-			clientConfig.NoticeContent = ""
-		}
-		if !matchScope(sysConfig.UpdateScope, dbRecord) {
-			clientConfig.UpdateActive = false
-			clientConfig.UpdateContent = ""
-			clientConfig.UpdateUrl = ""
-		}
-		if sysConfig.HeartbeatScope != "" && !matchScope(sysConfig.HeartbeatScope, dbRecord) {
-			clientConfig.HeartbeatInterval = 0
-		}
-
-		pendingCmd := dbRecord.PendingCommand
-		if pendingCmd != "" {
-			// 清空待发送命令及关联日志 ID，同时将日志状态更新为 delivered
-			logID := dbRecord.PendingCommandLogID
-			db.Model(&TelemetryRecord{}).Where("machine_id = ?", record.MachineID).
-				Updates(map[string]interface{}{"pending_command": "", "pending_command_log_id": 0})
-			if logID > 0 {
-				now := time.Now()
-				db.Model(&UserCommandLog{}).Where("id = ? AND status = ?", logID, "pending").
-					Updates(map[string]interface{}{"status": "delivered", "delivered_at": now})
+		pendingCmd := ""
+		commandID := ""
+		if record.CommandProtocol >= 1 {
+			queuedCommand, err := loadPendingClientCommand(record.MachineID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"status": "error"})
+				return
+			}
+			if queuedCommand != nil {
+				pendingCmd = queuedCommand.Payload
+				commandID = queuedCommand.CommandID
+			}
+		} else {
+			pendingCmd = dbRecord.PendingCommand
+			if pendingCmd != "" {
+				if _, err := deliverLegacyPendingCommand(record.MachineID, pendingCmd, dbRecord.PendingCommandLogID); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"status": "error"})
+					return
+				}
 			}
 		}
 
@@ -2670,6 +2884,7 @@ func initRouter(r *gin.Engine) {
 			"status":       "success",
 			"sys_config":   clientConfig,
 			"user_command": pendingCmd,
+			"command_id":   commandID,
 			"user_seq_id":  userSeqID,
 		}
 		clientContentKeys := record.ContentCacheKeys
@@ -2773,7 +2988,9 @@ func initRouter(r *gin.Engine) {
 		go func(machineID string, cfg SystemConfig, adPushKey string, kbPushKey string, noticeKeys []string) {
 			// Header Banner 轮播
 			if cfg.NoticeActive && len(cfg.BannerItems) > 0 {
-				hash := computePushContentHash(cfg.BannerItems)
+				hash := computePushContentHash(map[string]any{
+					"items": cfg.BannerItems, "scope": cfg.NoticeScope, "targeting": cfg.NoticeTargeting,
+				})
 				if hash != "" {
 					db.Exec("INSERT OR IGNORE INTO push_delivery_logs (machine_id, push_type, push_key, delivered_at) VALUES (?, ?, ?, ?)",
 						machineID, "header_banner", hash, time.Now())
@@ -2781,7 +2998,9 @@ func initRouter(r *gin.Engine) {
 			}
 			// 紧急弹窗通知
 			if cfg.AlertActive && cfg.AlertContent != "" {
-				hash := computePushContentHash(map[string]string{"title": cfg.AlertTitle, "content": cfg.AlertContent})
+				hash := computePushContentHash(map[string]any{
+					"title": cfg.AlertTitle, "content": cfg.AlertContent, "scope": cfg.AlertScope, "targeting": cfg.AlertTargeting,
+				})
 				if hash != "" {
 					db.Exec("INSERT OR IGNORE INTO push_delivery_logs (machine_id, push_type, push_key, delivered_at) VALUES (?, ?, ?, ?)",
 						machineID, "alert", hash, time.Now())
@@ -2789,7 +3008,9 @@ func initRouter(r *gin.Engine) {
 			}
 			// 更新提示
 			if cfg.UpdateActive && cfg.UpdateContent != "" {
-				hash := computePushContentHash(map[string]string{"content": cfg.UpdateContent, "url": cfg.UpdateUrl})
+				hash := computePushContentHash(map[string]any{
+					"content": cfg.UpdateContent, "url": cfg.UpdateUrl, "scope": cfg.UpdateScope, "targeting": cfg.UpdateTargeting,
+				})
 				if hash != "" {
 					db.Exec("INSERT OR IGNORE INTO push_delivery_logs (machine_id, push_type, push_key, delivered_at) VALUES (?, ?, ?, ?)",
 						machineID, "update", hash, time.Now())
@@ -2821,8 +3042,8 @@ func initRouter(r *gin.Engine) {
 	// 社区评论客户端路由（公开端点，使用 UA/HMAC 校验）
 	initCommunityClientRoutes(r)
 
-	// 合规审计日志路由（仪表盘内访问，暂不需要认证）
-	initAuditLogRoutes(r)
+	// 合规审计日志路由与仪表盘共用管理员认证。
+	initAuditLogRoutes(authorized.Group("/dashboard"))
 
 	// WebSocket 端点（不需要 Basic Auth，使用自定义认证）
 	r.GET("/ws", HandleWebSocket)
@@ -2841,6 +3062,10 @@ func handleFeedback(c *gin.Context) {
 		return
 	}
 	if !ensureClientMachineBinding(c, fb.MachineID) {
+		return
+	}
+	if isFeedbackUserBanned(fb.MachineID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "问题反馈功能已被限制"})
 		return
 	}
 
@@ -2873,4 +3098,63 @@ func handleFeedback(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"status": "success", "feedback_id": fb.ID})
+}
+
+func initFeedbackBanRoutes(admin *gin.RouterGroup) {
+	admin.GET("/feedback-bans", func(c *gin.Context) {
+		var bans []FeedbackUserBan
+		if err := db.Where("revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", time.Now()).Order("created_at desc").Find(&bans).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "读取反馈封禁失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"bans": bans})
+	})
+	admin.POST("/feedback-bans", func(c *gin.Context) {
+		var req struct {
+			MachineID    string `json:"machine_id"`
+			Reason       string `json:"reason"`
+			DurationDays int    `json:"duration_days"`
+			Permanent    bool   `json:"permanent"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请求数据格式错误"})
+			return
+		}
+		req.MachineID = strings.TrimSpace(req.MachineID)
+		req.Reason = strings.TrimSpace(req.Reason)
+		if req.MachineID == "" || req.Reason == "" || len([]rune(req.Reason)) > 500 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "machine_id 和 1-500 字封禁原因必填"})
+			return
+		}
+		var expiresAt *time.Time
+		if !req.Permanent && req.DurationDays > 0 {
+			if req.DurationDays > 3650 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "封禁天数必须在 1-3650 之间"})
+				return
+			}
+			expires := time.Now().Add(time.Duration(req.DurationDays) * 24 * time.Hour)
+			expiresAt = &expires
+		}
+		ban, err := upsertFeedbackUserBan(req.MachineID, req.Reason, expiresAt)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "封禁保存失败"})
+			return
+		}
+		WriteAuditLogAsync("moderation", "admin", "admin", req.MachineID, ban.ID, "ban_feedback",
+			auditDetail(map[string]interface{}{"reason": req.Reason, "expires_at": expiresAt}), "", c.ClientIP())
+		c.JSON(http.StatusOK, gin.H{"status": "success", "ban": ban})
+	})
+	admin.DELETE("/feedback-bans/:id", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil || id == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的封禁 ID"})
+			return
+		}
+		if err := revokeFeedbackUserBan(uint(id), time.Now()); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "解除封禁失败"})
+			return
+		}
+		WriteAuditLogAsync("moderation", "admin", "admin", "", uint(id), "unban_feedback", "{}", "", c.ClientIP())
+		c.JSON(http.StatusOK, gin.H{"status": "success"})
+	})
 }

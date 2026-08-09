@@ -53,7 +53,7 @@ AimerWT is a comprehensive, all-in-one resource management tool designed specifi
 - ✅ 解决 Wayland 环境下渲染黑屏问题
 - ✅ 支持手动选择路径与语音包管理
 
-> **注意**：Linux 用户请务必查看 [Linux 使用指南](docs/LINUX.md) 以安装必要依赖和配置环境变量。
+> **注意**：Linux 用户需先安装 GTK 3、WebKitGTK 4.1 与对应的 Python GObject 依赖，再安装项目依赖。
 
 ## 快速开始（源码运行）
 

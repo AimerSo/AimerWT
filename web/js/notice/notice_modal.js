@@ -81,7 +81,10 @@
     }
 
     function buildTelemetryHeaders(path, method, machineID, includeJsonContentType) {
-        const headers = { 'X-AimerWT-Client': '1' };
+		const headers = {
+			'X-AimerWT-Client': '1',
+			'X-AimerWT-Community-Protocol': '2'
+		};
         if (includeJsonContentType) headers['Content-Type'] = 'application/json';
 
         if (window.pywebview && window.pywebview.api && window.pywebview.api.get_telemetry_auth_headers) {
@@ -570,8 +573,13 @@
                     window.NoticeClientHelper.getSummaryReactions(noticeId) ||
                     [];
             }
+			var currentEmoji = '';
+			previousReactions.forEach(function (reaction) {
+				if (reaction && reaction.reacted) currentEmoji = String(reaction.emoji || '');
+			});
+			var desiredEmoji = currentEmoji === emoji ? '' : emoji;
             var optimisticReactions = window.NoticeClientHelper && typeof window.NoticeClientHelper.buildOptimisticReactions === 'function'
-                ? window.NoticeClientHelper.buildOptimisticReactions(previousReactions, emoji)
+				? window.NoticeClientHelper.buildOptimisticReactions(previousReactions, desiredEmoji)
                 : previousReactions;
             if (window.NoticeClientHelper && typeof window.NoticeClientHelper.cacheReactions === 'function') {
                 optimisticReactions = window.NoticeClientHelper.cacheReactions(noticeId, optimisticReactions);
@@ -587,19 +595,16 @@
                     return fetch(baseUrl + '/notice-reaction', {
                         method: 'POST',
                         headers: headers,
-                        body: JSON.stringify({ notice_id: Number(noticeId), machine_id: hwid, emoji: emoji })
+						body: JSON.stringify({ notice_id: Number(noticeId), machine_id: hwid, emoji: desiredEmoji })
                     });
                 });
             }, {
-                payload: { notice_id: Number(noticeId), machine_id: hwid, emoji: emoji }
+				payload: { notice_id: Number(noticeId), machine_id: hwid, emoji: desiredEmoji }
             });
         }).then(function() {
             _loadAndRenderReactions(noticeId, { keepCurrentOnFailure: true });
         }).catch(function(err) {
-            var pending = _reactionPendingMap[noticeId];
-            if (pending) {
-                _renderReactionPills(noticeId, pending.previous || []);
-            }
+			_loadAndRenderReactions(noticeId);
             if (window.app && typeof window.app.showToast === 'function') {
                 window.app.showToast((err && err.message) || '提交表情互动失败', 'error');
             }

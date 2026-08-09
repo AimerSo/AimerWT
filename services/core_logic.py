@@ -564,18 +564,46 @@ class CoreService:
                 return {"success": False, "total": 0, "failed": failed_files, "failed_list": failed_list}
 
             # 写入安装清单记录（mod -> 文件名列表）
-            if self.manifest_mgr and total_files > 0:
-                try:
+            if not self.manifest_mgr:
+                return {
+                    "success": False,
+                    "error_code": "manifest_unavailable",
+                    "error": "文件已经复制，但安装记录不可用。请不要重复安装，先重新启动软件。",
+                    "total": total_files,
+                    "failed": failed_files,
+                    "failed_list": failed_list,
+                }
+            try:
+                manifest_saved = bool(
                     self.manifest_mgr.record_installation(source_mod_path.name, installed_files_record)
-                    log.info("已更新安装清单记录")
-                except Exception as e:
-                    log.warning(f"更新清单失败: {e}")
+                )
+            except Exception as e:
+                log.warning(f"更新清单失败: {e}")
+                manifest_saved = False
+            if not manifest_saved:
+                return {
+                    "success": False,
+                    "error_code": "manifest_save_failed",
+                    "error": "文件已经复制，但安装记录保存失败。请不要重复安装，保留当前文件并查看运行日志。",
+                    "total": total_files,
+                    "failed": failed_files,
+                    "failed_list": failed_list,
+                }
+            log.info("已更新安装清单记录")
 
             if progress_callback:
                 progress_callback(95, "更新游戏配置...")
 
             # 3. 更新配置
-            self._update_config_blk()
+            if not self._update_config_blk():
+                return {
+                    "success": False,
+                    "error_code": "config_update_failed",
+                    "error": "语音文件和安装记录已保存，但游戏配置未能启用。请检查 config.blk 是否只读或被游戏占用后重试。",
+                    "total": total_files,
+                    "failed": failed_files,
+                    "failed_list": failed_list,
+                }
 
             if progress_callback:
                 progress_callback(100, "安装完成")
@@ -641,16 +669,34 @@ class CoreService:
                         log.warning(f"删除文件失败 {file_name}: {e}")
                         failed_files.append(file_name)
 
-            # 清理安装记录
-            self.manifest_mgr.remove_mod_record(mod_name)
+            if failed_files:
+                manifest_saved = bool(self.manifest_mgr.update_mod_files(mod_name, failed_files))
+            else:
+                manifest_saved = bool(self.manifest_mgr.remove_mod_record(mod_name))
 
-            log.info(f"[SUCCESS] 卸载完成: {mod_name}，已删除 {removed_count} 个文件")
+            success = not failed_files and manifest_saved
+            if success:
+                log.info(f"[SUCCESS] 卸载完成: {mod_name}，已删除 {removed_count} 个文件")
+            else:
+                log.warning(
+                    "卸载未完全完成: %s，删除 %s 个，失败 %s 个，清单保存=%s",
+                    mod_name,
+                    removed_count,
+                    len(failed_files),
+                    manifest_saved,
+                )
 
             return {
-                "success": True,
-                "msg": f"已卸载 {removed_count} 个文件",
+                "success": success,
+                "partial_success": removed_count > 0 and bool(failed_files),
+                "msg": (
+                    f"已卸载 {removed_count} 个文件"
+                    if success
+                    else "部分文件未能删除，失败文件已保留在安装记录中，请关闭游戏后重试。"
+                ),
                 "removed": removed_count,
-                "failed": failed_files
+                "failed": failed_files,
+                "manifest_saved": manifest_saved,
             }
 
         except (GamePathError, InstallError) as e:
@@ -725,21 +771,27 @@ class CoreService:
             # 更新安装记录
             if remaining_files:
                 # 还有剩余文件，使用 update_mod_files 替换文件列表（不是合并）
-                self.manifest_mgr.update_mod_files(mod_name, remaining_files)
+                manifest_saved = bool(self.manifest_mgr.update_mod_files(mod_name, remaining_files))
                 log.info(f"已更新安装记录，剩余 {len(remaining_files)} 个文件")
             else:
                 # 所有文件都被删除，移除记录
-                self.manifest_mgr.remove_mod_record(mod_name)
+                manifest_saved = bool(self.manifest_mgr.remove_mod_record(mod_name))
                 log.info(f"所有文件已删除，已移除安装记录")
 
             log.info(f"[SUCCESS] 模块卸载完成: {mod_name}，已删除 {removed_count} 个文件")
 
             return {
-                "success": True,
-                "msg": f"已卸载 {removed_count} 个模块文件",
+                "success": not failed_files and manifest_saved,
+                "partial_success": removed_count > 0 and bool(failed_files),
+                "msg": (
+                    f"已卸载 {removed_count} 个模块文件"
+                    if not failed_files and manifest_saved
+                    else "部分模块文件未能删除，失败文件仍保留在安装记录中，请关闭游戏后重试。"
+                ),
                 "removed": removed_count,
                 "remaining": len(remaining_files),
-                "failed": failed_files
+                "failed": failed_files,
+                "manifest_saved": manifest_saved,
             }
 
         except (GamePathError, InstallError) as e:
@@ -750,7 +802,7 @@ class CoreService:
             log.exception("模块卸载异常详情")
             return {"success": False, "msg": f"模块卸载失败: {e}", "removed": 0}
 
-    def restore_game(self) -> bool:
+    def restore_game(self) -> dict:
         """
         将游戏目录恢復为未加载语音包的状态。
 
@@ -760,7 +812,7 @@ class CoreService:
         - 清空安装清单
 
         Returns:
-            是否还原成功
+            包含成功状态、失败文件及清单/配置更新状态的结果
         """
         try:
             log.info("[RESTORE] 正在还原纯淨模式...")
@@ -770,6 +822,7 @@ class CoreService:
 
             mod_dir = self.game_root / "sound" / "mod"
             
+            failed_files = []
             if mod_dir.exists():
                 log.info("[CLEAN] 正在清空 mod 文件夹内容...")
                 # 遍历并删除文件夹内的所有内容，但不删除文件夹本身
@@ -778,32 +831,58 @@ class CoreService:
                         # 删除前进行边界校验，确保删除目标位于 sound/mod 目录内部
                         if not self._is_safe_deletion_path(item):
                             log.warning(f"🚫 [安全拦截] 拒绝删除保护文件: {item}")
+                            failed_files.append(item.name)
                             continue
 
                         self._remove_path(item)
                     except PermissionError as e:
                         log.warning(f"无法删除 {item.name}（权限不足）: {e}")
+                        failed_files.append(item.name)
                     except OSError as e:
                         log.warning(f"无法删除 {item.name}: {e}")
-            
-            # 清空安装清单记录
-            if self.manifest_mgr:
-                try:
-                    self.manifest_mgr.clear_manifest()
-                except Exception as e:
-                    log.warning(f"清空清单失败: {e}")
+                        failed_files.append(item.name)
 
-            self._disable_config_mod()
-            log.info("[SUCCESS] 还原成功！所有 Mod 已清空，配置文件已重置。")
-            return True
+            config_updated = bool(self._disable_config_mod())
+            manifest_updated = False
+            if not failed_files and config_updated:
+                if self.manifest_mgr:
+                    try:
+                        manifest_updated = bool(self.manifest_mgr.clear_manifest())
+                    except Exception as e:
+                        log.warning(f"清空清单失败: {e}")
+                        manifest_updated = False
+                else:
+                    manifest_updated = True
+
+            success = not failed_files and config_updated and manifest_updated
+            if success:
+                log.info("[SUCCESS] 还原成功！所有 Mod 已清空，配置文件已重置。")
+            else:
+                log.warning(
+                    "还原未完全完成: 删除失败=%s, 配置更新=%s, 清单更新=%s",
+                    failed_files,
+                    config_updated,
+                    manifest_updated,
+                )
+            return {
+                "success": success,
+                "msg": (
+                    "官方 Mod 已还原"
+                    if success
+                    else "官方 Mod 还原未完成，失败文件和安装记录仍被保留，请关闭游戏后重试。"
+                ),
+                "failed_files": failed_files,
+                "config_updated": config_updated,
+                "manifest_updated": manifest_updated,
+            }
             
         except GamePathError as e:
             log.error(f"还原失败: {e}")
-            return False
+            return {"success": False, "msg": str(e), "failed_files": []}
         except Exception as e:
             log.error(f"还原失败: {type(e).__name__}: {e}")
             log.exception("还原异常详情")
-            return False
+            return {"success": False, "msg": f"还原失败: {e}", "failed_files": []}
 
     def _update_config_blk(self) -> bool:
         """

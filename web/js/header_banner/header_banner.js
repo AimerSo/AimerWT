@@ -34,6 +34,11 @@
         return div.innerHTML;
     }
 
+    function normalizeBannerColor(value) {
+        var color = String(value || '').trim();
+        return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color) ? color : '';
+    }
+
     function getSortedItems() {
         var priority = { update: 0, announcement: 1, slogan: 2 };
         var sorted = _items.slice();
@@ -74,8 +79,12 @@
             });
         }
 
-        if (item.color) el.style.setProperty('--banner_text_color', item.color);
-        if (item.icon_color) el.style.setProperty('--banner_icon_color', item.icon_color);
+        var textColor = normalizeBannerColor(item.color);
+        var iconColor = normalizeBannerColor(item.icon_color);
+        var backgroundColor = normalizeBannerColor(item.background_color);
+        if (textColor) el.style.setProperty('--banner_text_color', textColor);
+        if (iconColor) el.style.setProperty('--banner_icon_color', iconColor);
+        if (backgroundColor) el.style.setProperty('--banner_background_color', backgroundColor);
 
         var closeBtn = el.querySelector('.header_banner_close');
         if (closeBtn) {
@@ -376,6 +385,66 @@
         refreshDisplay();
     }
 
+    function normalizeRemoteItem(raw) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        var text = String(raw.text || '').trim();
+        if (!text) return null;
+        var type = String(raw.type || 'announcement').trim().toLowerCase();
+        if (type !== 'announcement' && type !== 'slogan') type = 'announcement';
+        var icon = String(raw.icon || (type === 'slogan' ? 'ri-sparkling-2-line' : 'ri-megaphone-line')).trim();
+        if (!/^[A-Za-z0-9 _-]{1,120}$/.test(icon)) icon = 'ri-megaphone-line';
+
+        var rawAction = raw.action && typeof raw.action === 'object' && !Array.isArray(raw.action) ? raw.action : null;
+        var action = null;
+        if (rawAction) {
+            var actionType = String(rawAction.type || '').trim().toLowerCase();
+            var tracking = null;
+            if (rawAction.tracking && typeof rawAction.tracking === 'object') {
+                var trackingType = String(rawAction.tracking.type || '').trim().toLowerCase();
+                var trackingId = String(rawAction.tracking.id || '').trim().substring(0, 64);
+                if ((trackingType === 'activity' || trackingType === 'ad') && trackingId) {
+                    tracking = { type: trackingType, id: trackingId };
+                }
+            }
+            if (actionType === 'url' && rawAction.url) {
+                action = { type: 'url', url: String(rawAction.url) };
+            } else if (actionType === 'alert') {
+                var level = String(rawAction.level || 'info').trim().toLowerCase();
+                if (['info', 'success', 'warning', 'danger'].indexOf(level) < 0) level = 'info';
+                action = {
+                    type: 'alert',
+                    title: String(rawAction.title || '系统公告'),
+                    content: String(rawAction.content || text),
+                    level: level,
+                    url: String(rawAction.url || '')
+                };
+            }
+            if (action && tracking) action.tracking = tracking;
+        }
+
+        return {
+            type: type,
+            icon: icon,
+            text: text,
+            color: normalizeBannerColor(raw.color),
+            icon_color: normalizeBannerColor(raw.icon_color),
+            background_color: normalizeBannerColor(raw.background_color),
+            action: action
+        };
+    }
+
+    function applyRemoteItems(items, intervalMs) {
+        var incoming = Array.isArray(items) ? items : [];
+        _items = _items.filter(function (item) { return item.type === 'update'; });
+        incoming.forEach(function (item) {
+            var normalized = normalizeRemoteItem(item);
+            if (normalized) _items.push(normalized);
+        });
+        setRotateInterval(intervalMs);
+        _currentIndex = 0;
+        refreshDisplay();
+    }
+
     function removeByType(type) {
         _items = _items.filter(function (it) { return it.type !== type; });
     }
@@ -414,6 +483,7 @@
         init: init,
         pushUpdate: pushUpdate,
         pushAnnouncement: pushAnnouncement,
+        applyRemoteItems: applyRemoteItems,
         clearUpdate: clearUpdate,
         clearAnnouncement: clearAnnouncement,
         setPaused: setPaused,

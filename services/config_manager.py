@@ -16,6 +16,11 @@ from pathlib import Path
 import sys
 from utils.logger import get_logger
 from utils.utils import get_docs_data_dir
+from services.resource_path_manager import (
+    build_resource_paths,
+    infer_resource_root_from_legacy_library_dir,
+    update_resource_root_history,
+)
 
 log = get_logger(__name__)
 
@@ -60,6 +65,7 @@ class ConfigManager:
         "game_path": "",
         "launch_mode": "launcher",
         "theme_mode": "Light",
+        "active_theme": "default.json",
         "is_first_run": True,
         "agreement_version": "",
         "current_mod": "",
@@ -74,6 +80,8 @@ class ConfigManager:
         "unlocked_themes": [],
         "sights_path": "",
         "pending_dir": "",
+        "resource_root_dir": "",
+        "resource_root_history": [],
         "library_dir": "",
         "resource_display_names": {},
         "telemetry_enabled": True,
@@ -141,6 +149,7 @@ class ConfigManager:
                 for key in self.DEFAULT_CONFIG:
                     if key in data:
                         self.config[key] = data[key]
+                self._migrate_resource_root_config()
                 log.debug(f"已加载配置文件: {self.config_file}")
                 return True
             else:
@@ -415,6 +424,20 @@ class ConfigManager:
             return False
         return normalized in self.get_uid_popup_state().get("shown_seq_ids", [])
 
+    def _migrate_resource_root_config(self) -> None:
+        """
+        将旧版语音包库路径兼容为资源库根目录。
+        """
+        resource_root_dir = str(self.config.get("resource_root_dir") or "").strip()
+        legacy_library_dir = str(self.config.get("library_dir") or "").strip()
+        if not resource_root_dir:
+            inferred = infer_resource_root_from_legacy_library_dir(legacy_library_dir)
+            if inferred is not None:
+                self.config["resource_root_dir"] = str(inferred)
+                resource_root_dir = str(inferred)
+        if resource_root_dir:
+            self.config["library_dir"] = str(build_resource_paths(resource_root_dir).voice_library_dir)
+
     def mark_uid_popup_shown(self, seq_id) -> bool:
         """记录指定 UID 已经主动展示过欢迎弹窗。"""
         normalized = self._normalize_uid_popup_seq_id(seq_id)
@@ -517,7 +540,7 @@ class ConfigManager:
 
     def set_library_dir(self, path: str) -> bool:
         """
-        更新语音包库目录路径并写入 settings.json。
+        兼容旧版语音包库目录路径写入。
         
         Args:
             path: 语音包库路径
@@ -525,8 +548,52 @@ class ConfigManager:
         Returns:
             bool: 是否成功保存
         """
-        self.config["library_dir"] = str(path) if path else ""
+        path_text = str(path) if path else ""
+        old_root = self.config.get("resource_root_dir", "")
+        self.config["library_dir"] = path_text
+        if not path_text:
+            self.config["resource_root_dir"] = ""
+            self.config["resource_root_history"] = update_resource_root_history(
+                self.config.get("resource_root_history", []),
+                old_root,
+                current_root="",
+            )
+            return self.save_config()
+        inferred = infer_resource_root_from_legacy_library_dir(path_text)
+        if inferred is not None:
+            new_root = str(inferred)
+            self.config["resource_root_dir"] = new_root
+            self.config["resource_root_history"] = update_resource_root_history(
+                self.config.get("resource_root_history", []),
+                old_root,
+                current_root=new_root,
+            )
         return self.save_config()
+
+    def get_resource_root_dir(self) -> str:
+        """读取 AimerWT 资源库根目录路径。"""
+        return self.config.get("resource_root_dir", "")
+
+    def set_resource_root_dir(self, path: str) -> bool:
+        """
+        更新 AimerWT 资源库根目录路径并写入 settings.json。
+        """
+        old_root = self.config.get("resource_root_dir", "")
+        self.config["resource_root_dir"] = str(path) if path else ""
+        self.config["library_dir"] = (
+            str(build_resource_paths(path).voice_library_dir) if path else ""
+        )
+        self.config["resource_root_history"] = update_resource_root_history(
+            self.config.get("resource_root_history", []),
+            old_root,
+            current_root=self.config["resource_root_dir"],
+        )
+        return self.save_config()
+
+    def get_resource_root_history(self) -> list[str]:
+        """读取最近使用过的资源库根目录历史。"""
+        history = self.config.get("resource_root_history", [])
+        return list(history) if isinstance(history, list) else []
 
     def get_telemetry_enabled(self):
         """

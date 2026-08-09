@@ -19,8 +19,8 @@ var sysConfig = SystemConfig{
 	BadgeSystemEnabled:    true,
 	NicknameChangeEnabled: true,
 	AvatarUploadEnabled:   true,
-	NoticeCommentEnabled:  true,
-	NoticeReactionEnabled: true,
+	NoticeCommentEnabled:  false,
+	NoticeReactionEnabled: false,
 	RedeemCodeEnabled:     true,
 	FeedbackEnabled:       true,
 }
@@ -88,18 +88,27 @@ func initDB() {
 		log.Printf("警告: 设置 SQLite busy_timeout 失败: %v", err)
 	}
 	if err := db.AutoMigrate(&TelemetryRecord{}, &ContentConfig{}, &NoticeItem{}, &FeedbackRecord{},
-		&ClientDeviceToken{}, &MachineIDAlias{}, &AIUsageRecord{}, &AIUserBan{}, &AIUserLimit{}, &UserTag{}, &AdClickEvent{},
+		&ClientDeviceToken{}, &ClientDeviceSession{}, &MachineIDAlias{}, &AIUsageRecord{}, &AIUserBan{}, &FeedbackUserBan{}, &AIUserLimit{}, &UserTag{}, &AdClickEvent{},
 		&RemoteTheme{},
-		&RedeemCode{}, &RedeemRecord{}, &NoticeReaction{},
+		&RedeemCode{}, &RedeemRecord{}, &RewardLedger{}, &NoticeReaction{},
 		&NoticeComment{}, &NoticeCommentLike{}, &NoticeCommentBan{}, &CommentReport{},
 		&UserProfile{}, &NicknameRequest{}, &AvatarRequest{}, &AuditLog{},
 		&UserUIDMapping{}, &UserUIDCounter{},
-		&PushDeliveryLog{}, &UserCommandLog{}); err != nil {
+		&PushDeliveryLog{}, &UserCommandLog{}, &ClientCommand{}); err != nil {
 		log.Fatalf("数据库迁移失败: %v", err)
 	}
 
 	if err := migrateUserUIDMappings(); err != nil {
 		log.Fatalf("用户 UID 迁移失败: %v", err)
+	}
+	if err := migrateLegacyClientDeviceTokens(); err != nil {
+		log.Fatalf("设备会话迁移失败: %v", err)
+	}
+	if err := migrateCommunityIdempotencyIndexes(); err != nil {
+		log.Fatalf("社区幂等索引迁移失败: %v", err)
+	}
+	if err := migrateScopedBanIndexes(); err != nil {
+		log.Fatalf("功能封禁索引迁移失败: %v", err)
 	}
 }
 
@@ -112,6 +121,17 @@ func loadDashboard() {
 	} else {
 		log.Printf("成功加载 dashboard 模板，大小: %d 字节", len(dashboardHTML))
 	}
+}
+
+func resolveListenAddress(port string, trustReverseProxy bool) string {
+	port = strings.TrimSpace(port)
+	if port == "" {
+		port = "8080"
+	}
+	if trustReverseProxy {
+		return "127.0.0.1:" + port
+	}
+	return ":" + port
 }
 
 func main() {
@@ -149,7 +169,7 @@ func main() {
 		port = "8080"
 	}
 
-	addr := ":" + port
+	addr := resolveListenAddress(port, envBool("TELEMETRY_TRUST_REVERSE_PROXY"))
 	certFile := strings.TrimSpace(os.Getenv("TLS_CERT_FILE"))
 	keyFile := strings.TrimSpace(os.Getenv("TLS_KEY_FILE"))
 	if certFile != "" && keyFile != "" {

@@ -1,5 +1,8 @@
 // 导入结果展示相关函数
 CustomText.showImportResult = function(result, originalFilePath) {
+    result = result && typeof result === 'object'
+        ? result
+        : { success: false, msg: '导入失败：后端未返回有效结果。' };
     // 解析导入结果
     const success = result.success || false;
     const mappingInfo = result.mapping_info || result.details || [];
@@ -57,7 +60,7 @@ CustomText.showImportResult = function(result, originalFilePath) {
     } else if (unrecognizedCount > 0) {
         iconClass = 'warning';
         iconSymbol = '⚠';
-        titleText = '导入完成（含无法识别的文件）';
+        titleText = '导入完成（含自定义文件）';
     }
 
     // 构建HTML
@@ -72,7 +75,7 @@ CustomText.showImportResult = function(result, originalFilePath) {
         <div class="import-result-body">
             ${CustomText.renderImportSummary(result, importedCount, unrecognizedCount)}
             ${CustomText.renderImportSection('成功导入', successItems, 'success')}
-            ${CustomText.renderImportSection('无法识别（已导入）', warningItems, 'warning')}
+            ${CustomText.renderImportSection('自定义文件（已导入并启用）', warningItems, 'warning')}
             ${CustomText.renderImportSection('导入失败', errorItems, 'error')}
             ${unrecognizedCount > 0 ? CustomText.renderUnrecognizedFilesSection(unrecognizedFiles) : ''}
         </div>
@@ -102,8 +105,8 @@ CustomText.renderUnrecognizedFilesSection = function(unrecognizedFiles) {
             <div class="manual-import-warning">
                 <div class="manual-import-warning-icon">!</div>
                 <div class="manual-import-warning-text">
-                    <strong>是否保留这些文件？</strong><br>
-                    以下文件无法自动识别，但已以<strong>原文件名</strong>导入到 <code>lang/aimerWT/</code> 目录。<br>
+                    <strong>是否保留这些自定义文件？</strong><br>
+                    以下文件未匹配标准名称，已以<strong>原文件名</strong>导入、启用并写入 <code>lang/aimerWT/</code>。<br>
                     如果您确定这些文件有效，请保留；否则可以选择删除。
                 </div>
             </div>
@@ -124,6 +127,12 @@ CustomText.renderUnrecognizedFilesSection = function(unrecognizedFiles) {
 };
 
 CustomText.deleteUnrecognizedFiles = async function(buttonElement) {
+    if (CustomText._busy) return;
+    if (!window.pywebview?.api?.delete_custom_text_files) {
+        app.showAlert('错误', '后端删除接口不可用', 'error');
+        return;
+    }
+
     const modal = buttonElement.closest('.import-result-modal');
     const checkboxes = modal.querySelectorAll('.unrecognized-file-checkbox:checked');
     const selectedFiles = Array.from(checkboxes).map(cb => cb.value);
@@ -132,26 +141,34 @@ CustomText.deleteUnrecognizedFiles = async function(buttonElement) {
         app.showAlert('提示', '未选择任何文件', 'warn');
         return;
     }
+    if (!await CustomText.confirmDiscardChanges('删除自定义文件')) return;
 
-    // 确认删除
-    if (!confirm(`确定要删除 ${selectedFiles.length} 个文件吗？\n\n${selectedFiles.join('\n')}`)) {
-        return;
-    }
+    const fileList = selectedFiles.map(CustomText.escapeHtml).join('<br>');
+    const confirmed = await app.showConfirmDialog(
+        '确认删除自定义文件',
+        `将删除 ${selectedFiles.length} 个文件：<br><br>${fileList}`
+    );
+    if (!confirmed) return;
 
+    CustomText.setBusy(true);
+    buttonElement.disabled = true;
     try {
         const res = await pywebview.api.delete_custom_text_files({
             file_names: selectedFiles
         });
 
         if (res && res.success) {
+            CustomText.dirtyEntries.clear();
             app.showAlert('成功', res.msg || '删除成功', 'success');
-            // 关闭对话框并刷新
             buttonElement.closest('.import-result-overlay').remove();
-            CustomText.loadData();
+            await CustomText.loadData();
         } else {
-            app.showAlert('错误', res.msg || '删除失败', 'error');
+            app.showAlert('错误', (res && res.msg) ? res.msg : '删除失败', 'error');
         }
     } catch (e) {
         app.showAlert('错误', `删除失败: ${e.message || e}`, 'error');
+    } finally {
+        CustomText.setBusy(false);
+        if (buttonElement.isConnected) buttonElement.disabled = false;
     }
 };

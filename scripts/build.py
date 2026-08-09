@@ -14,9 +14,9 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-EXE_DISPLAY_NAME = "AimerWT V3 Beta"
-APP_VERSION = "3.0.1"
-APP_VERSION_TUPLE = (3, 0, 1, 0)
+EXE_DISPLAY_NAME = "AimerWT V3.1 Beta"
+APP_VERSION = "3.1.0"
+APP_VERSION_TUPLE = (3, 1, 0, 0)
 
 
 REQUIRED_BUILD_ENV_VARS = (
@@ -33,6 +33,10 @@ REQUIRED_UNTRACKED_THEME_FILES = (
     "wuye_fuyin.json",
     "zqrx_mifuyu.json",
     "supporter.json",
+)
+
+REQUIRED_UNTRACKED_WEB_FILES = (
+    "components/ResourceLibraryLoading.js",
 )
 
 
@@ -59,7 +63,7 @@ def clean_build_artifacts():
             log.warning(f"   ! 删除 build 文件夹失败: {e}")
 
     # 删除 spec 文件
-    for spec_name in ('WT_Aimer_Voice.spec', 'AimerWT V3 Beta.spec'):
+    for spec_name in ('WT_Aimer_Voice.spec', 'AimerWT V3 Beta.spec', 'AimerWT V3.1 Beta.spec'):
         spec_path = PROJECT_ROOT / spec_name
         if spec_path.exists():
             try:
@@ -115,6 +119,17 @@ def _copy_untracked_build_assets(web_pack_dir: Path) -> int:
     themes_dst.mkdir(parents=True, exist_ok=True)
 
     copied = 0
+    for relative_path in REQUIRED_UNTRACKED_WEB_FILES:
+        source = PROJECT_ROOT / "web" / relative_path
+        if not source.is_file():
+            log.warning(f"   - 分发版必需文件缺失: {relative_path}")
+            continue
+        destination = web_pack_dir / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            shutil.copy2(source, destination)
+            copied += 1
+
     for filename in REQUIRED_UNTRACKED_THEME_FILES:
         source = themes_src / filename
         if not source.is_file():

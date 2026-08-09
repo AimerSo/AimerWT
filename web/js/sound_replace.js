@@ -35,6 +35,16 @@
         }
     }
 
+    function getSoundStateErrorMessage(result, fallbackKey) {
+        if (result?.error_code === 'manifest_corrupt') {
+            return t('sound_replace.manifest_corrupt_help');
+        }
+        if (result?.error_code === 'pending_conflict') {
+            return t('sound_replace.pending_conflict_help');
+        }
+        return result?.error || result?.msg || t(fallbackKey);
+    }
+
     function closeDynamicModal(modalId) {
         const modal = document.getElementById(modalId);
         if (!modal) return;
@@ -204,7 +214,11 @@
             return;
         }
         if (!preview?.success) {
-            app.showAlert(t('common.error'), preview?.msg || t('sound_replace.preview_failed'), 'error');
+            app.showAlert(
+                t('common.error'),
+                getSoundStateErrorMessage(preview, 'sound_replace.preview_failed'),
+                'error'
+            );
             return;
         }
         if (!preview.installable_count) {
@@ -304,7 +318,7 @@
         const result = await api.install_sound_replace(app.currentModId, JSON.stringify(allFiles || []), skipBackup);
         if (!result?.success) {
             if (typeof MinimalistLoading !== 'undefined') MinimalistLoading.hide();
-            notify('error', t('common.error'), result?.msg || t('sound_replace.install_start_failed'));
+            notify('error', t('common.error'), getSoundStateErrorMessage(result, 'sound_replace.install_start_failed'));
             return;
         }
         app.closeModal('modal-install');
@@ -371,7 +385,7 @@
             notify('info', t('common.success'), t('sound_replace.install_success', { count: result.replaced || 0 }));
             return;
         }
-        notify('error', t('common.error'), result?.error || result?.msg || t('sound_replace.install_failed'));
+        notify('error', t('common.error'), getSoundStateErrorMessage(result, 'sound_replace.install_failed'));
     };
 
     app.showRestoreModeDialog = async function () {
@@ -425,10 +439,46 @@
     };
 
     app.onSoundRestoreResult = async function (result) {
+        if (result?.error_code === 'manifest_corrupt' || result?.error_code === 'pending_conflict') {
+            notify('error', t('common.error'), getSoundStateErrorMessage(result, 'sound_replace.restore_failed'));
+            return;
+        }
         const restored = result?.restored || 0;
         const skipped = result?.skipped || 0;
         const skippedFiles = Array.isArray(result?.skipped_files) ? result.skipped_files : [];
+        const staleReasons = new Set(['target_changed_externally', 'target_missing', 'backup_missing']);
+        const staleSkippedCount = skippedFiles.filter((item) => staleReasons.has(item?.reason)).length;
         const backupSkippedCount = skippedFiles.filter((item) => item?.reason === 'backup_skipped').length;
+        if (staleSkippedCount > 0) {
+            notify('warn', t('common.warn'), t('sound_replace.restore_stale_skipped', {
+                restored,
+                skipped: staleSkippedCount,
+            }));
+            const api = window.pywebview?.api;
+            if (api?.clear_sound_replace_stale_records && typeof app.confirm === 'function') {
+                const shouldClear = await app.confirm(
+                    t('sound_replace.clear_stale_title'),
+                    t('sound_replace.clear_stale_confirm'),
+                    true
+                );
+                if (shouldClear) {
+                    try {
+                        const clearResult = await api.clear_sound_replace_stale_records(true, true);
+                        if (clearResult?.success) {
+                            notify('info', t('common.success'), t('sound_replace.clear_stale_success', {
+                                count: clearResult.cleared || 0,
+                                backups: clearResult.removed_backups || 0,
+                            }));
+                        } else {
+                            notify('error', t('common.error'), clearResult?.msg || t('sound_replace.clear_stale_failed'));
+                        }
+                    } catch (error) {
+                        notify('error', t('common.error'), t('common.call_failed', { message: error?.message || error }));
+                    }
+                }
+            }
+            return;
+        }
         if (backupSkippedCount > 0) {
             notify('warn', t('common.warn'), t('sound_replace.restore_backup_skipped', {
                 restored,

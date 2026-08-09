@@ -187,11 +187,9 @@
     function buildOptimisticReactions(reactions, emoji) {
         var next = cloneReactions(reactions);
         var currentReactedIndex = -1;
-        var targetIndex = -1;
 
         next.forEach(function (reaction, index) {
             if (reaction && reaction.reacted) currentReactedIndex = index;
-            if (reaction && reaction.emoji === emoji) targetIndex = index;
         });
 
         if (currentReactedIndex !== -1) {
@@ -200,11 +198,14 @@
             currentReaction.count = Math.max(0, Number(currentReaction.count || 0) - 1);
             if (currentReaction.count <= 0) {
                 next.splice(currentReactedIndex, 1);
-                if (targetIndex > currentReactedIndex) targetIndex -= 1;
-                if (targetIndex === currentReactedIndex) targetIndex = -1;
             }
-            if (currentReaction.emoji === emoji) return next;
         }
+		if (!emoji) return next;
+
+		var targetIndex = -1;
+		next.forEach(function (reaction, index) {
+			if (reaction && reaction.emoji === emoji) targetIndex = index;
+		});
 
         if (targetIndex === -1) {
             next.push({

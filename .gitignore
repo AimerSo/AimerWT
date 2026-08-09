@@ -148,8 +148,62 @@ AimerWT_Telemetry/telemetry_test_build
 
 # Git 开发辅助文件（本地生成，不上传）
 git_diff.txt
+.worktrees/
+
+# Codex 本地 Go 构建缓存与临时产物
+AimerWT_Telemetry/.codex_go_cache/
+AimerWT_Telemetry/.codex_go_tmp/
+AimerWT_Telemetry/telemetry_linux_amd64
 
 # 打包版本资源文件（含内部版本命名，不上传）
 scripts/version_info.txt
 # 打包启动器（本地运行脚本，不上传）
 scripts/run_build.py
+
+# 正式仓库仅保留运行、构建与发布所需源码
+/docs/
+/tests/
+**/*_test.go
+**/test_*.py
+**/*_test.py
+**/*_test.js
+**/*.test.js
+**/*_test.mjs
+**/*.test.mjs
+
+# 本地调试、基准测试与一次性处理脚本
+/scripts/create_debug_sight_package.py
+/scripts/sights_external_scan_benchmark.py
+/scripts/sights_repository_benchmark.py
+/diff.txt
+/replace2.py
+/scale_css.py
+
+# 作者端运行工作区、导出包与构建产物
+/作者端v1/AimerWT作者端/
+/作者端v1/发布包/
+
+# Codex、Trae 与本地开发工作目录
+/.codex/
+/.trae/
+/.trae-html-share-packages/
+/.codex_tmp/
+AimerWT_Telemetry/.codex_*/
+/cache/
+/codex-worktrees/
+/.test_tmp/
+/_theme_design_v2_src/
+/theme_design_v2_patchsrc/
+/theme_design_v2_patchsrc_v201/
+
+# 本地审核、简报与可视化产物
+/aimerwt_audit_report/
+/aimerwt_capability_control_briefing/
+/aimerwt_theme_v2_red_team_audit/
+/sight_rules_briefing/
+/sights_backend_review/
+/telemetry_audit_review/
+/telemetry_design_review/
+/telemetry_review_product_summary/
+/wt-stats-product-brief/
+/sight_pack_review_report.html

@@ -26,8 +26,23 @@ const AIChatSettings = {
      */
     init(chat) {
         this._chat = chat;
+        this._ensureApiKeyStorageWarning();
         this._initDropdowns();
         this._bindSettingsEvents();
+    },
+
+    _ensureApiKeyStorageWarning() {
+        if (document.getElementById('ai-key-storage-warning')) return;
+
+        const keyInput = document.getElementById('ai-setting-key');
+        const settingItem = keyInput?.closest('.ai-chat-setting-item');
+        if (!settingItem) return;
+
+        const warning = document.createElement('div');
+        warning.id = 'ai-key-storage-warning';
+        warning.className = 'ai-setting-storage-warning';
+        warning.textContent = '密钥会保存在本机浏览器数据中，并非系统级加密。请使用低权限、有限额、可随时撤销的独立 Key。';
+        settingItem.appendChild(warning);
     },
 
     // 初始化自定义下拉菜单

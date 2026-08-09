@@ -1,5 +1,5 @@
 (function () {
-    const GUIDE_STATE_KEY = "aimerwt_author_guide_state_v2";
+    const GUIDE_STATE_KEY = "aimerwt_author_guide_state_v3";
     const AUTO_START_DELAY_MS = 360;
     const CARD_MAX_WIDTH = 358;
     const STEP_FADE_OUT_MS = 220;
@@ -30,7 +30,7 @@
             beforeShow(app) {
                 if (app && typeof app.switchPage === "function") app.switchPage("voicepack");
             },
-            title: "可以]直接打开语音包目录",
+            title: "可以直接打开语音包目录",
             description: "点击“打开目录”可以打开存放语音包的文件夹，下方列表会显示该目录中的语音包。",
             detail: "先确认语音包文件夹位置，再进入信息编辑会更顺。"
         },
@@ -75,6 +75,35 @@
             position: { mode: "left", arrow: "right", offsetY: -28 }
         },
         {
+            target: "#page-sightinfo .sightinfo-project-bar",
+            beforeShow(app) {
+                if (app && typeof app.switchPage === "function") app.switchPage("sightinfo");
+            },
+            title: "炮镜信息：先建立独立作者项目",
+            description: "可新建空项目，也可导入现有炮镜文件夹或 ZIP。项目区提供保存、兼容性检查和标准 ZIP 导出，不会直接修改游戏 UserSights。",
+            detail: "先完成导入与扫描，再编辑发布信息；导出前必须先保存并通过兼容性检查。",
+            position: { mode: "below", arrow: "up", offsetY: 8 }
+        },
+        {
+            target: "#page-sightinfo .sightinfo-workspace",
+            beforeShow(app) {
+                if (app && typeof app.switchPage === "function") app.switchPage("sightinfo");
+            },
+            title: "中间区域：文件映射与发布信息",
+            description: "左侧选择项目和真实 BLK，中间依次维护基本信息、文件输出路径、展示分组、封面链接以及最终预览。",
+            detail: "文件输出路径决定 ZIP 内部结构；一个真实 BLK 首版只能归属一个主分组。",
+            position: { mode: "right", arrow: "left", align: "top", offsetY: 10, pointerTop: 28 }
+        },
+        {
+            target: "#page-sightinfo .sightinfo-inspector",
+            beforeShow(app) {
+                if (app && typeof app.switchPage === "function") app.switchPage("sightinfo");
+            },
+            title: "右侧检查：以导出报告为准",
+            description: "这里显示真实 BLK 数量、推断安装结构、文件分析结果和阻断问题。只有已保存且最新检查通过的项目才能导出。",
+            detail: "单炮镜同样导出 ZIP；“单个/炮镜包”由真实 BLK 数量自动判断，不靠作者手填。",
+            position: { mode: "left", arrow: "right", offsetY: -20 }
+        },        {
             target: "#btn-guide-help",
             title: "最后：问号按钮可重新开启教程",
             description: "点击顶部问号按钮即可重新打开教程，不影响你已填写的数据。",
@@ -86,8 +115,8 @@
                 if (app && typeof app.switchPage === "function") app.switchPage("home");
             },
             title: "现在回到主页开始填写基础信息",
-            description: "接下来开始编辑个人信息吧！从个人主页先填写昵称、头像和常用链接，再继续编辑语音包会更高效。",
-            detail: "基础信息建议先完善，后续多个语音包都能复用。"
+            description: "接下来开始编辑个人信息吧！先填写昵称、头像和常用链接，再继续维护语音包或炮镜项目会更高效。",
+            detail: "基础信息建议先完善，后续多个作者项目都能复用。"
         }
     ];
 

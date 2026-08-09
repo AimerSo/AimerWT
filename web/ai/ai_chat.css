@@ -200,6 +200,13 @@
     padding-right: 40px;
 }
 
+.ai-setting-storage-warning {
+    margin-top: 6px;
+    color: #b45309;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
 /* 显示/隐藏切换按钮 */
 .ai-chat-input-toggle {
     position: absolute;

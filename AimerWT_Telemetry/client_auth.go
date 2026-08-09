@@ -15,14 +15,18 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 var clientAuthSecret = strings.TrimSpace(os.Getenv("TELEMETRY_CLIENT_SECRET"))
 
 const (
-	clientAuthClockSkew   = 5 * time.Minute
-	clientDeviceTokenSize = 32
+	clientAuthClockSkew       = 5 * time.Minute
+	clientDeviceTokenSize     = 32
+	clientDeviceSessionTTL    = 90 * 24 * time.Hour
+	clientDeviceSessionMax    = 8
+	clientSessionTouchMinimum = 12 * time.Hour
 )
 
 const clientDeviceTokenHeader = "X-AimerWT-Device-Token"
@@ -110,6 +114,10 @@ func maskMachineID(machineID string) string {
 }
 
 func lookupClientDeviceTokenByToken(token string) (ClientDeviceToken, error) {
+	var session ClientDeviceSession
+	if err := db.Where("token_hash = ? AND expires_at > ?", hashClientDeviceToken(token), time.Now()).First(&session).Error; err == nil {
+		return ClientDeviceToken{MachineID: session.MachineID, TokenHash: session.TokenHash}, nil
+	}
 	var record ClientDeviceToken
 	err := db.Where("token_hash = ?", hashClientDeviceToken(token)).First(&record).Error
 	return record, err
@@ -134,24 +142,42 @@ func issueClientDeviceToken(machineID string) (string, error) {
 		return "", err
 	}
 
-	record := ClientDeviceToken{
+	now := time.Now()
+	session := ClientDeviceSession{
 		MachineID:  normalizedMachineID,
 		TokenHash:  hashClientDeviceToken(token),
-		LastIssued: time.Now(),
+		ExpiresAt:  now.Add(clientDeviceSessionTTL),
+		LastSeenAt: now,
 	}
-
-	// Upsert：machine_id 已有记录时更新 token_hash 和 last_issued，
-	// 避免唯一索引冲突导致签发失败。
-	if err := db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "machine_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"token_hash", "last_issued"}),
-	}).Create(&record).Error; err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&session).Error; err != nil {
+			return err
+		}
+		var staleIDs []uint
+		if err := tx.Model(&ClientDeviceSession{}).
+			Where("machine_id = ?", normalizedMachineID).
+			Order("created_at DESC, id DESC").
+			Offset(clientDeviceSessionMax).
+			Pluck("id", &staleIDs).Error; err != nil {
+			return err
+		}
+		if len(staleIDs) > 0 {
+			return tx.Where("id IN ?", staleIDs).Delete(&ClientDeviceSession{}).Error
+		}
+		return nil
+	}); err != nil {
 		return "", err
 	}
 	return token, nil
 }
 
 func hasClientDeviceToken(machineID string) bool {
+	var count int64
+	if err := db.Model(&ClientDeviceSession{}).
+		Where("machine_id = ? AND expires_at > ?", strings.TrimSpace(machineID), time.Now()).
+		Count(&count).Error; err == nil && count > 0 {
+		return true
+	}
 	_, err := lookupClientDeviceToken(machineID)
 	return err == nil
 }
@@ -161,14 +187,46 @@ func verifyClientDeviceToken(machineID, token string) bool {
 		return false
 	}
 
-	record, err := lookupClientDeviceToken(machineID)
-	if err != nil {
-		return false
+	provided := hashClientDeviceToken(token)
+	var session ClientDeviceSession
+	if err := db.Where("machine_id = ? AND token_hash = ? AND expires_at > ?", strings.TrimSpace(machineID), provided, time.Now()).First(&session).Error; err == nil {
+		if time.Since(session.LastSeenAt) >= clientSessionTouchMinimum {
+			db.Model(&session).Update("last_seen_at", time.Now())
+		}
+		return true
 	}
 
-	expected := record.TokenHash
-	provided := hashClientDeviceToken(token)
-	return hmac.Equal([]byte(provided), []byte(expected))
+	record, err := lookupClientDeviceToken(machineID)
+	return err == nil && hmac.Equal([]byte(provided), []byte(record.TokenHash))
+}
+
+func migrateLegacyClientDeviceTokens() error {
+	var legacyTokens []ClientDeviceToken
+	if err := db.Find(&legacyTokens).Error; err != nil {
+		return err
+	}
+	now := time.Now()
+	return db.Transaction(func(tx *gorm.DB) error {
+		for _, legacy := range legacyTokens {
+			if strings.TrimSpace(legacy.MachineID) == "" || strings.TrimSpace(legacy.TokenHash) == "" {
+				continue
+			}
+			session := ClientDeviceSession{
+				MachineID:  strings.TrimSpace(legacy.MachineID),
+				TokenHash:  strings.TrimSpace(legacy.TokenHash),
+				ExpiresAt:  now.Add(clientDeviceSessionTTL),
+				LastSeenAt: now,
+				CreatedAt:  legacy.CreatedAt,
+			}
+			if session.CreatedAt.IsZero() {
+				session.CreatedAt = now
+			}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&session).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func ensureClientDeviceToken(c *gin.Context, machineID string, allowBootstrap bool) bool {

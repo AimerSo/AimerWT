@@ -23,12 +23,9 @@ from pathlib import Path
 from utils.logger import get_logger
 from utils.utils import get_app_data_dir
 from services.resource_index_cache import ResourceIndexCache
+from services.resource_path_manager import DIR_HANGAR_LIBRARY
 
 log = get_logger(__name__)
-
-# 定义标准文件夹名称
-DIR_RESOURCE_ROOT = "AimerWT资源库"
-DIR_HANGAR_LIBRARY = f"{DIR_RESOURCE_ROOT}/WT机库"
 
 # 封面文件名
 COVER_FILENAME = "cover.png"
@@ -236,6 +233,8 @@ class HangarManager:
                         "size_bytes": self._get_dir_size_fast(entry),
                         "cover_url": cover_url,
                         "cover_is_default": not bool(cover_url),
+                        "cover_type": "custom" if cover_url else "default",
+                        "cover_pending": False,
                         "date": self._get_dir_mtime(entry),
                     }
                 else:
@@ -243,6 +242,10 @@ class HangarManager:
                     item["enabled_name"] = enabled_name
                     item["disabled"] = is_disabled
                     item["path"] = str(entry)
+                    if "cover_is_default" not in item:
+                        item["cover_is_default"] = not bool(item.get("cover_url"))
+                    item["cover_type"] = "custom" if item.get("cover_url") else "default"
+                    item["cover_pending"] = False
 
                 items.append(item)
                 next_records[entry.name] = self._index_cache.make_record(signature, item)

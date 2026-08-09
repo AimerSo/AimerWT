@@ -13,15 +13,222 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 
+class SoundStateError(RuntimeError):
+    def __init__(self, error_code: str, message: str):
+        super().__init__(message)
+        self.error_code = error_code
+
+
 class SoundReplaceService:
     MANIFEST_VERSION = 1
     MAX_LOGS = 10
+    STALE_CLEAR_REASONS = {"target_changed_externally", "target_missing", "backup_missing"}
 
     def __init__(self, backup_root: str | Path):
         self.backup_root = Path(backup_root)
 
     def set_backup_root(self, backup_root: str | Path):
         self.backup_root = Path(backup_root)
+
+    def migrate_backup_root(
+        self,
+        new_backup_root: str | Path,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> dict:
+        source_root = self.backup_root.resolve(strict=False)
+        target_root = Path(new_backup_root).resolve(strict=False)
+
+        def _progress(value: int, message: str):
+            if not progress_callback:
+                return
+            try:
+                progress_callback(value, message)
+            except Exception:
+                log.debug("推送 Sound 备份迁移进度失败", exc_info=True)
+
+        if os.path.normcase(str(source_root)) == os.path.normcase(str(target_root)):
+            return {
+                "success": True,
+                "migrated": False,
+                "old_backup_retained": True,
+                "source_root": str(source_root),
+                "target_root": str(target_root),
+            }
+
+        try:
+            common_root = Path(os.path.commonpath([source_root, target_root]))
+        except ValueError:
+            common_root = None
+        if common_root in {source_root, target_root}:
+            return {
+                "success": False,
+                "error_code": "backup_migration_path_overlap",
+                "msg": "新旧 Sound 备份目录不能互相包含，请选择旧资源库之外的新位置。",
+                "source_root": str(source_root),
+                "target_root": str(target_root),
+            }
+
+        _progress(5, "正在检查 Sound 原始文件备份...")
+        if not source_root.is_dir():
+            return {
+                "success": True,
+                "migrated": False,
+                "old_backup_retained": True,
+                "source_root": str(source_root),
+                "target_root": str(target_root),
+            }
+
+        source_files = sorted(
+            (path for path in source_root.rglob("*") if path.is_file()),
+            key=lambda path: path.relative_to(source_root).as_posix().casefold(),
+        )
+        if not source_files:
+            return {
+                "success": True,
+                "migrated": False,
+                "old_backup_retained": True,
+                "source_root": str(source_root),
+                "target_root": str(target_root),
+            }
+
+        total_bytes = sum(path.stat().st_size for path in source_files)
+        target_root.parent.mkdir(parents=True, exist_ok=True)
+        if target_root.exists():
+            try:
+                if not target_root.is_dir():
+                    raise OSError("目标路径不是目录")
+                target_files = sorted(
+                    (path for path in target_root.rglob("*") if path.is_file()),
+                    key=lambda path: path.relative_to(target_root).as_posix().casefold(),
+                )
+                if target_files:
+                    source_by_rel = {
+                        path.relative_to(source_root).as_posix().casefold(): path
+                        for path in source_files
+                    }
+                    target_by_rel = {
+                        path.relative_to(target_root).as_posix().casefold(): path
+                        for path in target_files
+                    }
+                    if source_by_rel.keys() != target_by_rel.keys():
+                        return {
+                            "success": False,
+                            "error_code": "backup_migration_target_not_empty",
+                            "msg": "新资源库中已经存在不同的 Sound 备份。为避免覆盖，请选择一个空的资源库位置。",
+                            "source_root": str(source_root),
+                            "target_root": str(target_root),
+                        }
+                    _progress(70, "检测到已复制的 Sound 备份，正在重新校验...")
+                    for index, relative_path in enumerate(source_by_rel, start=1):
+                        source_file = source_by_rel[relative_path]
+                        target_file = target_by_rel[relative_path]
+                        if source_file.stat().st_size != target_file.stat().st_size:
+                            break
+                        if self._sha256(source_file) != self._sha256(target_file):
+                            break
+                        _progress(
+                            70 + int(index / len(source_by_rel) * 30),
+                            f"正在校验 Sound 备份：{source_file.name}",
+                        )
+                    else:
+                        return {
+                            "success": True,
+                            "migrated": True,
+                            "verified_existing": True,
+                            "old_backup_retained": True,
+                            "file_count": len(source_files),
+                            "total_bytes": total_bytes,
+                            "source_root": str(source_root),
+                            "target_root": str(target_root),
+                        }
+                    return {
+                        "success": False,
+                        "error_code": "backup_migration_target_not_empty",
+                        "msg": "新资源库中的 Sound 备份与旧备份不一致。为保护原始文件，软件没有切换位置。",
+                        "source_root": str(source_root),
+                        "target_root": str(target_root),
+                    }
+                target_root.rmdir()
+            except OSError as e:
+                return {
+                    "success": False,
+                    "error_code": "backup_migration_target_unavailable",
+                    "msg": f"新资源库的 Sound 备份目录无法使用：{e}",
+                    "source_root": str(source_root),
+                    "target_root": str(target_root),
+                }
+
+        try:
+            free_bytes = shutil.disk_usage(target_root.parent).free
+        except OSError as e:
+            return {
+                "success": False,
+                "error_code": "backup_migration_space_check_failed",
+                "msg": f"无法检查新资源库的剩余空间：{e}",
+                "source_root": str(source_root),
+                "target_root": str(target_root),
+            }
+        if free_bytes < total_bytes:
+            return {
+                "success": False,
+                "error_code": "backup_migration_insufficient_space",
+                "msg": "新资源库剩余空间不足，Sound 原始文件备份尚未迁移，当前路径保持不变。",
+                "required_bytes": total_bytes,
+                "free_bytes": free_bytes,
+                "source_root": str(source_root),
+                "target_root": str(target_root),
+            }
+
+        stage_root = target_root.parent / (
+            f".{target_root.name}.aimerwt_migrating_{os.getpid()}_{time.time_ns()}"
+        )
+        try:
+            stage_root.mkdir(parents=False, exist_ok=False)
+            for index, source_file in enumerate(source_files, start=1):
+                relative_path = source_file.relative_to(source_root)
+                stage_file = stage_root / relative_path
+                stage_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_file, stage_file)
+                progress = 10 + int(index / len(source_files) * 55)
+                _progress(progress, f"正在复制 Sound 备份：{relative_path.name}")
+
+            _progress(70, "Sound 备份复制完成，正在逐项校验...")
+            for index, source_file in enumerate(source_files, start=1):
+                relative_path = source_file.relative_to(source_root)
+                stage_file = stage_root / relative_path
+                if not stage_file.is_file():
+                    raise OSError(f"迁移后缺少文件：{relative_path}")
+                if source_file.stat().st_size != stage_file.stat().st_size:
+                    raise OSError(f"迁移后文件大小不一致：{relative_path}")
+                if self._sha256(source_file) != self._sha256(stage_file):
+                    raise OSError(f"迁移后文件校验失败：{relative_path}")
+                progress = 70 + int(index / len(source_files) * 25)
+                _progress(progress, f"正在校验 Sound 备份：{relative_path.name}")
+
+            os.replace(stage_root, target_root)
+            _progress(100, "Sound 原始文件备份已安全迁移并完成校验")
+            return {
+                "success": True,
+                "migrated": True,
+                "old_backup_retained": True,
+                "file_count": len(source_files),
+                "total_bytes": total_bytes,
+                "source_root": str(source_root),
+                "target_root": str(target_root),
+            }
+        except Exception as e:
+            try:
+                if stage_root.is_dir() and stage_root.parent == target_root.parent:
+                    shutil.rmtree(stage_root)
+            except OSError:
+                log.warning("清理 Sound 备份迁移暂存目录失败: %s", stage_root, exc_info=True)
+            return {
+                "success": False,
+                "error_code": "backup_migration_failed",
+                "msg": f"Sound 备份迁移失败，旧备份和当前资源库位置均未改变：{e}",
+                "source_root": str(source_root),
+                "target_root": str(target_root),
+            }
 
     def _game_path_hash(self, game_root: str | Path) -> str:
         normalized = str(Path(game_root).resolve(strict=False)).replace("\\", "/").lower()
@@ -115,14 +322,160 @@ class SoundReplaceService:
         }
 
     def _load_active_manifest(self, game_root: str | Path, game_backup_dir: Path) -> dict:
-        manifest = self._load_json(self._active_manifest_path(game_backup_dir), self._empty_manifest(game_root))
+        manifest_path = self._active_manifest_path(game_backup_dir)
+        if not manifest_path.is_file():
+            return self._empty_manifest(game_root)
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception as e:
+            log.warning("读取 Sound 活动清单失败: %s", manifest_path, exc_info=True)
+            raise SoundStateError(
+                "manifest_corrupt",
+                "Sound 恢复记录已损坏。为保护原始声音，软件已停止替换，请不要重复安装。",
+            ) from e
+        if not isinstance(manifest, dict):
+            raise SoundStateError(
+                "manifest_corrupt",
+                "Sound 恢复记录格式无效。为保护原始声音，软件已停止替换，请不要重复安装。",
+            )
         entries = manifest.get("active_entries")
         if not isinstance(entries, list):
-            manifest["active_entries"] = []
+            raise SoundStateError(
+                "manifest_corrupt",
+                "Sound 恢复记录中的文件列表无效。为保护原始声音，软件已停止替换，请不要重复安装。",
+            )
         manifest.setdefault("version", self.MANIFEST_VERSION)
         manifest.setdefault("game_root", str(Path(game_root).resolve(strict=False)))
         manifest.setdefault("game_path_hash", self._game_path_hash(game_root))
         return manifest
+
+    def _state_error_result(self, error: SoundStateError, game_backup_dir: Path) -> dict:
+        return {
+            "success": False,
+            "error_code": error.error_code,
+            "error": str(error),
+            "msg": str(error),
+            "backup_dir": str(game_backup_dir),
+        }
+
+    def _reconcile_pending_install(
+        self,
+        game_root: Path,
+        game_backup_dir: Path,
+        manifest: dict,
+    ) -> dict:
+        pending_path = self._pending_install_path(game_backup_dir)
+        if not pending_path.is_file():
+            return {"success": True, "reconciled": False, "recovered": 0, "not_applied": 0}
+
+        try:
+            with open(pending_path, "r", encoding="utf-8") as f:
+                pending = json.load(f)
+        except Exception as e:
+            raise SoundStateError(
+                "pending_conflict",
+                "检测到未完成的 Sound 替换记录，但记录无法读取。原始备份仍保留，请不要重复安装。",
+            ) from e
+        entries = pending.get("entries") if isinstance(pending, dict) else None
+        if not isinstance(pending, dict) or pending.get("operation") != "install" or not isinstance(entries, list) or not entries:
+            raise SoundStateError(
+                "pending_conflict",
+                "检测到无法确认的 Sound 替换记录。原始备份仍保留，请不要重复安装。",
+            )
+
+        sound_dir = game_root / "sound"
+        active_entries = list(manifest.get("active_entries", []))
+        active_by_target = {
+            str(entry.get("target_rel", "")).casefold(): entry
+            for entry in active_entries
+            if entry.get("target_rel")
+        }
+        resolved_entries = []
+        recovered = 0
+        not_applied = 0
+
+        for pending_entry in entries:
+            if not isinstance(pending_entry, dict):
+                raise SoundStateError(
+                    "pending_conflict",
+                    "未完成的 Sound 替换记录包含无效文件项，软件已停止继续操作。",
+                )
+            target_rel = str(pending_entry.get("target_rel") or "")
+            normalized_target = self._normalize_source_rel(target_rel)
+            target_path = sound_dir / target_rel
+            if normalized_target is None or not self._is_safe_existing_sound_target(game_root, target_path):
+                raise SoundStateError(
+                    "pending_conflict",
+                    f"无法确认 Sound 文件 {Path(target_rel).name or target_rel} 的状态，软件已停止继续操作。",
+                )
+
+            current_sha = self._sha256(target_path)
+            original_sha = str(pending_entry.get("original_sha256") or "")
+            source_sha = str(pending_entry.get("source_sha256") or "")
+            target_key = target_rel.casefold()
+            if original_sha and current_sha == original_sha:
+                active_by_target.pop(target_key, None)
+                not_applied += 1
+                continue
+
+            if not source_sha or current_sha != source_sha:
+                raise SoundStateError(
+                    "pending_conflict",
+                    f"Sound 文件 {Path(target_rel).name} 已发生其他变化。原始备份仍保留，请不要重复安装。",
+                )
+
+            backup_skipped = bool(pending_entry.get("backup_skipped"))
+            backup_rel = str(pending_entry.get("original_backup_rel") or "")
+            if not backup_skipped:
+                backup_path = game_backup_dir / backup_rel
+                if not backup_rel or not self._is_safe_backup_path(game_backup_dir, backup_path) or not backup_path.is_file():
+                    raise SoundStateError(
+                        "pending_conflict",
+                        f"找不到 {Path(target_rel).name} 的原始备份。软件已停止继续操作，请不要重复安装。",
+                    )
+                if not original_sha or self._sha256(backup_path) != original_sha:
+                    raise SoundStateError(
+                        "pending_conflict",
+                        f"{Path(target_rel).name} 的原始备份无法通过校验。软件已停止继续操作。",
+                    )
+
+            recovered_entry = {
+                "mod_name": str(pending.get("mod_name") or ""),
+                "source_rel": str(pending_entry.get("source_rel") or ""),
+                "target_rel": target_rel,
+                "original_backup_rel": backup_rel,
+                "original_sha256": original_sha,
+                "source_sha256": source_sha,
+                "replacement_sha256": source_sha,
+                "installed_at": str(pending.get("created_at") or time.strftime("%Y-%m-%d %H:%M:%S")),
+                "backup_skipped": backup_skipped,
+            }
+            active_by_target[target_key] = recovered_entry
+            resolved_entries.append(recovered_entry)
+            recovered += 1
+
+        manifest["active_entries"] = list(active_by_target.values())
+        self._save_active_manifest(game_backup_dir, manifest)
+        try:
+            pending_path.unlink()
+        except OSError as e:
+            raise SoundStateError(
+                "pending_conflict",
+                "Sound 恢复记录已经重建，但未完成标记无法清除。请关闭软件后重试，不要重复安装。",
+            ) from e
+        return {
+            "success": True,
+            "reconciled": True,
+            "recovered": recovered,
+            "not_applied": not_applied,
+            "recovered_entries": resolved_entries,
+        }
+
+    def _load_reconciled_manifest(self, game_root: Path, game_backup_dir: Path) -> tuple[dict, dict]:
+        manifest = self._load_active_manifest(game_root, game_backup_dir)
+        reconciliation = self._reconcile_pending_install(game_root, game_backup_dir, manifest)
+        return manifest, reconciliation
 
     def _save_active_manifest(self, game_backup_dir: Path, manifest: dict):
         manifest["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -217,6 +570,40 @@ class SoundReplaceService:
         os.replace(backup_path, orphan_path)
         return orphan_path
 
+    def _inspect_active_entry(self, game_root: Path, game_backup_dir: Path, entry: dict) -> dict:
+        sound_dir = game_root / "sound"
+        target_rel = str(entry.get("target_rel", ""))
+        target_path = sound_dir / target_rel
+        backup_rel = str(entry.get("original_backup_rel", ""))
+        backup_path = game_backup_dir / backup_rel if backup_rel else None
+        info = {
+            "entry": entry,
+            "target_rel": target_rel,
+            "reason": "active",
+            "backup_rel": backup_rel,
+            "backup_path": backup_path,
+        }
+
+        if not self._is_safe_sound_path(game_root, target_path):
+            info["reason"] = "unsafe_target_path"
+            return info
+        if not target_path.is_file():
+            info["reason"] = "target_missing"
+            return info
+
+        if not entry.get("backup_skipped"):
+            if not backup_rel or backup_path is None or not self._is_safe_backup_path(game_backup_dir, backup_path):
+                info["reason"] = "unsafe_backup_path"
+                return info
+            if not backup_path.is_file():
+                info["reason"] = "backup_missing"
+                return info
+
+        expected_sha = entry.get("replacement_sha256", "")
+        if not expected_sha or self._sha256(target_path) != expected_sha:
+            info["reason"] = "target_changed_externally"
+        return info
+
     def _build_sound_index(self, game_root: Path) -> dict[str, list[Path]]:
         index: dict[str, list[Path]] = {}
         sound_dir = game_root / "sound"
@@ -237,7 +624,10 @@ class SoundReplaceService:
         skipped_files = []
         seen_targets = set()
         game_backup_dir = self._game_backup_dir(game_root)
-        active_manifest = self._load_active_manifest(game_root, game_backup_dir)
+        try:
+            active_manifest, reconciliation = self._load_reconciled_manifest(game_root, game_backup_dir)
+        except SoundStateError as e:
+            return self._state_error_result(e, game_backup_dir)
         active_by_target = {
             str(entry.get("target_rel", "")).lower(): entry
             for entry in active_manifest.get("active_entries", [])
@@ -318,6 +708,7 @@ class SoundReplaceService:
             ),
             "sound_bank_size_bytes": sound_bank_size_bytes,
             "backup_skipped_existing_count": sum(1 for item in matched_files if item.get("backup_skipped_existing")),
+            "pending_reconciliation": reconciliation,
         }
 
     def install(
@@ -335,6 +726,8 @@ class SoundReplaceService:
         originals_dir = game_backup_dir / "originals"
 
         preview = self.preview_install(game_root, source_mod_path, install_list)
+        if not preview.get("success"):
+            return preview
         matched_files = preview.get("matched_files", [])
         if not matched_files:
             return {
@@ -345,7 +738,10 @@ class SoundReplaceService:
             }
 
         game_backup_dir.mkdir(parents=True, exist_ok=True)
-        active_manifest = self._load_active_manifest(game_root, game_backup_dir)
+        try:
+            active_manifest = self._load_active_manifest(game_root, game_backup_dir)
+        except SoundStateError as e:
+            return self._state_error_result(e, game_backup_dir)
         active_by_target = {
             str(entry.get("target_rel", "")).lower(): entry
             for entry in active_manifest.get("active_entries", [])
@@ -541,43 +937,59 @@ class SoundReplaceService:
     def get_status(self, game_root: str | Path) -> dict:
         game_root = Path(game_root)
         game_backup_dir = self._game_backup_dir(game_root)
-        manifest = self._load_active_manifest(game_root, game_backup_dir)
+        try:
+            manifest, reconciliation = self._load_reconciled_manifest(game_root, game_backup_dir)
+        except SoundStateError as e:
+            return self._state_error_result(e, game_backup_dir)
         active_entries = manifest.get("active_entries", [])
         changed_files = []
         missing_files = []
+        backup_missing_files = []
+        stale_files = []
         active_files = []
-        sound_dir = game_root / "sound"
 
         for entry in active_entries:
-            target_rel = str(entry.get("target_rel", ""))
-            target_path = sound_dir / target_rel
-            if not self._is_safe_sound_path(game_root, target_path):
-                changed_files.append({"target_rel": target_rel, "reason": "unsafe_target_path"})
-                continue
-            if not target_path.is_file():
-                missing_files.append({"target_rel": target_rel, "reason": "target_missing"})
-                continue
-            current_sha = self._sha256(target_path)
-            if current_sha == entry.get("replacement_sha256"):
+            info = self._inspect_active_entry(game_root, game_backup_dir, entry)
+            target_rel = info["target_rel"]
+            reason = info["reason"]
+            if reason == "active":
                 active_files.append({"target_rel": target_rel, "mod_name": entry.get("mod_name", "")})
+            elif reason == "target_missing":
+                item = {"target_rel": target_rel, "reason": reason}
+                missing_files.append(item)
+                stale_files.append(item)
+            elif reason == "backup_missing":
+                item = {"target_rel": target_rel, "reason": reason}
+                backup_missing_files.append(item)
+                stale_files.append(item)
             else:
-                changed_files.append({"target_rel": target_rel, "reason": "target_changed_externally"})
+                item = {"target_rel": target_rel, "reason": reason}
+                changed_files.append(item)
+                if reason in self.STALE_CLEAR_REASONS:
+                    stale_files.append(item)
 
-        active_mod_names = sorted({item.get("mod_name", "") for item in active_entries if item.get("mod_name")})
+        active_mod_names = sorted({item.get("mod_name", "") for item in active_files if item.get("mod_name")})
         backup_skipped_count = sum(1 for e in active_entries if e.get("backup_skipped"))
         return {
             "success": True,
             "backup_dir": str(game_backup_dir),
             "active_count": len(active_entries),
             "clean": len(active_entries) == 0,
+            "managed_active_count": len(active_files),
+            "manifest_entry_count": len(active_entries),
             "active_files": active_files,
             "changed_count": len(changed_files),
             "changed_files": changed_files,
             "missing_count": len(missing_files),
             "missing_files": missing_files,
+            "backup_missing_count": len(backup_missing_files),
+            "backup_missing_files": backup_missing_files,
+            "stale_count": len(stale_files),
+            "stale_files": stale_files,
             "active_mod_names": active_mod_names,
             "backup_skipped_count": backup_skipped_count,
             "pending_manifest_exists": self._pending_install_path(game_backup_dir).is_file(),
+            "pending_reconciliation": reconciliation,
         }
 
     def restore(self, game_root: str | Path, progress_callback: Callable[[int, str], None] | None = None) -> dict:
@@ -585,7 +997,10 @@ class SoundReplaceService:
         game_backup_dir = self._game_backup_dir(game_root)
         originals_dir = game_backup_dir / "originals"
         sound_dir = game_root / "sound"
-        manifest = self._load_active_manifest(game_root, game_backup_dir)
+        try:
+            manifest, reconciliation = self._load_reconciled_manifest(game_root, game_backup_dir)
+        except SoundStateError as e:
+            return self._state_error_result(e, game_backup_dir)
         entries = list(manifest.get("active_entries", []))
 
         if not entries:
@@ -597,6 +1012,7 @@ class SoundReplaceService:
                 "skipped_files": [],
                 "failed_files": [],
                 "msg": "没有需要还原的 Sound 替换备份",
+                "pending_reconciliation": reconciliation,
             }
 
         restored_entries = []
@@ -696,7 +1112,10 @@ class SoundReplaceService:
     def clear_backup_skipped_entries(self, game_root: str | Path) -> dict:
         game_root = Path(game_root)
         game_backup_dir = self._game_backup_dir(game_root)
-        manifest = self._load_active_manifest(game_root, game_backup_dir)
+        try:
+            manifest = self._load_active_manifest(game_root, game_backup_dir)
+        except SoundStateError as e:
+            return self._state_error_result(e, game_backup_dir)
         entries = list(manifest.get("active_entries", []))
         kept_entries = [entry for entry in entries if not entry.get("backup_skipped")]
         cleared = len(entries) - len(kept_entries)
@@ -709,4 +1128,76 @@ class SoundReplaceService:
             "backup_dir": str(game_backup_dir),
         }
         self._write_operation_log(game_backup_dir, {"operation": "clear_backup_skipped_entries", **result})
+        return result
+
+    def clear_stale_entries(
+        self,
+        game_root: str | Path,
+        reasons: list[str] | None = None,
+        remove_backups: bool = True,
+        clear_pending: bool = True,
+    ) -> dict:
+        game_root = Path(game_root)
+        game_backup_dir = self._game_backup_dir(game_root)
+        originals_dir = game_backup_dir / "originals"
+        try:
+            manifest = self._load_active_manifest(game_root, game_backup_dir)
+        except SoundStateError as e:
+            return self._state_error_result(e, game_backup_dir)
+        entries = list(manifest.get("active_entries", []))
+        reason_set = set(reasons or self.STALE_CLEAR_REASONS)
+
+        kept_entries = []
+        cleared_items = []
+        removed_backups = 0
+        failed_backup_files = []
+        for entry in entries:
+            info = self._inspect_active_entry(game_root, game_backup_dir, entry)
+            if info["reason"] in reason_set:
+                backup_path = info.get("backup_path")
+                if remove_backups and isinstance(backup_path, Path):
+                    if self._is_safe_backup_path(game_backup_dir, backup_path) and backup_path.is_file():
+                        self._cleanup_new_backups([backup_path], originals_dir)
+                        if backup_path.exists():
+                            failed_backup_files.append({
+                                "target_rel": info["target_rel"],
+                                "backup_rel": info.get("backup_rel", ""),
+                            })
+                            kept_entries.append(entry)
+                            continue
+                        removed_backups += 1
+                cleared_items.append(info)
+            else:
+                kept_entries.append(entry)
+
+        manifest["active_entries"] = kept_entries
+        self._save_active_manifest(game_backup_dir, manifest)
+
+        pending_manifest_cleared = False
+        pending_path = self._pending_install_path(game_backup_dir)
+        if clear_pending and not kept_entries and pending_path.is_file():
+            try:
+                pending_path.unlink()
+                pending_manifest_cleared = True
+            except OSError:
+                pending_manifest_cleared = False
+
+        result = {
+            "success": True,
+            "cleared": len(cleared_items),
+            "remaining": len(kept_entries),
+            "removed_backups": removed_backups,
+            "failed_backup_files": failed_backup_files,
+            "pending_manifest_cleared": pending_manifest_cleared,
+            "backup_dir": str(game_backup_dir),
+            "cleared_files": [
+                {
+                    "target_rel": item["target_rel"],
+                    "reason": item["reason"],
+                    "original_backup_rel": item.get("backup_rel", ""),
+                }
+                for item in cleared_items
+            ],
+        }
+        self._write_operation_log(game_backup_dir, {"operation": "clear_stale_entries", **result})
         return result

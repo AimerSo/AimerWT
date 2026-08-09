@@ -80,6 +80,11 @@ def _setup_console_encoding() -> None:
     """
     if sys.platform != "win32":
         return
+
+    stdout_buffer = getattr(sys.stdout, "buffer", None)
+    stderr_buffer = getattr(sys.stderr, "buffer", None)
+    if stdout_buffer is None or stderr_buffer is None:
+        return
     
     import io
     import ctypes
@@ -92,12 +97,12 @@ def _setup_console_encoding() -> None:
         
         # 既然控制台已设为 UTF-8，Python 输出流也必须设为 UTF-8
         sys.stdout = io.TextIOWrapper(
-            sys.stdout.buffer, 
+            stdout_buffer,
             encoding='utf-8', 
             errors='replace'
         )
         sys.stderr = io.TextIOWrapper(
-            sys.stderr.buffer, 
+            stderr_buffer,
             encoding='utf-8', 
             errors='replace'
         )
@@ -114,12 +119,12 @@ def _setup_console_encoding() -> None:
             # 测试编码是否可用
             "测试".encode(encoding)
             sys.stdout = io.TextIOWrapper(
-                sys.stdout.buffer, 
+                stdout_buffer,
                 encoding=encoding, 
                 errors="replace"
             )
             sys.stderr = io.TextIOWrapper(
-                sys.stderr.buffer, 
+                stderr_buffer,
                 encoding=encoding, 
                 errors="replace"
             )

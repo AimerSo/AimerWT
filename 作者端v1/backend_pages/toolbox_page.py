@@ -37,6 +37,19 @@ def _is_supported(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTS
 
 
+def _next_available_webp_path(candidate: Path, source: Path | None, reserved: set[str]) -> Path:
+    target = Path(candidate)
+    source_resolved = Path(source).resolve() if source is not None else None
+    index = 2
+    while True:
+        target_key = str(target.resolve()).lower()
+        same_as_source = source_resolved is not None and target.resolve() == source_resolved
+        if not same_as_source and not target.exists() and target_key not in reserved:
+            return target
+        target = candidate.with_name(f"{candidate.stem}_{index}{candidate.suffix}")
+        index += 1
+
+
 def _open_folder_in_explorer(folder: str) -> None:
     """在资源管理器中打开目录（Windows）"""
     try:
@@ -206,6 +219,7 @@ class ToolboxService:
             return {"success": False, "msg": "未选择任何文件", "results": []}
 
         results = []
+        reserved_targets: set[str] = set()
         for f in files:
             src = Path(f)
             if not src.exists() or not src.is_file():
@@ -240,6 +254,8 @@ class ToolboxService:
                 dst = folder / (src.stem + ".webp")
             else:  # beside
                 dst = src.parent / (src.stem + ".webp")
+            dst = _next_available_webp_path(dst, src, reserved_targets)
+            reserved_targets.add(str(dst.resolve()).lower())
 
             result = _convert_single(src, dst, quality, lossless)
 
@@ -270,6 +286,8 @@ class ToolboxService:
                 if not client_id:
                     continue
                 dst = upload_output_dir / f"{Path(name).stem}.webp"
+                dst = _next_available_webp_path(dst, None, reserved_targets)
+                reserved_targets.add(str(dst.resolve()).lower())
                 result = _convert_uploaded(client_id, name, data_url, dst, quality, lossless)
                 if upload_mode_notice:
                     result["notice"] = upload_mode_notice

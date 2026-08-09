@@ -121,11 +121,11 @@ func VerifyAuditChain() (total int64, broken int, firstBrokenID uint) {
 	return
 }
 
-// initAuditLogRoutes 注册审计日志 API（无需认证，仅限仪表盘内访问）
-func initAuditLogRoutes(r *gin.Engine) {
+// initAuditLogRoutes 注册管理员审计日志 API。
+func initAuditLogRoutes(r *gin.RouterGroup) {
 
 	// 分页查询日志列表
-	r.GET("/dashboard/audit-logs", func(c *gin.Context) {
+	r.GET("/audit-logs", func(c *gin.Context) {
 		logType := c.Query("log_type")
 		actorID := c.Query("actor_id")
 		targetID := c.Query("target_id")
@@ -233,7 +233,7 @@ func initAuditLogRoutes(r *gin.Engine) {
 	})
 
 	// 导出全量日志为 JSON 文件
-	r.GET("/dashboard/audit-logs/export", func(c *gin.Context) {
+	r.GET("/audit-logs/export", func(c *gin.Context) {
 		logType := c.Query("log_type")
 
 		query := db.Model(&AuditLog{}).Order("id asc")
@@ -265,7 +265,7 @@ func initAuditLogRoutes(r *gin.Engine) {
 	})
 
 	// 校验哈希链完整性
-	r.GET("/dashboard/audit-logs/verify", func(c *gin.Context) {
+	r.GET("/audit-logs/verify", func(c *gin.Context) {
 		total, broken, firstBrokenID := VerifyAuditChain()
 		c.JSON(200, gin.H{
 			"total_checked":   total,
@@ -276,7 +276,7 @@ func initAuditLogRoutes(r *gin.Engine) {
 	})
 
 	// 审计日志存储信息
-	r.GET("/dashboard/audit-logs/info", func(c *gin.Context) {
+	r.GET("/audit-logs/info", func(c *gin.Context) {
 		var total int64
 		db.Model(&AuditLog{}).Count(&total)
 

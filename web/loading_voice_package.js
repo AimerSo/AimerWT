@@ -33,6 +33,7 @@ const MinimalistLoading = {
     cancelBtn: null,
     interval: null,
     watchdog: null,
+    cancelHandler: null,
     lastUpdateAt: 0,
     currentProgress: 0,
     targetProgress: 0,
@@ -93,13 +94,13 @@ const MinimalistLoading = {
             .loading-card {
                 width: 100%;
                 max-width: 26rem;
-                background-color: var(--bg-card, white);
-                border-radius: 16px;
+                background-color: var(--feedback-bg, var(--bg-card, white));
+                border-radius: var(--feedback-radius, 16px);
                 padding: 1.75rem;
                 position: relative;
                 overflow: hidden;
-                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-                border: 1px solid var(--border-color, #e2e8f0);
+                box-shadow: var(--feedback-shadow, 0 25px 50px -12px rgba(0, 0, 0, 0.25));
+                border: var(--feedback-border-width, 1px) solid var(--border-color, #e2e8f0);
             }
             
             .loading-progress-bar {
@@ -127,7 +128,7 @@ const MinimalistLoading = {
             }
             
             .loading-text-status {
-                color: var(--text-main, #1e293b);
+                color: var(--feedback-text, var(--text-main, #1e293b));
                 font-weight: 600;
                 font-size: 0.9rem;
                 margin: 0;
@@ -135,7 +136,7 @@ const MinimalistLoading = {
             }
             
             .loading-text-percent {
-                color: var(--text-sec, #94a3b8);
+                color: var(--feedback-muted, var(--text-sec, #94a3b8));
                 font-size: 0.8rem;
                 margin-top: 0.25rem;
                 margin: 0;
@@ -219,7 +220,18 @@ const MinimalistLoading = {
         this.status = document.getElementById('loading-status');
         this.percent = document.getElementById('loading-percent');
         this.cancelBtn = document.getElementById('loading-cancel');
-        this.cancelBtn.addEventListener('click', () => this.hide());
+        this.cancelBtn.addEventListener('click', async () => {
+            if (typeof this.cancelHandler === 'function') {
+                this.cancelBtn.disabled = true;
+                try {
+                    await this.cancelHandler();
+                } finally {
+                    this.cancelBtn.disabled = false;
+                }
+                return;
+            }
+            this.hide();
+        });
     },
 
     // 显示 (autoSimulate: 是否自动模拟进度)
@@ -232,8 +244,10 @@ const MinimalistLoading = {
         this.bar.style.width = '0%';
         this.percent.innerText = this._formatPercent(0);
         this.status.innerText = initialMessage || this._t("loading.prepare");
+        this.cancelHandler = null;
         if (this.cancelBtn) {
             this.cancelBtn.textContent = this._t("common.close");
+            this.cancelBtn.disabled = false;
             this.cancelBtn.classList.add('hidden');
         }
 
@@ -273,7 +287,9 @@ const MinimalistLoading = {
 
         if (this.interval) clearInterval(this.interval);
         if (this.watchdog) clearInterval(this.watchdog);
-        if (this.cancelBtn) this.cancelBtn.classList.add('hidden');
+        if (this.cancelBtn) {
+            this.cancelBtn.classList.toggle('hidden', typeof this.cancelHandler !== 'function');
+        }
 
         if (progress > 100) progress = 100;
         if (progress < 0) progress = 0;
@@ -294,6 +310,23 @@ const MinimalistLoading = {
 
     updateKey(progress, key, params = {}) {
         this.update(progress, this._t(key, params || {}));
+    },
+
+    setCancelAction(label, handler) {
+        this._init();
+        this.cancelHandler = typeof handler === 'function' ? handler : null;
+        if (!this.cancelBtn) return;
+        this.cancelBtn.textContent = label || this._t("common.close");
+        this.cancelBtn.disabled = false;
+        this.cancelBtn.classList.toggle('hidden', !this.cancelHandler);
+    },
+
+    clearCancelAction() {
+        this.cancelHandler = null;
+        if (!this.cancelBtn) return;
+        this.cancelBtn.disabled = false;
+        this.cancelBtn.textContent = this._t("common.close");
+        this.cancelBtn.classList.add('hidden');
     },
 
     // 平滑过渡动画
@@ -353,6 +386,31 @@ const MinimalistLoading = {
         }, 150);
     },
 
+    waitForClose(timeoutMs = 2600) {
+        this._init();
+        if (!this.overlay || this.overlay.classList.contains('hidden')) {
+            return Promise.resolve();
+        }
+
+        const startedAt = Date.now();
+        const maxWaitMs = Math.max(450, Number(timeoutMs) || 2600);
+        return new Promise(resolve => {
+            const checkClosed = () => {
+                if (!this.overlay || this.overlay.classList.contains('hidden')) {
+                    resolve();
+                    return;
+                }
+                if (Date.now() - startedAt >= maxWaitMs) {
+                    this.hide();
+                    setTimeout(resolve, 450);
+                    return;
+                }
+                setTimeout(checkClosed, 40);
+            };
+            checkClosed();
+        });
+    },
+
     // 隐藏 (增加渐隐效果)
     hide() {
         if (this.overlay && !this.overlay.classList.contains('hidden')) {
@@ -370,6 +428,7 @@ const MinimalistLoading = {
                 this.overlay.classList.remove('overlay-fade-out');
                 if (this.interval) clearInterval(this.interval);
                 if (this.watchdog) clearInterval(this.watchdog);
+                this.clearCancelAction();
                 // 清理动画帧和重置进度
                 if (this.animationFrame) {
                     cancelAnimationFrame(this.animationFrame);

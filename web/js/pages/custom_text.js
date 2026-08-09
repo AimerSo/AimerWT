@@ -12,6 +12,11 @@ const CustomText = {
     currentCsvFile: 'menu.csv',
     csvFiles: [],
     currentLanguage: 'Chinese',
+    csvFileDropdown: null,
+    languageDropdown: null,
+    dirtyEntries: new Set(),
+    _busy: false,
+    _loadRequestId: 0,
 
     init() {
         this.render();
@@ -30,8 +35,10 @@ const CustomText = {
             <div class="resource-view-header">
                 <h2><i class="${this.icon}"></i> ${this.name}</h2>
                 <div class="resource-view-header-right custom-text-actions">
-                    <select id="custom-text-csv-file" class="custom-text-select"></select>
-                    <select id="custom-text-language" class="custom-text-select"></select>
+                    <div id="custom-text-csv-file-dropdown"></div>
+                    <select id="custom-text-csv-file" class="custom-text-select custom-text-native-select" aria-hidden="true" tabindex="-1"></select>
+                    <div id="custom-text-language-dropdown"></div>
+                    <select id="custom-text-language" class="custom-text-select custom-text-native-select" aria-hidden="true" tabindex="-1"></select>
                     <button class="btn-v2" id="btn-custom-text-backup" title="备份 / 还原"><i class="ri-archive-line"></i></button>
                     <button class="btn-v2" id="btn-custom-text-import" title="导入"><i class="ri-upload-2-line"></i></button>
                     <button class="btn-v2" id="btn-custom-text-export" title="导出"><i class="ri-download-2-line"></i></button>
@@ -70,7 +77,7 @@ const CustomText = {
         const langEl = document.getElementById('custom-text-language');
         const csvEl = document.getElementById('custom-text-csv-file');
 
-        if (reloadBtn) reloadBtn.onclick = () => this.loadData();
+        if (reloadBtn) reloadBtn.onclick = () => this.reloadData();
         if (saveBtn) saveBtn.onclick = () => this.saveData();
         if (importBtn) importBtn.onclick = () => this.importData();
         if (exportBtn) exportBtn.onclick = () => this.exportData();
@@ -78,20 +85,129 @@ const CustomText = {
         if (searchEl) searchEl.oninput = () => this.renderRows();
         if (groupSearchEl) groupSearchEl.oninput = () => this.renderGroupList();
         if (csvEl) {
-            csvEl.onchange = (e) => {
-                this.currentCsvFile = String(e.target.value || '').trim();
-                this.loadData();
+            csvEl.onchange = async (e) => {
+                const nextCsvFile = String(e.target.value || '').trim();
+                if (!nextCsvFile || nextCsvFile === this.currentCsvFile) return;
+                if (this._busy) {
+                    csvEl.value = this.currentCsvFile;
+                    this.syncHeaderDropdown(this.csvFileDropdown, csvEl);
+                    return;
+                }
+                if (!await this.confirmDiscardChanges('切换 CSV')) {
+                    csvEl.value = this.currentCsvFile;
+                    this.syncHeaderDropdown(this.csvFileDropdown, csvEl);
+                    return;
+                }
+                this.dirtyEntries.clear();
+                this.currentCsvFile = nextCsvFile;
+                this.setBusy(true);
+                try {
+                    await this.loadData();
+                } finally {
+                    this.setBusy(false);
+                }
             };
         }
         if (langEl) {
             langEl.onchange = (e) => {
+                if (this._busy) {
+                    langEl.value = this.currentLanguage;
+                    this.syncHeaderDropdown(this.languageDropdown, langEl);
+                    return;
+                }
                 this.currentLanguage = String(e.target.value || 'Chinese');
                 this.renderRows();
             };
         }
+        this.initHeaderDropdowns();
+    },
+
+    makeDirtyKey(csvFile, language, textId) {
+        return `${String(csvFile)}\u0001${String(language)}\u0001${String(textId)}`;
+    },
+
+    hasDirtyEntries() {
+        return this.dirtyEntries.size > 0;
+    },
+
+    async confirmDiscardChanges(actionName) {
+        if (!this.hasDirtyEntries()) return true;
+        return app.showConfirmDialog(
+            '存在未保存修改',
+            `当前还有 <strong>${this.dirtyEntries.size}</strong> 条未保存修改。${this.escapeHtml(actionName)}会丢弃这些内容，是否继续？`
+        );
+    },
+
+    setBusy(busy) {
+        this._busy = Boolean(busy);
+        [
+            'btn-custom-text-backup',
+            'btn-custom-text-import',
+            'btn-custom-text-export',
+            'btn-custom-text-reload',
+            'btn-custom-text-save'
+        ].forEach((id) => {
+            const button = document.getElementById(id);
+            if (button) button.disabled = this._busy;
+        });
+        const view = document.getElementById(this.viewId);
+        if (view) view.setAttribute('aria-busy', this._busy ? 'true' : 'false');
+    },
+
+    async reloadData() {
+        if (this._busy) return;
+        if (!await this.confirmDiscardChanges('刷新')) return;
+        this.dirtyEntries.clear();
+        this.setBusy(true);
+        try {
+            await this.loadData();
+        } finally {
+            this.setBusy(false);
+        }
+    },
+
+    initHeaderDropdowns() {
+        if (!window.AppDropdownMenu) return;
+
+        const csvEl = document.getElementById('custom-text-csv-file');
+        const langEl = document.getElementById('custom-text-language');
+
+        if (!this.csvFileDropdown && csvEl) {
+            this.csvFileDropdown = new AppDropdownMenu({
+                id: 'custom-text-csv-file-ui',
+                containerId: 'custom-text-csv-file-dropdown',
+                options: [],
+                placeholder: '选择 CSV',
+                size: 'md',
+                width: '285px',
+                onChange: (value) => {
+                    if (csvEl.value === value) return;
+                    csvEl.value = value;
+                    csvEl.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        }
+
+        if (!this.languageDropdown && langEl) {
+            this.languageDropdown = new AppDropdownMenu({
+                id: 'custom-text-language-ui',
+                containerId: 'custom-text-language-dropdown',
+                options: [],
+                placeholder: '选择语言',
+                size: 'md',
+                width: '165px',
+                onChange: (value) => {
+                    if (langEl.value === value) return;
+                    langEl.value = value;
+                    langEl.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        }
     },
 
     async loadData() {
+        const requestId = ++this._loadRequestId;
+        const requestedCsvFile = this.currentCsvFile;
         const summaryEl = document.getElementById('custom-text-summary');
         if (summaryEl) summaryEl.textContent = '加载中...';
 
@@ -103,8 +219,9 @@ const CustomText = {
 
         try {
             const res = await pywebview.api.get_custom_text_data({
-                csv_file: this.currentCsvFile
+                csv_file: requestedCsvFile
             });
+            if (requestId !== this._loadRequestId) return;
             if (!res || !res.success) {
                 const msg = (res && res.msg) ? res.msg : '加载失败';
                 if (res && res.need_restart) {
@@ -143,6 +260,7 @@ const CustomText = {
                 summaryEl.textContent = `${this.currentCsvFile} · 总计 ${Number(res.total || 0)} 条`;
             }
         } catch (e) {
+            if (requestId !== this._loadRequestId) return;
             app.showAlert('错误', `加载失败: ${e.message || e}`, 'error');
             if (summaryEl) summaryEl.textContent = '加载失败';
         }
@@ -161,6 +279,7 @@ const CustomText = {
             if (String(fileName) === this.currentCsvFile) op.selected = true;
             csvEl.appendChild(op);
         });
+        this.syncHeaderDropdown(this.csvFileDropdown, csvEl);
     },
 
     renderLanguageOptions(keys) {
@@ -174,6 +293,21 @@ const CustomText = {
             if (String(k) === this.currentLanguage) op.selected = true;
             langEl.appendChild(op);
         });
+        this.syncHeaderDropdown(this.languageDropdown, langEl);
+    },
+
+    syncHeaderDropdown(dropdown, selectEl) {
+        if (!dropdown || !selectEl) return;
+        const options = Array.from(selectEl.options).map(op => ({
+            value: String(op.value),
+            label: String(op.textContent || op.value)
+        }));
+        dropdown.setOptions(options, false);
+        if (options.length) {
+            dropdown.setValue(String(selectEl.value || options[0].value), false);
+        } else {
+            dropdown.clear();
+        }
     },
 
     renderGroupList() {
@@ -255,6 +389,11 @@ const CustomText = {
                 if (!target) return;
                 if (!target.languages || typeof target.languages !== 'object') target.languages = {};
                 target.languages[this.currentLanguage] = String(el.value || '');
+                this.dirtyEntries.add(this.makeDirtyKey(
+                    this.currentCsvFile,
+                    this.currentLanguage,
+                    id
+                ));
             };
         });
 
@@ -262,90 +401,118 @@ const CustomText = {
     },
 
     async saveData() {
+        if (this._busy) return;
         if (!window.pywebview?.api?.save_custom_text_data) {
             app.showAlert('错误', '后端保存接口不可用', 'error');
             return;
         }
 
-        const allItems = [];
-        Object.values(this.groupMap).forEach((arr) => {
-            (arr || []).forEach((it) => {
-                allItems.push({
-                    id: String(it.id || ''),
-                    text: String((it.languages && it.languages[this.currentLanguage]) || '')
+        const savedCsvFile = this.currentCsvFile;
+        const savedLanguage = this.currentLanguage;
+        const changedItems = [];
+        Object.values(this.groupMap).forEach((items) => {
+            (items || []).forEach((item) => {
+                const textId = String(item.id || '');
+                const dirtyKey = this.makeDirtyKey(savedCsvFile, savedLanguage, textId);
+                if (!this.dirtyEntries.has(dirtyKey)) return;
+                changedItems.push({
+                    id: textId,
+                    text: String((item.languages && item.languages[savedLanguage]) || '')
                 });
             });
         });
 
-        if (!allItems.length) {
-            app.showAlert('提示', '没有可保存的数据', 'warn');
+        if (!changedItems.length) {
+            app.showAlert('提示', '当前语言没有未保存修改', 'info');
             return;
         }
 
+        this.setBusy(true);
         try {
             const res = await pywebview.api.save_custom_text_data({
-                csv_file: this.currentCsvFile,
-                language: this.currentLanguage,
-                entries: allItems
+                csv_file: savedCsvFile,
+                language: savedLanguage,
+                entries: changedItems
             });
             if (res && res.success) {
+                const savedIds = new Set(changedItems.map(item => String(item.id)));
+                changedItems.forEach((item) => {
+                    this.dirtyEntries.delete(this.makeDirtyKey(
+                        savedCsvFile,
+                        savedLanguage,
+                        item.id
+                    ));
+                });
+                Object.values(this.groupMap).forEach((items) => {
+                    (items || []).forEach((item) => {
+                        if (savedIds.has(String(item.id))) item.modified = true;
+                    });
+                });
+                this.csvFiles = this.csvFiles.map((fileInfo) => {
+                    const fileName = typeof fileInfo === 'string' ? fileInfo : String(fileInfo.name || '');
+                    if (fileName !== savedCsvFile) return fileInfo;
+                    return { name: fileName, modified: true };
+                });
+                this.renderCsvFileOptions(this.csvFiles);
+                this.renderRows();
                 app.showAlert('成功', res.msg || '保存成功', 'success');
             } else {
                 app.showAlert('错误', (res && res.msg) ? res.msg : '保存失败', 'error');
             }
         } catch (e) {
             app.showAlert('错误', `保存失败: ${e.message || e}`, 'error');
+        } finally {
+            this.setBusy(false);
         }
     },
 
     async importData() {
+        if (this._busy) return;
         if (!window.pywebview?.api?.import_custom_text) {
             app.showAlert('错误', '后端导入接口不可用', 'error');
             return;
         }
+        if (!await this.confirmDiscardChanges('导入')) return;
 
+        this.setBusy(true);
         try {
-            // 使用后端的文件选择对话框
             const result = await pywebview.api.select_custom_text_file();
-
-            if (!result || !result.success || !result.file_path) {
-                return; // 用户取消选择
-            }
+            if (!result || !result.success || !result.file_path) return;
 
             const res = await pywebview.api.import_custom_text({
                 file_path: result.file_path
             });
-
+            this.showImportResult(res, result.file_path);
             if (res && res.success) {
-                // 使用新的导入结果模态框
-                this.showImportResult(res, result.file_path);
-                // 重新加载数据
-                this.loadData();
-            } else {
-                // 失败时也使用模态框展示
-                this.showImportResult(res, result.file_path);
+                this.dirtyEntries.clear();
+                await this.loadData();
             }
         } catch (e) {
             app.showAlert('错误', `导入失败: ${e.message || e}`, 'error');
+        } finally {
+            this.setBusy(false);
         }
     },
 
     async exportData() {
+        if (this._busy) return;
+        if (this.hasDirtyEntries()) {
+            app.showAlert('提示', '存在未保存修改，请先保存后再导出。', 'warn');
+            return;
+        }
         if (!window.pywebview?.api?.select_custom_text_export_folder || !window.pywebview?.api?.export_custom_text_package) {
             app.showAlert('错误', '后端导出接口不可用', 'error');
             return;
         }
 
+        this.setBusy(true);
         try {
             const folderRes = await pywebview.api.select_custom_text_export_folder();
-            if (!folderRes || !folderRes.success || !folderRes.folder_path) {
-                return;
-            }
+            if (!folderRes || !folderRes.success || !folderRes.folder_path) return;
 
             const res = await pywebview.api.export_custom_text_package({
                 export_folder: folderRes.folder_path
             });
-
             if (res && res.success) {
                 const msg = `${res.msg || '导出成功'}\nCSV: ${Number(res.csv_count || 0)} 个，BLK: ${Number(res.blk_count || 0)} 个\n${res.zip_path || ''}`;
                 app.showAlert('成功', msg, 'success');
@@ -354,12 +521,19 @@ const CustomText = {
             }
         } catch (e) {
             app.showAlert('错误', `导出失败: ${e.message || e}`, 'error');
+        } finally {
+            this.setBusy(false);
         }
     },
 
     async showBackupRestoreDialog() {
-        // 拉取备份列表
+        if (this._busy) return;
+        if (this.hasDirtyEntries()) {
+            app.showAlert('提示', '存在未保存修改，请先保存后再创建或还原备份。', 'warn');
+            return;
+        }
         let backups = [];
+        this.setBusy(true);
         try {
             if (window.pywebview?.api?.get_custom_text_backups) {
                 const res = await pywebview.api.get_custom_text_backups();
@@ -367,6 +541,9 @@ const CustomText = {
             }
         } catch (e) {
             console.error('获取备份列表失败:', e);
+            app.showAlert('错误', `获取备份列表失败: ${e.message || e}`, 'error');
+        } finally {
+            this.setBusy(false);
         }
 
         const existing = document.getElementById('modal-custom-text-backup');
@@ -473,7 +650,8 @@ const CustomText = {
 
         // 绑定"立即备份"
         modal.querySelector('#btn-backup-create').onclick = async () => {
-            await this.backupData();
+            const success = await this.backupData();
+            if (!success) return;
             this.closeBackupRestoreDialog(overlay);
             this.showBackupRestoreDialog();
         };
@@ -487,7 +665,8 @@ const CustomText = {
                     `将要还原备份：<strong style="color: var(--primary);">${this.escapeHtml(zipName)}</strong><br><br>还原后当前的自定义文本将被覆盖，是否继续？`
                 );
                 if (!ok) return;
-                await this.restoreData(zipName);
+                const success = await this.restoreData(zipName);
+                if (!success) return;
                 this.closeBackupRestoreDialog(overlay);
             };
         });
@@ -515,37 +694,52 @@ const CustomText = {
     },
 
     async backupData() {
+        if (this._busy) return false;
         if (!window.pywebview?.api?.backup_custom_text) {
             app.showAlert('错误', '后端备份接口不可用', 'error');
-            return;
+            return false;
         }
+        this.setBusy(true);
         try {
             const res = await pywebview.api.backup_custom_text();
             if (res && res.success) {
                 app.showAlert('成功', res.msg || '备份成功', 'success');
+                return true;
             } else {
                 app.showAlert('错误', (res && res.msg) ? res.msg : '备份失败', 'error');
+                return false;
             }
         } catch (e) {
             app.showAlert('错误', `备份失败: ${e.message || e}`, 'error');
+            return false;
+        } finally {
+            this.setBusy(false);
         }
     },
 
     async restoreData(zipName) {
+        if (this._busy) return false;
         if (!window.pywebview?.api?.restore_custom_text) {
             app.showAlert('错误', '后端还原接口不可用', 'error');
-            return;
+            return false;
         }
+        this.setBusy(true);
         try {
             const res = await pywebview.api.restore_custom_text({ zip_name: zipName });
             if (res && res.success) {
+                this.dirtyEntries.clear();
                 app.showAlert('成功', res.msg || '还原成功', 'success');
-                this.loadData();
+                await this.loadData();
+                return true;
             } else {
                 app.showAlert('错误', (res && res.msg) ? res.msg : '还原失败', 'error');
+                return false;
             }
         } catch (e) {
             app.showAlert('错误', `还原失败: ${e.message || e}`, 'error');
+            return false;
+        } finally {
+            this.setBusy(false);
         }
     },
 

@@ -335,6 +335,9 @@
     };
 
     app.submitRedeemCode = async function () {
+		if (this._redeemSubmitInFlight) return;
+		this._redeemSubmitInFlight = true;
+		try {
         const input = document.getElementById('redeem-code-input');
         const code = normalizeCode(input?.value);
 
@@ -418,6 +421,9 @@
 
         const msg = serverResult?.message || result?.message || '兑换失败，请稍后重试';
         this.showAlert('兑换失败', msg, 'error');
+		} finally {
+			this._redeemSubmitInFlight = false;
+		}
     };
 
     app.resetUnlockedThemes = async function () {

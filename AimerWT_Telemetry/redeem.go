@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"math/big"
 	"net/http"
 	"strings"
@@ -19,17 +20,31 @@ import (
 const redeemCharset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 // generateCode 生成指定长度的随机兑换码（格式：XXXX-XXXX-XXXX）
-func generateCode(segLen, segCount int) string {
+func generateCode(segLen, segCount int) (string, error) {
+	if segLen <= 0 || segCount <= 0 || segLen*segCount+segCount-1 > 32 {
+		return "", errors.New("兑换码长度参数无效")
+	}
 	segments := make([]string, segCount)
 	for s := 0; s < segCount; s++ {
 		seg := make([]byte, segLen)
 		for i := range seg {
-			n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(redeemCharset))))
+			n, err := rand.Int(rand.Reader, big.NewInt(int64(len(redeemCharset))))
+			if err != nil {
+				return "", fmt.Errorf("安全随机数生成失败: %w", err)
+			}
 			seg[i] = redeemCharset[n.Int64()]
 		}
 		segments[s] = string(seg)
 	}
-	return strings.Join(segments, "-")
+	return strings.Join(segments, "-"), nil
+}
+
+func maskRedeemCode(code string) string {
+	code = strings.TrimSpace(code)
+	if len(code) <= 4 {
+		return "****"
+	}
+	return "****" + code[len(code)-4:]
 }
 
 // 预定义赞助码类型
@@ -80,6 +95,80 @@ var redeemPresets = []map[string]interface{}{
 
 var errRedeemRejected = errors.New("redeem rejected")
 
+type redeemPresentation struct {
+	Type           string
+	Note           string
+	PopupTitle     string
+	PopupMessage   string
+	PopupStyle     string
+	PopupSubtitle  string
+	PopupLogo      string
+	PopupIconColor string
+	PopupBadgeText string
+	PopupButton    string
+}
+
+func validateRedeemPresentation(value redeemPresentation) error {
+	value.Type = strings.TrimSpace(value.Type)
+	if len(value.Type) == 0 || len(value.Type) > 32 {
+		return errors.New("type 长度需在 1-32 个字符之间")
+	}
+	for _, char := range value.Type {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return errors.New("type 仅允许字母、数字、下划线和连字符")
+	}
+	allowedStyles := map[string]bool{
+		"": true, "default": true,
+		"style_sponsor_1": true, "style_sponsor_2": true, "style_sponsor_3": true,
+		"style_sponsor_4": true, "style_streamer": true, "style_streamer_share": true,
+	}
+	if !allowedStyles[strings.TrimSpace(value.PopupStyle)] {
+		return errors.New("popup_style 不在允许列表中")
+	}
+	allowedLogos := map[string]bool{
+		"": true, "default": true, "gift": true, "star": true, "crown": true,
+		"trophy": true, "mic": true, "users": true, "heart": true, "shield": true,
+		"diamond": true, "rocket": true, "zap": true, "music": true, "camera": true,
+		"bookmark": true, "compass": true, "feather": true, "coffee": true, "award": true,
+		"hexagon": true, "sun": true,
+	}
+	if !allowedLogos[strings.TrimSpace(value.PopupLogo)] {
+		return errors.New("popup_logo 不在允许列表中")
+	}
+	color := strings.TrimSpace(value.PopupIconColor)
+	if color != "" && (len(color) != 7 || color[0] != '#') {
+		return errors.New("popup_icon_color 必须是 #RRGGBB")
+	}
+	if color != "" {
+		for _, char := range color[1:] {
+			if (char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F') {
+				continue
+			}
+			return errors.New("popup_icon_color 必须是 #RRGGBB")
+		}
+	}
+	lengthLimits := []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{"note", value.Note, 500},
+		{"popup_title", value.PopupTitle, 128},
+		{"popup_message", value.PopupMessage, 2000},
+		{"popup_subtitle", value.PopupSubtitle, 128},
+		{"popup_badge_text", value.PopupBadgeText, 128},
+		{"popup_button", value.PopupButton, 64},
+	}
+	for _, field := range lengthLimits {
+		if len([]rune(field.value)) > field.limit {
+			return fmt.Errorf("%s 长度不能超过 %d 个字符", field.name, field.limit)
+		}
+	}
+	return nil
+}
+
 type redeemThemeOption struct {
 	Source      string `json:"source"`
 	Filename    string `json:"filename"`
@@ -123,6 +212,15 @@ func validateRedeemPayload(store *gorm.DB, payload string) error {
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 		return fmt.Errorf("payload 不是合法 JSON: %w", err)
 	}
+	allowedFields := map[string]bool{
+		"theme": true, "bonus": true, "daily_limit_bonus": true, "tag": true,
+	}
+	for key := range parsed {
+		if !allowedFields[key] {
+			return fmt.Errorf("不支持的奖励字段: %s", key)
+		}
+	}
+	hasReward := false
 	if rawTheme, ok := parsed["theme"]; ok {
 		themeFile, ok := rawTheme.(string)
 		if !ok {
@@ -130,6 +228,7 @@ func validateRedeemPayload(store *gorm.DB, payload string) error {
 		}
 		themeFile = strings.TrimSpace(themeFile)
 		if themeFile != "" {
+			hasReward = true
 			if _, ok := redeemLocalThemeName(themeFile); !ok {
 				if !remoteThemeFilenameRe.MatchString(themeFile) {
 					return errors.New("theme 不在可兑换主题列表中")
@@ -145,6 +244,45 @@ func validateRedeemPayload(store *gorm.DB, payload string) error {
 				}
 			}
 		}
+	}
+	for _, key := range []string{"bonus", "daily_limit_bonus"} {
+		rawValue, ok := parsed[key]
+		if !ok {
+			continue
+		}
+		value, ok := rawValue.(float64)
+		if !ok || math.Trunc(value) != value {
+			return fmt.Errorf("%s 必须是整数", key)
+		}
+		if value < 0 || value > 100000 {
+			return fmt.Errorf("%s 必须在 0-100000 之间", key)
+		}
+		if value > 0 {
+			hasReward = true
+		}
+	}
+	if rawTag, ok := parsed["tag"]; ok {
+		tagName, ok := rawTag.(string)
+		if !ok {
+			return errors.New("tag 必须是字符串")
+		}
+		tagName = strings.TrimSpace(tagName)
+		if len(tagName) > 32 {
+			return errors.New("tag 长度不能超过 32 个字符")
+		}
+		if tagName != "" {
+			var count int64
+			if err := store.Model(&UserTag{}).Where("name = ?", tagName).Count(&count).Error; err != nil {
+				return fmt.Errorf("标签查询失败: %w", err)
+			}
+			if count == 0 {
+				return errors.New("标签不存在")
+			}
+			hasReward = true
+		}
+	}
+	if !hasReward {
+		return errors.New("payload 未包含有效奖励")
 	}
 	return nil
 }
@@ -234,6 +372,13 @@ func getOrCreateAIUserLimit(store *gorm.DB, machineID string) (*AIUserLimit, err
 	return &existing, nil
 }
 
+func recordRewardLedger(store *gorm.DB, entry RewardLedger) error {
+	if strings.TrimSpace(entry.EventID) == "" || strings.TrimSpace(entry.MachineID) == "" {
+		return errors.New("权益流水缺少事件或用户标识")
+	}
+	return store.Create(&entry).Error
+}
+
 // executeRedeemPayload 执行兑换码对应的功能，支持自定义弹窗
 func executeRedeemPayload(store *gorm.DB, machineID string, redeemCode *RedeemCode) (map[string]interface{}, error) {
 	var payload map[string]interface{}
@@ -273,13 +418,11 @@ func executeRedeemPayload(store *gorm.DB, machineID string, redeemCode *RedeemCo
 
 	// 处理 AI 永久额度增加
 	if bonusVal, ok := payload["bonus"]; ok {
-		bonus := 0
-		switch v := bonusVal.(type) {
-		case float64:
-			bonus = int(v)
-		case int:
-			bonus = v
+		bonusNumber, ok := bonusVal.(float64)
+		if !ok || math.Trunc(bonusNumber) != bonusNumber || bonusNumber < 0 || bonusNumber > 100000 {
+			return nil, errors.New("bonus 奖励值无效")
 		}
+		bonus := int(bonusNumber)
 		if bonus > 0 {
 			existing, err := getOrCreateAIUserLimit(store, machineID)
 			if err != nil {
@@ -288,19 +431,34 @@ func executeRedeemPayload(store *gorm.DB, machineID string, redeemCode *RedeemCo
 			if err := store.Model(existing).Update("bonus_credits", gorm.Expr("bonus_credits + ?", bonus)).Error; err != nil {
 				return nil, fmt.Errorf("发放 AI 永久额度失败: %w", err)
 			}
+			before := existing.BonusCredits
+			if err := store.Where("machine_id = ?", machineID).First(existing).Error; err != nil {
+				return nil, fmt.Errorf("核对 AI 永久额度失败: %w", err)
+			}
+			if err := recordRewardLedger(store, RewardLedger{
+				EventID:         fmt.Sprintf("redeem:%d:%s:bonus", redeemCode.ID, machineID),
+				MachineID:       machineID,
+				SourceType:      "redeem",
+				SourceID:        redeemCode.ID,
+				RewardType:      "bonus_credits",
+				Delta:           bonus,
+				BalanceBefore:   before,
+				BalanceAfter:    existing.BonusCredits,
+				PayloadSnapshot: redeemCode.Payload,
+			}); err != nil {
+				return nil, fmt.Errorf("记录 AI 永久额度流水失败: %w", err)
+			}
 			messages = append(messages, fmt.Sprintf("获得 %d 次永久AI对话额度", bonus))
 		}
 	}
 
 	// 处理每日对话上限增加
 	if dlbVal, ok := payload["daily_limit_bonus"]; ok {
-		dlb := 0
-		switch v := dlbVal.(type) {
-		case float64:
-			dlb = int(v)
-		case int:
-			dlb = v
+		dailyNumber, ok := dlbVal.(float64)
+		if !ok || math.Trunc(dailyNumber) != dailyNumber || dailyNumber < 0 || dailyNumber > 100000 {
+			return nil, errors.New("daily_limit_bonus 奖励值无效")
 		}
+		dlb := int(dailyNumber)
 		if dlb > 0 {
 			existing, err := getOrCreateAIUserLimit(store, machineID)
 			if err != nil {
@@ -317,12 +475,29 @@ func executeRedeemPayload(store *gorm.DB, machineID string, redeemCode *RedeemCo
 			if err := store.Model(existing).Update("daily_limit", newLimit).Error; err != nil {
 				return nil, fmt.Errorf("发放每日额度失败: %w", err)
 			}
+			if err := recordRewardLedger(store, RewardLedger{
+				EventID:         fmt.Sprintf("redeem:%d:%s:daily", redeemCode.ID, machineID),
+				MachineID:       machineID,
+				SourceType:      "redeem",
+				SourceID:        redeemCode.ID,
+				RewardType:      "daily_limit",
+				Delta:           dlb,
+				BalanceBefore:   baseLimit,
+				BalanceAfter:    newLimit,
+				PayloadSnapshot: redeemCode.Payload,
+			}); err != nil {
+				return nil, fmt.Errorf("记录每日额度流水失败: %w", err)
+			}
 			messages = append(messages, "每日对话额度增加")
 		}
 	}
 
 	// 处理用户标签
 	if tagName, ok := payload["tag"].(string); ok && tagName != "" {
+		var tagDef UserTag
+		if err := store.Where("name = ?", tagName).First(&tagDef).Error; err != nil {
+			return nil, errors.New("兑换标签不存在")
+		}
 		var record TelemetryRecord
 		err := store.Where("machine_id = ?", machineID).First(&record).Error
 		if err != nil {
@@ -360,16 +535,31 @@ func executeRedeemPayload(store *gorm.DB, machineID string, redeemCode *RedeemCo
 			}
 		}
 
-		var tagDef UserTag
-		if err := store.Where("name = ?", tagName).First(&tagDef).Error; err == nil {
-			messages = append(messages, fmt.Sprintf("获得「%s」称号", tagDef.DisplayName))
-		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("读取标签定义失败: %w", err)
+		messages = append(messages, fmt.Sprintf("获得「%s」称号", tagDef.DisplayName))
+		if err := recordRewardLedger(store, RewardLedger{
+			EventID:         fmt.Sprintf("redeem:%d:%s:tag", redeemCode.ID, machineID),
+			MachineID:       machineID,
+			SourceType:      "redeem",
+			SourceID:        redeemCode.ID,
+			RewardType:      "tag",
+			PayloadSnapshot: redeemCode.Payload,
+		}); err != nil {
+			return nil, fmt.Errorf("记录标签流水失败: %w", err)
 		}
 	}
 
 	if themeUnlocked {
 		messages = append(messages, fmt.Sprintf("解锁「%s」主题", themeName))
+		if err := recordRewardLedger(store, RewardLedger{
+			EventID:         fmt.Sprintf("redeem:%d:%s:theme", redeemCode.ID, machineID),
+			MachineID:       machineID,
+			SourceType:      "redeem",
+			SourceID:        redeemCode.ID,
+			RewardType:      "theme",
+			PayloadSnapshot: redeemCode.Payload,
+		}); err != nil {
+			return nil, fmt.Errorf("记录主题流水失败: %w", err)
+		}
 	}
 
 	// 构建客户端指令（优先使用自定义弹窗设置）
@@ -484,18 +674,41 @@ func initRedeemRoutes(admin *gin.RouterGroup) {
 				req.Count = 1
 			}
 			if req.Count > 100 {
-				req.Count = 100
+				c.JSON(400, gin.H{"error": "单次最多生成 100 个兑换码"})
+				return
 			}
 			maxUses := 1
 			if req.MaxUses != nil {
 				maxUses = *req.MaxUses
 			}
 			if maxUses < 0 {
-				maxUses = 1
+				c.JSON(400, gin.H{"error": "max_uses 不能为负数"})
+				return
 			}
 			if req.PopupStyle == "" {
 				req.PopupStyle = "default"
 			}
+			if req.ExpireIn < 0 || req.ExpireIn > 3650 {
+				c.JSON(400, gin.H{"error": "expire_in 必须在 0-3650 天之间"})
+				return
+			}
+			presentation := redeemPresentation{
+				Type:           req.Type,
+				Note:           req.Note,
+				PopupTitle:     req.PopupTitle,
+				PopupMessage:   req.PopupMessage,
+				PopupStyle:     req.PopupStyle,
+				PopupSubtitle:  req.PopupSubtitle,
+				PopupLogo:      req.PopupLogo,
+				PopupIconColor: req.PopupIconColor,
+				PopupBadgeText: req.PopupBadgeText,
+				PopupButton:    req.PopupButton,
+			}
+			if err := validateRedeemPresentation(presentation); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+			req.Type = strings.TrimSpace(req.Type)
 			if err := validateRedeemPayload(db, req.Payload); err != nil {
 				c.JSON(400, gin.H{"error": err.Error()})
 				return
@@ -553,50 +766,59 @@ func initRedeemRoutes(admin *gin.RouterGroup) {
 					c.JSON(500, gin.H{"error": "创建失败"})
 					return
 				}
-				log.Printf("[Redeem] 创建自定义兑换码 %s (类型: %s)", customCode, req.Type)
+				log.Printf("[Redeem] 创建自定义兑换码 %s (类型: %s)", maskRedeemCode(customCode), req.Type)
 				c.JSON(200, gin.H{"status": "success", "codes": []RedeemCode{code}, "count": 1})
 				return
 			}
 
-			for i := 0; i < req.Count; i++ {
-				codeTemplate := RedeemCode{
-					Type:           req.Type,
-					Payload:        req.Payload,
-					MaxUses:        maxUses,
-					IsActive:       true,
-					Note:           req.Note,
-					ExpiresAt:      expiresAt,
-					PopupTitle:     req.PopupTitle,
-					PopupMessage:   req.PopupMessage,
-					PopupStyle:     req.PopupStyle,
-					PopupSubtitle:  req.PopupSubtitle,
-					PopupLogo:      req.PopupLogo,
-					PopupIconColor: req.PopupIconColor,
-					PopupBadgeText: req.PopupBadgeText,
-					PopupButton:    req.PopupButton,
-				}
+			if err := db.Transaction(func(tx *gorm.DB) error {
+				for i := 0; i < req.Count; i++ {
+					codeTemplate := RedeemCode{
+						Type:           req.Type,
+						Payload:        req.Payload,
+						MaxUses:        maxUses,
+						IsActive:       true,
+						Note:           req.Note,
+						ExpiresAt:      expiresAt,
+						PopupTitle:     req.PopupTitle,
+						PopupMessage:   req.PopupMessage,
+						PopupStyle:     req.PopupStyle,
+						PopupSubtitle:  req.PopupSubtitle,
+						PopupLogo:      req.PopupLogo,
+						PopupIconColor: req.PopupIconColor,
+						PopupBadgeText: req.PopupBadgeText,
+						PopupButton:    req.PopupButton,
+					}
 
-				var createdCode RedeemCode
-				createdOK := false
-				for attempt := 0; attempt < 10; attempt++ {
-					code := codeTemplate
-					code.Code = generateCode(4, 3)
-					if err := db.Create(&code).Error; err != nil {
-						if strings.Contains(strings.ToLower(err.Error()), "unique") {
-							continue
+					var createdCode RedeemCode
+					createdOK := false
+					for attempt := 0; attempt < 10; attempt++ {
+						code := codeTemplate
+						generatedCode, err := generateCode(4, 3)
+						if err != nil {
+							return err
 						}
-						log.Printf("[Redeem] 创建兑换码失败: %v", err)
+						code.Code = generatedCode
+						if err := tx.Create(&code).Error; err != nil {
+							if strings.Contains(strings.ToLower(err.Error()), "unique") {
+								continue
+							}
+							return err
+						}
+						createdCode = code
+						createdOK = true
 						break
 					}
-					createdCode = code
-					createdOK = true
-					break
+					if !createdOK {
+						return errors.New("重试后仍未生成唯一兑换码")
+					}
+					created = append(created, createdCode)
 				}
-				if !createdOK {
-					log.Printf("[Redeem] 创建兑换码失败: 重试后仍未生成唯一兑换码")
-					continue
-				}
-				created = append(created, createdCode)
+				return nil
+			}); err != nil {
+				log.Printf("[Redeem] 批量创建兑换码失败: %v", err)
+				c.JSON(500, gin.H{"error": "批量创建失败，未保存任何兑换码"})
+				return
 			}
 
 			log.Printf("[Redeem] 批量生成 %d 个兑换码 (类型: %s)", len(created), req.Type)
@@ -631,6 +853,56 @@ func initRedeemRoutes(admin *gin.RouterGroup) {
 				c.JSON(404, gin.H{"error": "兑换码不存在"})
 				return
 			}
+			candidate := redeemPresentation{
+				Type:           code.Type,
+				Note:           code.Note,
+				PopupTitle:     code.PopupTitle,
+				PopupMessage:   code.PopupMessage,
+				PopupStyle:     code.PopupStyle,
+				PopupSubtitle:  code.PopupSubtitle,
+				PopupLogo:      code.PopupLogo,
+				PopupIconColor: code.PopupIconColor,
+				PopupBadgeText: code.PopupBadgeText,
+				PopupButton:    code.PopupButton,
+			}
+			if req.Note != nil {
+				candidate.Note = *req.Note
+			}
+			if req.Type != nil {
+				candidate.Type = strings.TrimSpace(*req.Type)
+			}
+			if req.PopupTitle != nil {
+				candidate.PopupTitle = *req.PopupTitle
+			}
+			if req.PopupMessage != nil {
+				candidate.PopupMessage = *req.PopupMessage
+			}
+			if req.PopupStyle != nil {
+				candidate.PopupStyle = *req.PopupStyle
+			}
+			if req.PopupSubtitle != nil {
+				candidate.PopupSubtitle = *req.PopupSubtitle
+			}
+			if req.PopupLogo != nil {
+				candidate.PopupLogo = *req.PopupLogo
+			}
+			if req.PopupIconColor != nil {
+				candidate.PopupIconColor = *req.PopupIconColor
+			}
+			if req.PopupBadgeText != nil {
+				candidate.PopupBadgeText = *req.PopupBadgeText
+			}
+			if req.PopupButton != nil {
+				candidate.PopupButton = *req.PopupButton
+			}
+			if req.MaxUses != nil && *req.MaxUses < 0 {
+				c.JSON(400, gin.H{"error": "max_uses 不能为负数"})
+				return
+			}
+			if err := validateRedeemPresentation(candidate); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
 
 			updates := map[string]interface{}{}
 			if req.IsActive != nil {
@@ -650,7 +922,7 @@ func initRedeemRoutes(admin *gin.RouterGroup) {
 				updates["payload"] = *req.Payload
 			}
 			if req.Type != nil {
-				updates["type"] = *req.Type
+				updates["type"] = candidate.Type
 			}
 			if req.PopupTitle != nil {
 				updates["popup_title"] = *req.PopupTitle
@@ -677,7 +949,10 @@ func initRedeemRoutes(admin *gin.RouterGroup) {
 				updates["popup_button"] = *req.PopupButton
 			}
 			if len(updates) > 0 {
-				db.Model(&code).Updates(updates)
+				if err := db.Model(&code).Updates(updates).Error; err != nil {
+					c.JSON(500, gin.H{"error": "保存失败"})
+					return
+				}
 			}
 			c.JSON(200, gin.H{"status": "success"})
 		})
@@ -787,6 +1062,10 @@ func setTelemetryPendingCommandTx(tx *gorm.DB, machineID string, pendingCommand 
 		return err
 	}
 	_, err := ensureUserUIDTx(tx, machineID, telemetryRecord.ID)
+	if err != nil {
+		return err
+	}
+	_, err = enqueueClientCommandTx(tx, machineID, pendingCommand, "redeem", 0, 0)
 	return err
 }
 
@@ -826,6 +1105,23 @@ func handleRedeem(c *gin.Context) {
 		redeemType string
 	)
 	err := db.Transaction(func(tx *gorm.DB) error {
+		var existingRecord RedeemRecord
+		existingErr := tx.Where("code = ? AND machine_id = ?", code, req.MachineID).First(&existingRecord).Error
+		if existingErr == nil {
+			if strings.TrimSpace(existingRecord.ResultCommand) == "" {
+				failMsg = "您已使用过此兑换码，旧记录无可重放结果"
+				return errRedeemRejected
+			}
+			if err := json.Unmarshal([]byte(existingRecord.ResultCommand), &cmd); err != nil {
+				return fmt.Errorf("兑换结果快照损坏: %w", err)
+			}
+			redeemType, _ = cmd["redeem_type"].(string)
+			return nil
+		}
+		if !errors.Is(existingErr, gorm.ErrRecordNotFound) {
+			return existingErr
+		}
+
 		var redeemCode RedeemCode
 		if err := tx.Where("code = ?", code).First(&redeemCode).Error; err != nil {
 			failMsg = "兑换码无效或不存在"
@@ -845,7 +1141,12 @@ func handleRedeem(c *gin.Context) {
 			return errRedeemRejected
 		}
 
-		record := RedeemRecord{Code: code, MachineID: req.MachineID}
+		record := RedeemRecord{
+			RedeemCodeID:    redeemCode.ID,
+			Code:            code,
+			MachineID:       req.MachineID,
+			PayloadSnapshot: redeemCode.Payload,
+		}
 		if err := tx.Create(&record).Error; err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "unique") {
 				failMsg = "您已使用过此兑换码"
@@ -872,9 +1173,22 @@ func handleRedeem(c *gin.Context) {
 			return errRedeemRejected
 		}
 
-		cmdJSON, _ := json.Marshal(executedCmd)
-		if err := setTelemetryPendingCommandTx(tx, req.MachineID, string(cmdJSON)); err != nil {
-			return err
+		commandID, err := newClientCommandID()
+		if err != nil {
+			return fmt.Errorf("生成命令标识失败: %w", err)
+		}
+		executedCmd["command_id"] = commandID
+		cmdJSON, err := json.Marshal(executedCmd)
+		if err != nil {
+			return fmt.Errorf("序列化兑换结果失败: %w", err)
+		}
+		if err := tx.Model(&record).Update("result_command", string(cmdJSON)).Error; err != nil {
+			return fmt.Errorf("保存兑换结果失败: %w", err)
+		}
+		if supportsClientCommandAcknowledgement(c) {
+			if err := setTelemetryPendingCommandTx(tx, req.MachineID, string(cmdJSON)); err != nil {
+				return err
+			}
 		}
 
 		cmd = executedCmd
@@ -891,7 +1205,7 @@ func handleRedeem(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[Redeem] 兑换成功 - 码: %s, 用户: %s, 类型: %s", code, req.MachineID, redeemType)
+	log.Printf("[Redeem] 兑换成功 - 码: %s, 用户: %s, 类型: %s", maskRedeemCode(code), req.MachineID, redeemType)
 
 	c.JSON(200, gin.H{
 		"status":  "success",

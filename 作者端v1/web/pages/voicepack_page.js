@@ -303,6 +303,9 @@ window.AuthorPageModules.voicepack = {
                 this._app.notifyToast("warn", res?.msg || "删除失败");
                 return;
             }
+            if (this._app.currentVoicepackName === name) {
+                this._app.setCurrentVoicepackContext("");
+            }
             this._app.notifyToast("success", "删除成功");
             await this.refreshList();
         } catch (_e) {

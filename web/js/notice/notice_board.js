@@ -49,14 +49,14 @@
         reportNoticeClick(item);
         if (window.NoticeModalModule && typeof window.NoticeModalModule.openNoticeDetail === 'function') {
             window.NoticeModalModule.openNoticeDetail(item);
-            markNoticeRead(item.id);
-            updateUnreadDots();
+            markNoticeRead(item);
+            updateUnreadDots(item);
             return;
         }
         if (app && typeof app.showAlert === 'function') {
             app.showAlert(item && item.title ? item.title : '公告详情', item && item.content ? escapeHtml(item.content) : '', 'info');
-            markNoticeRead(item.id);
-            updateUnreadDots();
+            markNoticeRead(item);
+            updateUnreadDots(item);
         }
     }
 
@@ -69,36 +69,95 @@
     /* 已读状态管理（localStorage） */
     var STORAGE_KEY = 'aimer_notice_read_ids';
 
-    function getReadIds() {
+    function getStoredReadState() {
         try {
             var raw = localStorage.getItem(STORAGE_KEY);
-            if (!raw) return [];
-            var parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? parsed : [];
-        } catch (e) { return []; }
+            return raw ? JSON.parse(raw) : {};
+        } catch (e) { return {}; }
     }
 
-    function markNoticeRead(id) {
-        if (!id) return;
-        var ids = getReadIds();
-        var sid = String(id);
-        if (ids.indexOf(sid) === -1) {
-            ids.push(sid);
-            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ids)); } catch (e) {}
+    function getReadRecords() {
+        var state = getStoredReadState();
+        if (Array.isArray(state)) {
+            return { versions: {}, legacyIds: state };
         }
+        if (!state || typeof state !== 'object') {
+            return { versions: {}, legacyIds: [] };
+        }
+        return {
+            versions: state.versions && typeof state.versions === 'object' && !Array.isArray(state.versions)
+                ? state.versions
+                : {},
+            legacyIds: Array.isArray(state.legacyIds) ? state.legacyIds : []
+        };
     }
 
-    function isNoticeRead(id) {
-        if (!id) return true;
-        return getReadIds().indexOf(String(id)) >= 0;
+    function saveReadRecords(records) {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(records)); } catch (e) {}
     }
 
-    function updateUnreadDots() {
+    function getNoticeVersion(item) {
+        if (!item || item.id == null) return '';
+        return JSON.stringify({
+            title: String(item.title || ''),
+            date: String(item.date || ''),
+            summary: String(item.summary || ''),
+            content: String(item.content || ''),
+            type: String(item.type || ''),
+            tag: String(item.tag || ''),
+            isPinned: !!item.isPinned,
+            iconClass: String(item.iconClass || '')
+        });
+    }
+
+    function migrateLegacyReadIds(data) {
+        var records = getReadRecords();
+        if (!records.legacyIds.length) return;
+
+        var remainingLegacyIds = [];
+        records.legacyIds.forEach(function(legacyId) {
+            var item = (data || []).find(function(candidate) {
+                return String(candidate && candidate.id) === String(legacyId);
+            });
+            if (item) {
+                records.versions[String(item.id)] = getNoticeVersion(item);
+            } else {
+                remainingLegacyIds.push(legacyId);
+            }
+        });
+        records.legacyIds = remainingLegacyIds;
+        saveReadRecords(records);
+    }
+
+    function markNoticeRead(item) {
+        if (!item || item.id == null) return;
+        var noticeVersion = getNoticeVersion(item);
+        if (!noticeVersion) return;
+        var records = getReadRecords();
+        records.versions[String(item.id)] = noticeVersion;
+        records.legacyIds = records.legacyIds.filter(function(legacyId) {
+            return String(legacyId) !== String(item.id);
+        });
+        saveReadRecords(records);
+    }
+
+    function isNoticeRead(item) {
+        if (!item || item.id == null) return true;
+        var records = getReadRecords();
+        var noticeId = String(item.id);
+        if (Object.prototype.hasOwnProperty.call(records.versions, noticeId)) {
+            return records.versions[noticeId] === getNoticeVersion(item);
+        }
+        return records.legacyIds.indexOf(noticeId) >= 0;
+    }
+
+    function updateUnreadDots(item) {
+        if (!item || item.id == null) return;
         var dots = document.querySelectorAll('.notice-unread-dot');
-        var readIds = getReadIds();
+        var noticeId = String(item.id);
         dots.forEach(function(dot) {
             var nid = dot.getAttribute('data-unread-nid');
-            if (nid && readIds.indexOf(nid) >= 0) {
+            if (nid === noticeId) {
                 dot.classList.add('read');
                 if (typeof dot.remove === 'function') {
                     dot.remove();
@@ -215,6 +274,9 @@
                 if (app) app.noticeData = fallback;
             }
         }
+        if (hasRemoteData) {
+            migrateLegacyReadIds(data);
+        }
 
         const connected = !!(app && app.telemetryConnected);
         const seqId = (app && app.userSeqId) ? parseInt(app.userSeqId, 10) || 0 : 0;
@@ -256,7 +318,7 @@
         const listHtml = others.map((item) => {
             const meta = getTypeMeta(item.type);
             const shortDate = formatShortDate(item.date);
-            var unread = !isNoticeRead(item.id);
+            var unread = !isNoticeRead(item);
             var unreadDot = unread
                 ? `<span class="notice-unread-dot" data-unread-nid="${escapeHtml(item.id)}"></span>`
                 : '';
@@ -278,7 +340,7 @@
             const pinnedMeta = getTypeMeta(pinned.type);
             var decoIcon = pinned.iconClass || pinnedMeta.iconClass;
             const pinnedPreview = buildPinnedPreview(pinned);
-            var pinnedUnread = !isNoticeRead(pinned.id);
+            var pinnedUnread = !isNoticeRead(pinned);
             var pinnedUnreadDot = pinnedUnread
                 ? `<span class="notice-unread-dot notice-unread-dot-hero" data-unread-nid="${escapeHtml(pinned.id)}"></span>`
                 : '';

@@ -14,6 +14,23 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	communityProtocolHeader       = "X-AimerWT-Community-Protocol"
+	minimumCommunityWriteProtocol = 2
+)
+
+func requireCommunityWriteProtocol(c *gin.Context) bool {
+	protocol, err := strconv.Atoi(strings.TrimSpace(c.GetHeader(communityProtocolHeader)))
+	if err != nil || protocol < minimumCommunityWriteProtocol {
+		c.JSON(http.StatusUpgradeRequired, gin.H{
+			"error":             "当前客户端版本不支持社区写入，请更新到 3.1 或更高版本",
+			"required_protocol": minimumCommunityWriteProtocol,
+		})
+		return false
+	}
+	return true
+}
+
 // NoticeComment 公告评论
 type NoticeComment struct {
 	ID               uint      `gorm:"primaryKey;autoIncrement" json:"id"`
@@ -21,6 +38,7 @@ type NoticeComment struct {
 	ParentID         uint      `gorm:"index:idx_notice_comment_notice_parent_status_created,priority:2;default:0" json:"parent_id"`
 	ReplyToID        uint      `gorm:"index;default:0" json:"reply_to_id"`
 	MachineID        string    `gorm:"index:idx_notice_comment_notice_machine_created,priority:2;type:varchar(64);not null" json:"machine_id"`
+	ClientRequestID  string    `gorm:"index;type:varchar(64);default:''" json:"client_request_id,omitempty"`
 	Content          string    `gorm:"type:text;not null" json:"content"`
 	LikeCount        int       `gorm:"default:0" json:"like_count"`
 	WeightAdjustment float64   `gorm:"default:0" json:"weight_adjustment"`
@@ -51,7 +69,10 @@ type NoticeCommentBan struct {
 type CommentReport struct {
 	ID                uint      `gorm:"primaryKey;autoIncrement" json:"id"`
 	CommentID         uint      `gorm:"index;not null" json:"comment_id"`
-	ReporterMachineID string    `gorm:"type:varchar(64);not null" json:"reporter_machine_id"`
+	ReporterMachineID string    `gorm:"index;type:varchar(64);not null" json:"reporter_machine_id"`
+	AuthorMachineID   string    `gorm:"index;type:varchar(64);not null" json:"author_machine_id"`
+	NoticeID          uint      `gorm:"index;not null" json:"notice_id"`
+	CommentContent    string    `gorm:"type:text;not null" json:"comment_content"`
 	ReportType        string    `gorm:"type:varchar(32);not null" json:"report_type"`
 	Reason            string    `gorm:"type:text" json:"reason"`
 	Status            string    `gorm:"type:varchar(16);default:'pending'" json:"status"`
@@ -113,6 +134,72 @@ func serializeComment(c NoticeComment, seqMap map[string]uint, likedSet map[uint
 		"weight_adjustment": roundCommentWeight(c.WeightAdjustment),
 		"created_at":        c.CreatedAt.Format("2006-01-02 15:04:05"),
 	}
+}
+
+func isValidCommunityRequestID(value string) bool {
+	if len(value) < 8 || len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func migrateCommunityIdempotencyIndexes() error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		statements := []string{
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_notice_comment_request_unique
+				ON notice_comments(machine_id, client_request_id)
+				WHERE client_request_id <> ''`,
+			`DROP INDEX IF EXISTS idx_notice_reaction_unique`,
+			`DELETE FROM notice_reactions
+				WHERE id NOT IN (
+					SELECT MAX(id) FROM notice_reactions GROUP BY notice_id, machine_id
+				)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_notice_reaction_user_unique
+				ON notice_reactions(notice_id, machine_id)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_comment_report_reporter_unique
+				ON comment_reports(comment_id, reporter_machine_id)`,
+		}
+		for _, statement := range statements {
+			if err := tx.Exec(statement).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func buildCreatedCommentResponse(comment NoticeComment, viewerMachineID string, viewerRecord *TelemetryRecord, replyTarget *NoticeComment) map[string]interface{} {
+	if replyTarget == nil && comment.ReplyToID > 0 {
+		var target NoticeComment
+		if err := db.First(&target, comment.ReplyToID).Error; err == nil {
+			replyTarget = &target
+		}
+	}
+	machineIDs := []string{comment.MachineID}
+	commentMap := map[uint]NoticeComment{comment.ID: comment}
+	if replyTarget != nil {
+		machineIDs = append(machineIDs, replyTarget.MachineID)
+		commentMap[replyTarget.ID] = *replyTarget
+	}
+	weightCfg := LoadCommentWeightConfig()
+	seqMap := buildSeqMap(machineIDs)
+	authorWeight := buildCommentAuthorWeightMap([]string{comment.MachineID}, weightCfg)[comment.MachineID]
+	authorMetaMap := buildCommentAuthorMetaMap([]string{comment.MachineID})
+	tagDefs := buildTagDefinitionMap(collectTagNamesFromAuthorMeta(authorMetaMap))
+	aliasMap := buildAliasMap(machineIDs)
+	nicknameMap := buildNicknameMap(machineIDs)
+	commentResp := serializeComment(comment, seqMap, nil, authorMetaMap, nicknameMap, tagDefs)
+	commentResp["reply_count"] = 0
+	commentResp["author_weight"] = authorWeight
+	commentResp["weight_score"] = computeCommentWeight(comment.LikeCount, 0, authorWeight, comment.WeightAdjustment)
+	attachCommentMeta(commentResp, comment, viewerMachineID, viewerRecord != nil && viewerRecord.IsAdmin, seqMap, aliasMap, nicknameMap, commentMap)
+	return commentResp
 }
 
 // 批量查询 MachineID → 公开 UID 序号映射
@@ -449,22 +536,24 @@ func attachCommentMeta(item map[string]interface{}, comment NoticeComment, viewe
 }
 
 func deleteNoticeCommentCascade(commentID uint) error {
-	var replyIDs []uint
-	if err := db.Model(&NoticeComment{}).Where("parent_id = ?", commentID).Pluck("id", &replyIDs).Error; err != nil {
-		return err
-	}
-	if len(replyIDs) > 0 {
-		if err := db.Where("comment_id IN ?", replyIDs).Delete(&NoticeCommentLike{}).Error; err != nil {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var replyIDs []uint
+		if err := tx.Model(&NoticeComment{}).Where("parent_id = ?", commentID).Pluck("id", &replyIDs).Error; err != nil {
 			return err
 		}
-		if err := db.Where("parent_id = ?", commentID).Delete(&NoticeComment{}).Error; err != nil {
+		if len(replyIDs) > 0 {
+			if err := tx.Where("comment_id IN ?", replyIDs).Delete(&NoticeCommentLike{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("parent_id = ?", commentID).Delete(&NoticeComment{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("comment_id = ?", commentID).Delete(&NoticeCommentLike{}).Error; err != nil {
 			return err
 		}
-	}
-	if err := db.Where("comment_id = ?", commentID).Delete(&NoticeCommentLike{}).Error; err != nil {
-		return err
-	}
-	return db.Delete(&NoticeComment{}, commentID).Error
+		return tx.Delete(&NoticeComment{}, commentID).Error
+	})
 }
 
 func parseNoticeUintParam(c *gin.Context, key string) (uint, bool) {
@@ -864,13 +953,17 @@ func initCommunityClientRoutes(r *gin.Engine) {
 			c.JSON(403, gin.H{"error": "公告评论功能已关闭"})
 			return
 		}
+		if !requireCommunityWriteProtocol(c) {
+			return
+		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
 		var req struct {
-			NoticeID  uint   `json:"notice_id"`
-			MachineID string `json:"machine_id"`
-			Content   string `json:"content"`
-			ParentID  uint   `json:"parent_id"`
-			ReplyToID uint   `json:"reply_to_id"`
+			NoticeID        uint   `json:"notice_id"`
+			MachineID       string `json:"machine_id"`
+			Content         string `json:"content"`
+			ParentID        uint   `json:"parent_id"`
+			ReplyToID       uint   `json:"reply_to_id"`
+			ClientRequestID string `json:"client_request_id"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": "请求数据格式错误"})
@@ -882,8 +975,28 @@ func initCommunityClientRoutes(r *gin.Engine) {
 
 		// 校验必填字段
 		content := strings.TrimSpace(req.Content)
-		if req.NoticeID == 0 || content == "" || req.MachineID == "" {
-			c.JSON(400, gin.H{"error": "notice_id, machine_id, content 为必填"})
+		req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
+		if req.NoticeID == 0 || content == "" || req.MachineID == "" || !isValidCommunityRequestID(req.ClientRequestID) {
+			c.JSON(400, gin.H{"error": "notice_id, machine_id, content 以及有效的 client_request_id 为必填"})
+			return
+		}
+		var existingComment NoticeComment
+		existingErr := db.Where("machine_id = ? AND client_request_id = ?", req.MachineID, req.ClientRequestID).First(&existingComment).Error
+		if existingErr == nil {
+			if existingComment.NoticeID != req.NoticeID || existingComment.Content != content {
+				c.JSON(http.StatusConflict, gin.H{"error": "client_request_id 已用于其他评论请求"})
+				return
+			}
+			viewerRecord := loadCommentUserRecord(req.MachineID)
+			c.JSON(http.StatusOK, gin.H{
+				"status":   "success",
+				"comment":  buildCreatedCommentResponse(existingComment, req.MachineID, viewerRecord, nil),
+				"replayed": true,
+			})
+			return
+		}
+		if !errors.Is(existingErr, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "读取评论请求状态失败"})
 			return
 		}
 
@@ -978,38 +1091,28 @@ func initCommunityClientRoutes(r *gin.Engine) {
 		}
 
 		comment := NoticeComment{
-			NoticeID:  req.NoticeID,
-			ParentID:  req.ParentID,
-			ReplyToID: req.ReplyToID,
-			MachineID: req.MachineID,
-			Content:   content,
-			Status:    "visible",
+			NoticeID:        req.NoticeID,
+			ParentID:        req.ParentID,
+			ReplyToID:       req.ReplyToID,
+			MachineID:       req.MachineID,
+			ClientRequestID: req.ClientRequestID,
+			Content:         content,
+			Status:          "visible",
 		}
 		if err := db.Create(&comment).Error; err != nil {
+			if lookupErr := db.Where("machine_id = ? AND client_request_id = ?", req.MachineID, req.ClientRequestID).First(&existingComment).Error; lookupErr == nil {
+				c.JSON(http.StatusOK, gin.H{
+					"status":   "success",
+					"comment":  buildCreatedCommentResponse(existingComment, req.MachineID, commenterRecord, nil),
+					"replayed": true,
+				})
+				return
+			}
 			c.JSON(500, gin.H{"error": "保存失败"})
 			return
 		}
 
-		machineIDs := []string{req.MachineID}
-		commentMap := map[uint]NoticeComment{
-			comment.ID: comment,
-		}
-		if replyTarget != nil {
-			machineIDs = append(machineIDs, replyTarget.MachineID)
-			commentMap[replyTarget.ID] = *replyTarget
-		}
-
-		seqMap := buildSeqMap(machineIDs)
-		authorWeight := buildCommentAuthorWeightMap([]string{req.MachineID}, weightCfg)[req.MachineID]
-		authorMetaMap := buildCommentAuthorMetaMap([]string{req.MachineID})
-		tagDefs := buildTagDefinitionMap(collectTagNamesFromAuthorMeta(authorMetaMap))
-		aliasMap := buildAliasMap(machineIDs)
-		nicknameMap := buildNicknameMap(machineIDs)
-		commentResp := serializeComment(comment, seqMap, nil, authorMetaMap, nicknameMap, tagDefs)
-		commentResp["reply_count"] = 0
-		commentResp["author_weight"] = authorWeight
-		commentResp["weight_score"] = computeCommentWeight(comment.LikeCount, 0, authorWeight, comment.WeightAdjustment)
-		attachCommentMeta(commentResp, comment, req.MachineID, commenterRecord != nil && commenterRecord.IsAdmin, seqMap, aliasMap, nicknameMap, commentMap)
+		commentResp := buildCreatedCommentResponse(comment, req.MachineID, commenterRecord, replyTarget)
 
 		// 审计日志：评论创建
 		var userVersion string
@@ -1048,8 +1151,9 @@ func initCommunityClientRoutes(r *gin.Engine) {
 		}
 
 		c.JSON(200, gin.H{
-			"status":  "success",
-			"comment": commentResp,
+			"status":   "success",
+			"comment":  commentResp,
+			"replayed": false,
 		})
 	})
 
@@ -1059,10 +1163,14 @@ func initCommunityClientRoutes(r *gin.Engine) {
 			c.JSON(403, gin.H{"error": "公告评论功能已关闭"})
 			return
 		}
+		if !requireCommunityWriteProtocol(c) {
+			return
+		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<10)
 		var req struct {
 			CommentID uint   `json:"comment_id"`
 			MachineID string `json:"machine_id"`
+			Liked     *bool  `json:"liked"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": "请求数据格式错误"})
@@ -1071,8 +1179,8 @@ func initCommunityClientRoutes(r *gin.Engine) {
 		if !ensureClientMachineBinding(c, req.MachineID) {
 			return
 		}
-		if req.CommentID == 0 || req.MachineID == "" {
-			c.JSON(400, gin.H{"error": "comment_id, machine_id 为必填"})
+		if req.CommentID == 0 || req.MachineID == "" || req.Liked == nil {
+			c.JSON(400, gin.H{"error": "comment_id, machine_id, liked 为必填"})
 			return
 		}
 
@@ -1082,7 +1190,8 @@ func initCommunityClientRoutes(r *gin.Engine) {
 			return
 		}
 
-		liked := false
+		liked := *req.Liked
+		newlyLiked := false
 		if err := db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.First(&comment, req.CommentID).Error; err != nil {
 				return err
@@ -1090,20 +1199,23 @@ func initCommunityClientRoutes(r *gin.Engine) {
 
 			var existing NoticeCommentLike
 			err := tx.Where("comment_id = ? AND machine_id = ?", req.CommentID, req.MachineID).First(&existing).Error
-			if err == nil {
+			if liked {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					if err := tx.Create(&NoticeCommentLike{
+						CommentID: req.CommentID,
+						MachineID: req.MachineID,
+					}).Error; err != nil {
+						return err
+					}
+					newlyLiked = true
+				} else if err != nil {
+					return err
+				}
+			} else if err == nil {
 				if err := tx.Delete(&existing).Error; err != nil {
 					return err
 				}
-				liked = false
-			} else if errors.Is(err, gorm.ErrRecordNotFound) {
-				if err := tx.Create(&NoticeCommentLike{
-					CommentID: req.CommentID,
-					MachineID: req.MachineID,
-				}).Error; err != nil {
-					return err
-				}
-				liked = true
-			} else {
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
 
@@ -1131,7 +1243,7 @@ func initCommunityClientRoutes(r *gin.Engine) {
 		}
 		authorWeight := buildCommentAuthorWeightMap([]string{comment.MachineID}, weightCfg)[comment.MachineID]
 
-		if liked && comment.MachineID != req.MachineID {
+		if newlyLiked && comment.MachineID != req.MachineID {
 			likerNickname := ""
 			nm := buildNicknameMap([]string{req.MachineID})
 			if n, ok := nm[req.MachineID]; ok && n != "" {
@@ -1175,6 +1287,9 @@ func initCommunityClientRoutes(r *gin.Engine) {
 	r.POST("/notice-comment-report", func(c *gin.Context) {
 		if !sysConfig.NoticeCommentEnabled {
 			c.JSON(403, gin.H{"error": "公告评论功能已关闭"})
+			return
+		}
+		if !requireCommunityWriteProtocol(c) {
 			return
 		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
@@ -1226,11 +1341,20 @@ func initCommunityClientRoutes(r *gin.Engine) {
 		report := CommentReport{
 			CommentID:         req.CommentID,
 			ReporterMachineID: req.MachineID,
+			AuthorMachineID:   comment.MachineID,
+			NoticeID:          comment.NoticeID,
+			CommentContent:    comment.Content,
 			ReportType:        req.ReportType,
 			Reason:            reason,
 			Status:            "pending",
 		}
 		if err := db.Create(&report).Error; err != nil {
+			var duplicateCount int64
+			db.Model(&CommentReport{}).Where("comment_id = ? AND reporter_machine_id = ?", req.CommentID, req.MachineID).Count(&duplicateCount)
+			if duplicateCount > 0 {
+				c.JSON(http.StatusConflict, gin.H{"error": "您已举报过该评论"})
+				return
+			}
 			c.JSON(500, gin.H{"error": "保存失败"})
 			return
 		}
@@ -1245,6 +1369,9 @@ func initCommunityClientRoutes(r *gin.Engine) {
 
 	// 删除评论（本人可删自己的评论，管理员可删除任意评论）
 	r.DELETE("/notice-comments/:comment_id", func(c *gin.Context) {
+		if !requireCommunityWriteProtocol(c) {
+			return
+		}
 		commentID, ok := parseNoticeUintParam(c, "comment_id")
 		if !ok {
 			return
@@ -1862,7 +1989,12 @@ func enqueueInteractionCommand(targetMachineID string, action string, data map[s
 	if err != nil {
 		return
 	}
-	db.Model(&TelemetryRecord{}).
-		Where("machine_id = ? AND (pending_command IS NULL OR pending_command = '')", targetMachineID).
-		Update("pending_command", string(cmdJSON))
+	_ = db.Transaction(func(tx *gorm.DB) error {
+		if _, err := enqueueClientCommandTx(tx, targetMachineID, string(cmdJSON), "interaction", 0, 0); err != nil {
+			return err
+		}
+		return tx.Model(&TelemetryRecord{}).
+			Where("machine_id = ? AND (pending_command IS NULL OR pending_command = '')", targetMachineID).
+			Update("pending_command", string(cmdJSON)).Error
+	})
 }

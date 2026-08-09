@@ -51,6 +51,13 @@
         return Array.from(String(value == null ? '' : value)).length;
     }
 
+    function createClientRequestId() {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            return window.crypto.randomUUID();
+        }
+        return 'comment-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14);
+    }
+
     function normalizeCommentCharLimit(value) {
         var limit = Number(value || 0);
         if (!isFinite(limit) || limit <= 0) return DEFAULT_COMMENT_CHAR_LIMIT;
@@ -139,6 +146,8 @@
                 banExpiresAt: '',
                 commentLoadError: '',
                 isSubmittingReaction: false,
+				isSubmittingComment: false,
+				pendingCommentRequest: null,
                 reactionLoadToken: 0,
                 pendingCommentLikes: {},
                 localPinnedComments: {},
@@ -197,7 +206,10 @@
     }
 
     function _buildTelemetryHeaders(path, method, machineID, includeJsonContentType) {
-        var headers = { 'X-AimerWT-Client': '1' };
+		var headers = {
+			'X-AimerWT-Client': '1',
+			'X-AimerWT-Community-Protocol': '2'
+		};
         if (includeJsonContentType) headers['Content-Type'] = 'application/json';
 
         if (window.pywebview && window.pywebview.api && window.pywebview.api.get_telemetry_auth_headers) {
@@ -850,8 +862,13 @@
                 window.NoticeClientHelper.getSummaryReactions(noticeId) ||
                 [];
         }
+		var currentEmoji = '';
+		previousReactions.forEach(function (reaction) {
+			if (reaction && reaction.reacted) currentEmoji = String(reaction.emoji || '');
+		});
+		var desiredEmoji = currentEmoji === emoji ? '' : emoji;
         var optimisticReactions = window.NoticeClientHelper && typeof window.NoticeClientHelper.buildOptimisticReactions === 'function'
-            ? window.NoticeClientHelper.buildOptimisticReactions(previousReactions, emoji)
+			? window.NoticeClientHelper.buildOptimisticReactions(previousReactions, desiredEmoji)
             : previousReactions;
         state.isSubmittingReaction = true;
         // 作废旧的表情加载结果，避免刚切换成功又被旧快照覆盖。
@@ -866,17 +883,17 @@
                 return fetch(baseUrl + '/notice-reaction', {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify({ notice_id: Number(noticeId), machine_id: hwid, emoji: emoji })
+					body: JSON.stringify({ notice_id: Number(noticeId), machine_id: hwid, emoji: desiredEmoji })
                 });
             });
         }, {
-            payload: { notice_id: Number(noticeId), machine_id: hwid, emoji: emoji }
+			payload: { notice_id: Number(noticeId), machine_id: hwid, emoji: desiredEmoji }
         }).then(function () {
             if (!_isActiveRender(noticeId, renderSequence)) return;
             _loadReactions(noticeId, { keepCurrentOnFailure: true });
         }).catch(function (err) {
             if (!_isActiveRender(noticeId, renderSequence)) return;
-            _renderReactions(noticeId, previousReactions);
+			_loadReactions(noticeId);
             _showToast((err && err.message) || '表情互动失败，请稍后重试');
         }).finally(function () {
             state.isSubmittingReaction = false;
@@ -1495,10 +1512,11 @@
         for (var i = 0; i < allItems.length; i++) {
             if (allItems[i].id === commentId) { target = allItems[i]; break; }
         }
+		var desiredLiked = target ? !target.liked : true;
         if (target) {
-            var wasLiked = !!target.liked;
-            target.liked = !wasLiked;
-            target.like_count = Math.max(0, (target.like_count || 0) + (wasLiked ? -1 : 1));
+			var wasLiked = !!target.liked;
+			target.liked = desiredLiked;
+			target.like_count = Math.max(0, (target.like_count || 0) + (desiredLiked ? 1 : -1));
             _renderComments(noticeId);
         }
         state.pendingCommentLikes[commentId] = true;
@@ -1508,11 +1526,11 @@
                 return fetch(baseUrl + '/notice-comment-like', {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify({ comment_id: commentId, machine_id: hwid })
+					body: JSON.stringify({ comment_id: commentId, machine_id: hwid, liked: desiredLiked })
                 });
             });
         }, {
-            payload: { comment_id: commentId, machine_id: hwid }
+			payload: { comment_id: commentId, machine_id: hwid, liked: desiredLiked }
         }).then(function (data) {
             // 用后端返回的精确数据同步权重
             if (target && data) {
@@ -1525,12 +1543,7 @@
 	                _loadComments(noticeId, { reset: true, force: true });
             }
         }).catch(function (err) {
-            // 失败时回滚
-            if (target) {
-                target.liked = !target.liked;
-                target.like_count = Math.max(0, (target.like_count || 0) + (target.liked ? 1 : -1));
-                _renderComments(noticeId);
-            }
+			_loadComments(noticeId, { reset: true, force: true });
             _showToast((err && err.message) || '点赞失败，请重试');
         }).finally(function () {
             delete state.pendingCommentLikes[commentId];
@@ -1558,6 +1571,7 @@
         }
 
         var state = _getState(noticeId);
+		if (state.isSubmittingComment) return;
         if (!state.canComment) {
             _showToast(state.banReason ? ('评论资格已封禁：' + state.banReason) : '评论资格已被封禁');
             return;
@@ -1574,6 +1588,22 @@
 
         var parentId = state.replyingTo ? Number(state.replyingTo.rootId || 0) : 0;
         var replyToId = state.replyingTo ? Number(state.replyingTo.targetId || 0) : 0;
+		var pendingRequest = state.pendingCommentRequest;
+		var canReuseRequest = pendingRequest &&
+			pendingRequest.content === content &&
+			pendingRequest.parent_id === parentId &&
+			pendingRequest.reply_to_id === replyToId;
+		var clientRequestId = canReuseRequest ? pendingRequest.client_request_id : createClientRequestId();
+		var requestPayload = {
+			notice_id: Number(noticeId),
+			machine_id: hwid,
+			content: content,
+			parent_id: parentId,
+			reply_to_id: replyToId,
+			client_request_id: clientRequestId
+		};
+		state.pendingCommentRequest = requestPayload;
+		state.isSubmittingComment = true;
 
         if (sendBtn) sendBtn.disabled = true;
 
@@ -1582,38 +1612,27 @@
                 return fetch(baseUrl + '/notice-comment', {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify({
-                        notice_id: Number(noticeId),
-                        machine_id: hwid,
-                        content: content,
-                        parent_id: parentId,
-                        reply_to_id: replyToId
-                    })
+					body: JSON.stringify(requestPayload)
                 });
             });
         }, {
-            payload: {
-                notice_id: Number(noticeId),
-                machine_id: hwid,
-                content: content,
-                parent_id: parentId,
-                reply_to_id: replyToId
-            }
+			payload: requestPayload
         }).then(function (data) {
             if (data.status === 'success') {
+				state.pendingCommentRequest = null;
                 input.value = '';
                 if (sendBtn) sendBtn.disabled = true;
                 if (data.comment) {
-                    state.totalCount = Number(state.totalCount || 0) + 1;
+					if (!data.replayed) state.totalCount = Number(state.totalCount || 0) + 1;
                     if (parentId === 0) {
                         _upsertLocalPinnedComment(noticeId, data.comment);
                     }
                 }
-                if (parentId > 0) {
+				if (parentId > 0) {
                     state.expandedReplies[parentId] = true;
                     delete state.replyCache[parentId];
                     var parentComment = _findCommentById(noticeId, parentId);
-                    if (parentComment) {
+					if (parentComment && !data.replayed) {
                         parentComment.reply_count = Number(parentComment.reply_count || 0) + 1;
                     }
                 }
@@ -1648,7 +1667,9 @@
             }
         }).catch(function (err) {
             _showToast((err && err.message) || '网络错误，请重试');
-            if (sendBtn) sendBtn.disabled = false;
+		}).finally(function () {
+			state.isSubmittingComment = false;
+			_updateComposerState(noticeId);
         });
     }
 

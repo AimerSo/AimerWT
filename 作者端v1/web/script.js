@@ -1,7 +1,7 @@
 
 const STORAGE_KEY = "aimerwt_author_v1_state";
 const FALLBACK_AVATAR = "assets/avatar_placeholder.svg";
-const DEFAULT_COVER = "assets/card_image.png";
+const DEFAULT_COVER = "assets/card_image_small.png";
 const MODAL_ID = "modal-mod-preview";
 const AUTHOR_WORKS_MODAL_ID = "modal-author-works";
 const PROFILE_MODAL_ID = "profile-modal";
@@ -12,6 +12,13 @@ const MAX_PREVIEW_AUDIO_COUNT = 3;
 const MAX_RELATED_PACK_COUNT = 2;
 const MAX_RELATED_DESC_LENGTH = 50;
 const RELATED_AVATAR_FALLBACK = "assets/avatar_placeholder.svg";
+
+function getLocalDateString(date = new Date()) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+}
 
 const HOME_LINK_META = [
     { id: "bilibili", name: "B站主页", icon: "ri-bilibili-line", tone: "home-icon-bili" },
@@ -102,7 +109,7 @@ const DEFAULT_STATE = {
         title: "测试语音包",
         author: "",
         version: "2.53",
-        date: new Date().toISOString().split("T")[0],
+        date: getLocalDateString(),
         size_str: "<1 MB",
         tags: ["陆战", "空战", "海战", "无线电", "导弹音效", "音乐包", "降噪包", "飞行员语音"],
         language: [],
@@ -158,6 +165,8 @@ const app = {
     previewExpanded: false,
     currentToolboxOption: "img-to-webp",
     _profilePendingAvatar: "",
+    _coverClearRequested: false,
+    _coverChanged: false,
     currentVoicepackName: "",
 
     state: JSON.parse(JSON.stringify(DEFAULT_STATE)),
@@ -255,8 +264,7 @@ const app = {
 
     normalizeTagList(raw) {
         const list = Array.isArray(raw) ? raw : this.parseList(raw);
-        const normalized = list.map((v) => String(v || "").trim()).filter(Boolean);
-        return normalized.length ? normalized : ["陆战"];
+        return [...new Set(list.map((v) => String(v || "").trim()).filter(Boolean))];
     },
 
     normalizeLanguageList(raw) {
@@ -454,6 +462,18 @@ const app = {
         });
     },
 
+    showChoiceDialog(options = {}) {
+        return this._openDialog({
+            mode: "choice",
+            title: options.title || "请选择",
+            message: options.message || "",
+            choiceValue: String(options.choiceValue || ""),
+            choices: Array.isArray(options.choices) ? options.choices : [],
+            choicesCompact: Boolean(options.choicesCompact),
+            confirmText: options.confirmText || "确定",
+            cancelText: options.cancelText || "取消"
+        });
+    },
     showChoiceInputDialog(options = {}) {
         return this._openDialog({
             mode: "choice-input",
@@ -1212,6 +1232,8 @@ const app = {
             });
             if (!dataUrl || !String(dataUrl).startsWith("data:image/")) throw new Error("invalid_image_data");
             this.state.modForm.cover_url = dataUrl;
+            this._coverClearRequested = false;
+            this._coverChanged = true;
             this.persistState();
             this.renderPreviewLists();
             this.updateModCoverFileHint(file.name);
@@ -1224,6 +1246,8 @@ const app = {
     clearModCoverImage() {
         const fileInput = document.getElementById("mod-cover-file");
         this.state.modForm.cover_url = "";
+        this._coverClearRequested = true;
+        this._coverChanged = false;
         if (fileInput) fileInput.value = "";
         this.persistState();
         this.renderPreviewLists();
@@ -1266,7 +1290,6 @@ const app = {
                 const tags = Array.isArray(this.state.modForm.tags) ? [...this.state.modForm.tags] : [];
                 const exists = tags.includes(value);
                 this.state.modForm.tags = exists ? tags.filter((t) => t !== value) : [...tags, value];
-                if (!this.state.modForm.tags.length) this.state.modForm.tags = ["陆战"];
                 this.persistState();
                 this.renderTagChoices();
                 this.renderPreviewLists();
@@ -2321,6 +2344,8 @@ const app = {
         );
         form.preview_audio_files = this.normalizePreviewAudioList(modData.preview_audio_files || []);
         form.related_voicepacks = this.normalizeRelatedVoicepacks(modData.related_voicepacks || []);
+        this._coverClearRequested = false;
+        this._coverChanged = false;
 
         this.persistState();
         this.syncVoiceFormInputs();
@@ -2351,6 +2376,8 @@ const app = {
             tags: this.normalizeTagList(f.tags),
             language: this.normalizeLanguageList(f.language),
             cover_url: String(f.cover_url || "").trim(),
+            cover_clear: Boolean(this._coverClearRequested),
+            cover_changed: Boolean(this._coverChanged),
             full_desc: String(f.full_desc || "").trim(),
             preview_use_random_bank: this.normalizePreviewUseRandomBank(
                 f.preview_use_random_bank,
@@ -2366,11 +2393,11 @@ const app = {
         const modName = String(this.currentVoicepackName || "").trim();
         if (!modName) {
             this.notifyToast("warn", "请先在语音包库中选择一个语音包");
-            return;
+            return false;
         }
         if (!window.pywebview?.api?.save_voicepack_info) {
             this.notifyToast("warn", "后端 API 不可用");
-            return;
+            return false;
         }
 
         const payload = this.buildVoicepackInfoPayload();
@@ -2378,8 +2405,10 @@ const app = {
             const res = await window.pywebview.api.save_voicepack_info(modName, payload);
             if (!res?.success) {
                 this.notifyToast("warn", res?.msg || "保存失败");
-                return;
+                return false;
             }
+            this._coverClearRequested = false;
+            this._coverChanged = false;
             if (res.size_str) this.state.modForm.size_str = String(res.size_str);
             if (res.date) this.state.modForm.date = this.normalizeDateInput(res.date);
             this.persistState();
@@ -2388,8 +2417,10 @@ const app = {
             this.notifyToast("success", `已保存到 ${modName}/info.json`);
             const vpMod = this.pageModules.get("voicepack");
             if (vpMod && typeof vpMod.refreshList === "function") vpMod.refreshList();
+            return true;
         } catch (_e) {
             this.notifyToast("warn", "保存失败");
+            return false;
         }
     },
 
@@ -2404,7 +2435,8 @@ const app = {
             return;
         }
 
-        await this.saveCurrentVoicepackInfo();
+        const saved = await this.saveCurrentVoicepackInfo();
+        if (!saved) return;
         const dialogRes = await this.showChoiceInputDialog({
             title: "导出 BANK 包",
             message: "请选择导出方式，并输入导出的文件名（不需要后缀）",
@@ -2453,7 +2485,7 @@ const app = {
         const title = String(f.title || "").trim() || "未命名语音包";
         const author = String(f.author || "").trim() || String(profile.name || "").trim() || "未知作者";
         const version = this.normalizeVersion(f.version || "1.0");
-        const date = String(f.date || "").trim() || new Date().toISOString().split("T")[0];
+        const date = String(f.date || "").trim() || getLocalDateString();
         const sizeStr = String(f.size_str || "").trim() || "<1 MB";
         const tags = this.normalizeTagList(f.tags);
         const language = this.normalizeLanguageList(f.language);
@@ -2534,9 +2566,10 @@ const app = {
         const updateDate = this.escapeHtml(mod.date || "未知日期");
         const noteText = this.escapeHtml(mod.note || "暂无留言");
 
-        const fullLangList = Array.isArray(mod.language) ? mod.language : [String(mod.language || "中")];
-        let displayLangs = fullLangList.filter((lang) => ["中", "英", "美", "俄", "德", "日", "法"].includes(lang));
-        if (displayLangs.length === 0) displayLangs = fullLangList.slice(0, 2);
+        const fullLangList = Array.isArray(mod.language)
+            ? (mod.language.length ? mod.language : ["未识别"])
+            : [String(mod.language || "未识别")];
+        const displayLangs = fullLangList.slice(0, 3);
 
         const langHtml = displayLangs.map((lang) => {
             const cls = LANG_CLASS_MAP[lang] || "";
@@ -2554,7 +2587,7 @@ const app = {
         const displayVersion = this.normalizeVersion(mod.version);
         div.innerHTML = `
             <div class="mod-img-area">
-                <img src="${imgUrl}" class="mod-img" alt="cover" onerror="this.src='${this.escapeHtml(DEFAULT_COVER)}'">
+                <img src="${imgUrl}" class="mod-img" alt="${this.escapeHtml(mod.title)}" onerror="this.style.display='none'">
             </div>
             <div class="mod-info-area">
                 <div class="mod-ver">v${this.escapeHtml(displayVersion)}</div>
@@ -2563,23 +2596,31 @@ const app = {
                 </div>
                 <div class="mod-author-row">
                     <i class="ri-user-3-line"></i> <span>${this.escapeHtml(mod.author)}</span>
-                    <span class="sep">|</span>
+                    <span class="sep" style="margin:0 5px;color:#ddd">|</span>
                     <i class="ri-hard-drive-2-line"></i> <span>${this.escapeHtml(mod.size_str)}</span>
-                    <span class="sep">|</span>
+                    <span class="sep" style="margin:0 5px;color:#ddd">|</span>
                     <div class="mod-lang-wrap" title="支持语言: ${this.escapeHtml(fullLangList.join(", "))}">
                         <i class="ri-translate"></i>
-                        <span style="margin-left:2px">${langHtml || "未知"}</span>
+                            <span style="margin-left:2px">${langHtml || "未识别"}</span>
                     </div>
                 </div>
                 <div class="mod-meta-row">${tagsHtml || '<span class="tag default">暂无标签</span>'}</div>
-                <div class="mod-update-row"><i class="ri-time-line"></i> 更新于 ${updateDate}</div>
+                <div class="mod-update-row"><i class="ri-time-line"></i> 更新于: ${updateDate}</div>
                 <div class="mod-note" data-note="${noteText}">
-                    <i class="ri-chat-1-line"></i>
+                    <i class="ri-chat-1-line" style="vertical-align:middle;margin-right:4px;opacity:.7"></i>
                     ${noteText}
                 </div>
             </div>
+
+            <button class="mod-copy-action" type="button" title="复制国籍文件（主软件预览）" data-action="copy-preview">
+                <i class="ri-file-copy-line"></i>
+            </button>
+
             <div class="mod-actions-col">
-                <div class="action-icon action-btn-del" title="删除预览（仅提示）" data-action="delete-preview"><i class="ri-delete-bin-line"></i></div>
+                <div class="action-icon action-btn-del-dropdown" title="删除选项（仅预览）" data-action="delete-preview">
+                    <i class="ri-delete-bin-line"></i>
+                    <i class="ri-arrow-down-s-line action-btn-del-arrow"></i>
+                </div>
                 <div style="flex:1"></div>
                 <div class="action-icon ${clsVideo}" title="观看介绍视频" data-action="open-video"><i class="ri-play-circle-line"></i></div>
                 <div class="action-icon ${clsWt}" title="访问 WT Live" data-action="open-wtlive"><i class="ri-global-line"></i></div>
@@ -2601,6 +2642,10 @@ const app = {
     handleCardAction(action, mod) {
         if (action === "delete-preview") {
             this.notifyToast("info", "预览卡片不执行真实删除，仅用于样式验证");
+            return;
+        }
+        if (action === "copy-preview") {
+            this.notifyToast("info", "主软件中的复制入口会在正式客户端执行");
             return;
         }
         if (action === "open-video") {
@@ -2704,7 +2749,7 @@ const app = {
                                 <h4><i class="ri-refresh-line"></i> 版本说明</h4>
                                 <div class="mod-preview-note-log" id="mod-preview-version-note"></div>
                             </section>
-                            <section class="mod-preview-card">
+                            <section class="mod-preview-card mod-preview-links-card">
                                 <h4><i class="ri-links-line"></i> 关注与反馈</h4>
                                 <div class="mod-preview-link-grid">
                                     <button class="mod-preview-link-btn bili" type="button" data-link-action="bili"><i class="ri-bilibili-line"></i> Bilibili 主页</button>
@@ -2733,9 +2778,45 @@ const app = {
         overlay.addEventListener("click", (e) => { if (e.target === overlay) this.closeModPreview(); });
         const closeBtn = overlay.querySelector(".mod-preview-close-btn");
         if (closeBtn) closeBtn.addEventListener("click", () => this.closeModPreview());
+        if (!overlay.dataset.alignResizeBound) {
+            window.addEventListener("resize", () => {
+                if (overlay.classList.contains("show")) this.schedulePreviewHeaderAlign(overlay);
+            });
+            overlay.dataset.alignResizeBound = "1";
+        }
 
         return overlay;
     },
+
+    alignPreviewHeaderRows(overlay) {
+        if (!overlay || !overlay.classList.contains("show")) return;
+        const modalEl = overlay.querySelector(".mod-preview-modal-v2");
+        const rightEl = overlay.querySelector(".mod-preview-right");
+        const attrsHeaderEl = overlay.querySelector(".mod-preview-attrs h4");
+        const versionHeaderEl = overlay.querySelector(".mod-preview-bottom-grid .mod-preview-card h4");
+        if (!modalEl || !rightEl || !attrsHeaderEl || !versionHeaderEl) return;
+
+        const rightRect = rightEl.getBoundingClientRect();
+        const attrsRect = attrsHeaderEl.getBoundingClientRect();
+        const versionCardEl = versionHeaderEl.closest(".mod-preview-card");
+        if (!versionCardEl) return;
+        const versionCardRect = versionCardEl.getBoundingClientRect();
+        const rowGap = parseFloat(getComputedStyle(rightEl).rowGap || "0") || 0;
+        const headerOffsetInCard = Math.max(0, versionHeaderEl.getBoundingClientRect().top - versionCardRect.top);
+        let targetTopRow = attrsRect.top - rightRect.top - rowGap - headerOffsetInCard;
+        if (!Number.isFinite(targetTopRow)) return;
+        targetTopRow = Math.max(120, Math.min(700, targetTopRow));
+        modalEl.style.setProperty("--mod-preview-right-top-row", `${Math.round(targetTopRow)}px`);
+    },
+
+    schedulePreviewHeaderAlign(overlay) {
+        if (!overlay) return;
+        const run = () => this.alignPreviewHeaderRows(overlay);
+        requestAnimationFrame(() => requestAnimationFrame(run));
+        setTimeout(run, 60);
+        setTimeout(run, 220);
+    },
+
     openModPreview(mod) {
         const overlay = this.ensurePreviewModal();
         const title = String(mod?.title || "未命名语音包");
@@ -2745,10 +2826,13 @@ const app = {
         const sizeText = String(mod?.size_str || "未知大小");
         const cover = String(mod?.cover_url || DEFAULT_COVER);
         const version = this.normalizeVersion(mod?.version);
-        const desc = String(mod?.full_desc || mod?.note || "暂无详细介绍").trim();
+        const desc = String(mod?.full_desc || mod?.description || mod?.note || "暂无详细介绍").trim();
         const tagHtml = this.buildTagHtml(mod);
         const versionNoteHtml = this.buildVersionNoteHtml(mod);
-        const tagCount = Array.isArray(mod?.tags) ? mod.tags.length : 0;
+        const userTags = Array.isArray(mod?.tags)
+            ? mod.tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+            : [];
+        const tagCount = userTags.length || Object.values(mod?.capabilities || {}).filter(Boolean).length;
         this.fillText(overlay, "#mod-preview-title", title);
         this.fillText(overlay, "#mod-preview-version", `v${version}`);
         this.fillText(overlay, "#mod-preview-author", author);
@@ -2763,7 +2847,12 @@ const app = {
         const coverEl = overlay.querySelector("#mod-preview-cover");
         if (coverEl) {
             coverEl.src = cover;
-            coverEl.onerror = () => { coverEl.src = DEFAULT_COVER; };
+            coverEl.onload = () => this.schedulePreviewHeaderAlign(overlay);
+            coverEl.onerror = () => {
+                coverEl.onerror = null;
+                coverEl.src = DEFAULT_COVER;
+                this.schedulePreviewHeaderAlign(overlay);
+            };
         }
         const authorAvatarEl = overlay.querySelector("#mod-preview-author-avatar");
         if (authorAvatarEl) {
@@ -2774,6 +2863,7 @@ const app = {
         this.bindPreviewFooterActions(overlay, mod);
         this.bindPreviewLinkActions(overlay, mod);
         this.showOverlay(overlay);
+        this.schedulePreviewHeaderAlign(overlay);
     },
 
     bindPreviewFooterActions(overlay, mod) {
@@ -2813,7 +2903,8 @@ const app = {
                     return;
                 }
                 try {
-                    await this.saveCurrentVoicepackInfo();
+                    const saved = await this.saveCurrentVoicepackInfo();
+                    if (!saved) return;
                     const manualPreviewItems = this.normalizePreviewAudioList(mod?.preview_audio_files || [])
                         .map((item, idx) => ({ ...item, preview_index: idx }));
                     const useRandomPreview = mod?.preview_use_random_bank !== false || !manualPreviewItems.length;
@@ -3352,7 +3443,7 @@ const app = {
     collectAuthorWorks(mod) {
         const current = mod || this.buildPreviewMod();
         const currentVersion = this.normalizeVersion(current?.version || "1.0");
-        const currentDate = String(current?.date || "").trim() || new Date().toISOString().split("T")[0];
+        const currentDate = String(current?.date || "").trim() || getLocalDateString();
         const currentSize = String(current?.size_str || "<1 MB").trim() || "<1 MB";
         const currentAuthor = String(current?.author || this.state?.profile?.name || "未知作者").trim() || "未知作者";
         const author = String(current?.author || this.state?.profile?.name || "作者").trim();
@@ -3512,8 +3603,9 @@ const app = {
     },
 
     buildLangHtml(mod) {
-        const langs = Array.isArray(mod?.language) ? mod.language : [];
-        if (!langs.length) return `<span class="lang-text">未设置</span>`;
+        const langs = Array.isArray(mod?.language) && mod.language.length
+            ? mod.language.map(String)
+            : ["多语言"];
         return langs.map((lang) => {
             const cls = LANG_CLASS_MAP[lang] || "";
             return `<span class="lang-text ${this.escapeHtml(cls)}">${this.escapeHtml(lang)}</span>`;
@@ -3521,11 +3613,27 @@ const app = {
     },
 
     buildTagHtml(mod) {
-        const tags = Array.isArray(mod?.tags) ? mod.tags : [];
-        return tags.map((text) => {
+        const tags = Array.isArray(mod?.tags)
+            ? mod.tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+            : [];
+        if (tags.length) return tags.map((text) => {
             const cls = this.resolveTagClass(text);
             return `<span class="tag ${this.escapeHtml(cls)}">${this.escapeHtml(text)}</span>`;
         }).join("");
+        const fallbackTags = [
+            ["tank", "tank", "陆战"],
+            ["air", "air", "空战"],
+            ["naval", "naval", "海战"],
+            ["radio", "radio", "无线电/局势"],
+            ["missile", "missile", "导弹音效"],
+            ["music", "music", "音乐包"],
+            ["noise", "noise", "降噪包"],
+            ["pilot", "pilot", "飞行员语音"]
+        ];
+        return fallbackTags
+            .filter(([key]) => Boolean(mod?.capabilities?.[key]))
+            .map(([, cls, text]) => `<span class="tag ${cls}">${text}</span>`)
+            .join("");
     },
 
     splitVersionNoteText(raw) {
@@ -3582,10 +3690,10 @@ const app = {
 
     normalizeDateInput(value) {
         const raw = String(value || "").trim();
-        if (!raw) return new Date().toISOString().split("T")[0];
+        if (!raw) return getLocalDateString();
         const slash = raw.replaceAll("/", "-");
         const m = slash.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-        if (!m) return new Date().toISOString().split("T")[0];
+        if (!m) return getLocalDateString();
         const y = m[1];
         const mm = m[2].padStart(2, "0");
         const dd = m[3].padStart(2, "0");
@@ -3605,7 +3713,6 @@ const app = {
             const cls = this.resolveTagClass(tag);
             if (cls && Object.prototype.hasOwnProperty.call(result, cls)) result[cls] = true;
         });
-        if (!Object.values(result).some(Boolean)) result.tank = true;
         return result;
     },
 

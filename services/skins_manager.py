@@ -406,16 +406,30 @@ class SkinsManager:
         game_path: str | Path, 
         default_cover_path: Path | None = None, 
         force_refresh: bool = False,
-        skip_covers: bool = False
+        skip_covers: bool = False,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """
         扫描 UserSkins 目录下的涂装文件夹，并生成前端展示用的列表数据。
         skip_covers: 如果为 True，则不生成 base64 的 cover_url，仅返回 preview_path。
         """
+        def emit_progress(processed: int, total: int) -> None:
+            if not progress_callback:
+                return
+            try:
+                progress_callback({
+                    "processed": max(0, int(processed)),
+                    "total": max(0, int(total)),
+                    "message": "正在检查涂装文件...",
+                })
+            except Exception as exc:
+                log.warning(f"涂装扫描进度回调失败: {exc}")
+
         userskins_dir = self.get_userskins_dir(game_path)
-        
+
         if not userskins_dir.exists():
             self._clear_cache()
+            emit_progress(0, 0)
             return {"exists": False, "path": str(userskins_dir), "items": [], "valid": True}
 
         try:
@@ -423,7 +437,7 @@ class SkinsManager:
         except Exception:
             current_mtime = 0
 
-        root_signature = self._index_cache.build_root_signature(userskins_dir)
+        root_signature = None if skip_covers else self._index_cache.build_root_signature(userskins_dir)
 
         if not skip_covers and not force_refresh and self._cache is not None:
             if (self._cache.get("path") == str(userskins_dir) and
@@ -436,15 +450,14 @@ class SkinsManager:
         next_records: dict[str, dict] = {}
         try:
             entries = sorted([e for e in userskins_dir.iterdir() if e.is_dir()], key=lambda p: p.name.lower())
-            
-            for entry in entries:
+            total_entries = len(entries)
+            progress_step = max(1, (total_entries + 99) // 100)
+            emit_progress(0, total_entries)
+
+            for processed, entry in enumerate(entries, start=1):
                 entry_mtime = entry.stat().st_mtime
                 preview_path = self._find_preview_image(entry)
-                cover_path = preview_path
-                if not cover_path and default_cover_path and default_cover_path.exists():
-                    cover_path = default_cover_path
-
-                signature = self._index_cache.build_item_signature(entry, cover_path)
+                signature = None if skip_covers else self._index_cache.build_item_signature(entry, preview_path)
                 item = None if skip_covers else self._index_cache.get_cached_item(cached_records, entry.name, signature)
 
                 is_disabled = entry.name.endswith(self.disabled_suffix)
@@ -453,14 +466,13 @@ class SkinsManager:
                 if item is None:
                     size_bytes, file_count = self._get_dir_size_and_count_fast(entry)
                     cover_url = ""
-                    cover_is_default = False
+                    cover_is_default = not bool(preview_path)
+                    cover_pending = bool(preview_path) if skip_covers else False
+                    cover_type = "pending" if cover_pending else ("custom" if preview_path else "default")
 
                     if not skip_covers:
                         if preview_path:
                             cover_url = self._to_data_url(preview_path)
-                        elif default_cover_path and default_cover_path.exists():
-                            cover_url = self._to_data_url(default_cover_path)
-                            cover_is_default = True
 
                     item = {
                         "name": entry.name,
@@ -472,6 +484,8 @@ class SkinsManager:
                         "preview_path": str(preview_path) if preview_path else "",
                         "cover_url": cover_url,
                         "cover_is_default": cover_is_default,
+                        "cover_type": cover_type,
+                        "cover_pending": cover_pending,
                         "mtime": entry_mtime,
                     }
                 else:
@@ -480,11 +494,20 @@ class SkinsManager:
                     item["disabled"] = is_disabled
                     item["path"] = str(entry)
                     item["preview_path"] = str(preview_path) if preview_path else ""
+                    if "cover_is_default" not in item:
+                        item["cover_is_default"] = not bool(preview_path) and not bool(item.get("cover_url"))
+                    item["cover_type"] = (
+                        "custom" if item.get("cover_url")
+                        else ("pending" if skip_covers and preview_path else "default")
+                    )
+                    item["cover_pending"] = bool(item.get("cover_type") == "pending")
                     item["mtime"] = entry_mtime
 
                 items.append(item)
                 if not skip_covers:
                     next_records[entry.name] = self._index_cache.make_record(signature, item)
+                if processed == total_entries or processed % progress_step == 0:
+                    emit_progress(processed, total_entries)
         except Exception as e:
             log.error(f"扫描涂装失败: {e}")
 

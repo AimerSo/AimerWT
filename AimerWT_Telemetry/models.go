@@ -18,6 +18,7 @@ type TelemetryRecord struct {
 	PythonVersion       string            `json:"python_version"`
 	Locale              string            `json:"locale"`
 	SessionID           int               `json:"session_id"`
+	CommandProtocol     int               `json:"command_protocol" gorm:"-"`
 	PendingCommand      string            `json:"pending_command"`
 	PendingCommandLogID uint              `json:"pending_command_log_id" gorm:"default:0"`
 	IsStarred           bool              `json:"is_starred"`
@@ -55,18 +56,29 @@ type DrilldownResponse struct {
 }
 
 type BannerItem struct {
-	Type          string                 `json:"type"`
-	Text          string                 `json:"text"`
-	Icon          string                 `json:"icon"`
-	Color         string                 `json:"color"`
-	IconColor     string                 `json:"icon_color"`
-	ActionType    string                 `json:"action_type"`
-	ActionURL     string                 `json:"action_url"`
-	ActionTitle   string                 `json:"action_title"`
-	ActionContent string                 `json:"action_content"`
-	TrackingType  string                 `json:"tracking_type"`
-	TrackingID    string                 `json:"tracking_id"`
-	Action        map[string]interface{} `json:"action,omitempty"`
+	Type            string                 `json:"type"`
+	Text            string                 `json:"text"`
+	Icon            string                 `json:"icon"`
+	Color           string                 `json:"color"`
+	IconColor       string                 `json:"icon_color"`
+	BackgroundColor string                 `json:"background_color"`
+	ActionType      string                 `json:"action_type"`
+	ActionURL       string                 `json:"action_url"`
+	ActionTitle     string                 `json:"action_title"`
+	ActionContent   string                 `json:"action_content"`
+	TrackingType    string                 `json:"tracking_type"`
+	TrackingID      string                 `json:"tracking_id"`
+	Action          map[string]interface{} `json:"action,omitempty"`
+}
+
+type AudienceRule struct {
+	Versions      []string `json:"versions"`
+	Tags          []string `json:"tags"`
+	SpecialGroups []string `json:"special_groups"`
+}
+
+type AudienceTargeting struct {
+	Rules []AudienceRule `json:"rules"`
 }
 
 type SystemConfig struct {
@@ -80,22 +92,25 @@ type SystemConfig struct {
 	AlertContent string `json:"alert_content"`
 	AlertScope   string `json:"alert_scope"`
 
+	AlertTargeting AudienceTargeting `json:"alert_targeting"`
 	// 常驻公告 (覆盖公告栏文字)
-	NoticeActive        bool         `json:"notice_active"`
-	NoticeContent       string       `json:"notice_content"`
-	NoticeScope         string       `json:"notice_scope"`
-	NoticeActionType    string       `json:"notice_action_type"`
-	NoticeActionURL     string       `json:"notice_action_url"`
-	NoticeActionTitle   string       `json:"notice_action_title"`
-	NoticeActionContent string       `json:"notice_action_content"`
-	BannerItems         []BannerItem `json:"banner_items"`
-	BannerInterval      int          `json:"banner_interval"`
+	NoticeActive        bool              `json:"notice_active"`
+	NoticeContent       string            `json:"notice_content"`
+	NoticeScope         string            `json:"notice_scope"`
+	NoticeActionType    string            `json:"notice_action_type"`
+	NoticeTargeting     AudienceTargeting `json:"notice_targeting"`
+	NoticeActionURL     string            `json:"notice_action_url"`
+	NoticeActionTitle   string            `json:"notice_action_title"`
+	NoticeActionContent string            `json:"notice_action_content"`
+	BannerItems         []BannerItem      `json:"banner_items"`
+	BannerInterval      int               `json:"banner_interval"`
 
 	UpdateActive  bool   `json:"update_active"`
 	UpdateContent string `json:"update_content"`
 	UpdateUrl     string `json:"update_url"`
 	UpdateScope   string `json:"update_scope"`
 
+	UpdateTargeting AudienceTargeting `json:"update_targeting"`
 	// 心跳上报间隔（秒），客户端据此动态调整上报频率
 	HeartbeatInterval int    `json:"heartbeat_interval"`
 	HeartbeatScope    string `json:"heartbeat_scope"` // all 或指定版本号
@@ -107,7 +122,7 @@ type SystemConfig struct {
 	ProjectStatus     string `json:"project_status"`      // active / warning / danger
 	ProjectLastUpdate string `json:"project_last_update"` // 如 "2026 年 3 月 14 日"
 
-	// 用户功能总开关（默认全部开启）
+	// 用户功能总开关（评论和表情默认关闭，其余默认开启）
 	BadgeSystemEnabled    bool `json:"badge_system_enabled"`
 	NicknameChangeEnabled bool `json:"nickname_change_enabled"`
 	AvatarUploadEnabled   bool `json:"avatar_upload_enabled"`
@@ -155,6 +170,16 @@ type ClientDeviceToken struct {
 	LastIssued time.Time `gorm:"autoCreateTime" json:"last_issued"`
 	CreatedAt  time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt  time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
+// ClientDeviceSession 允许同一设备保留多个短期有效会话，避免并发重签互相覆盖。
+type ClientDeviceSession struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	MachineID  string    `gorm:"index;type:varchar(64);not null" json:"machine_id"`
+	TokenHash  string    `gorm:"uniqueIndex;type:varchar(64);not null" json:"-"`
+	ExpiresAt  time.Time `gorm:"index;not null" json:"expires_at"`
+	LastSeenAt time.Time `gorm:"index;not null" json:"last_seen_at"`
+	CreatedAt  time.Time `gorm:"autoCreateTime;index" json:"created_at"`
 }
 
 // MachineIDAlias 保存历史/候选 machine_id 到 canonical machine_id 的映射。
@@ -254,10 +279,22 @@ type AIUsageRecord struct {
 
 // AIUserBan AI 功能封禁记录
 type AIUserBan struct {
-	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	MachineID string    `gorm:"uniqueIndex;type:varchar(64)" json:"machine_id"`
-	Reason    string    `json:"reason"`
-	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+	ID        uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	MachineID string     `gorm:"type:varchar(64);not null" json:"machine_id"`
+	Reason    string     `gorm:"type:varchar(500);not null" json:"reason"`
+	ExpiresAt *time.Time `gorm:"index" json:"expires_at,omitempty"`
+	RevokedAt *time.Time `gorm:"index" json:"revoked_at,omitempty"`
+	CreatedAt time.Time  `gorm:"autoCreateTime;index" json:"created_at"`
+}
+
+// FeedbackUserBan 反馈功能封禁记录，解除后保留历史。
+type FeedbackUserBan struct {
+	ID        uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	MachineID string     `gorm:"type:varchar(64);not null" json:"machine_id"`
+	Reason    string     `gorm:"type:varchar(500);not null" json:"reason"`
+	ExpiresAt *time.Time `gorm:"index" json:"expires_at,omitempty"`
+	RevokedAt *time.Time `gorm:"index" json:"revoked_at,omitempty"`
+	CreatedAt time.Time  `gorm:"autoCreateTime;index" json:"created_at"`
 }
 
 // AIUserLimit 单用户每日限额覆盖（未设置则使用全局默认值）
@@ -304,18 +341,36 @@ type RedeemCode struct {
 
 // RedeemRecord 兑换码使用记录表
 type RedeemRecord struct {
-	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Code      string    `gorm:"uniqueIndex:idx_redeem_record_code_machine;type:varchar(32)" json:"code"`
-	MachineID string    `gorm:"uniqueIndex:idx_redeem_record_code_machine;type:varchar(64)" json:"machine_id"`
-	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+	ID              uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	RedeemCodeID    uint      `gorm:"index;default:0" json:"redeem_code_id"`
+	Code            string    `gorm:"uniqueIndex:idx_redeem_record_code_machine;type:varchar(32)" json:"code"`
+	MachineID       string    `gorm:"uniqueIndex:idx_redeem_record_code_machine;type:varchar(64)" json:"machine_id"`
+	PayloadSnapshot string    `gorm:"type:text" json:"payload_snapshot"`
+	ResultCommand   string    `gorm:"type:text" json:"result_command"`
+	CreatedAt       time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+// RewardLedger 权益变更流水，用于兑换和人工额度调整核账。
+type RewardLedger struct {
+	ID              uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	EventID         string    `gorm:"uniqueIndex;type:varchar(160);not null" json:"event_id"`
+	MachineID       string    `gorm:"index;type:varchar(64);not null" json:"machine_id"`
+	SourceType      string    `gorm:"index;type:varchar(32);not null" json:"source_type"`
+	SourceID        uint      `gorm:"index;default:0" json:"source_id"`
+	RewardType      string    `gorm:"index;type:varchar(32);not null" json:"reward_type"`
+	Delta           int       `json:"delta"`
+	BalanceBefore   int       `json:"balance_before"`
+	BalanceAfter    int       `json:"balance_after"`
+	PayloadSnapshot string    `gorm:"type:text" json:"payload_snapshot"`
+	CreatedAt       time.Time `gorm:"autoCreateTime;index" json:"created_at"`
 }
 
 // NoticeReaction 公告表情反应记录（用户对公告添加 emoji 反应）
 type NoticeReaction struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	NoticeID  uint      `gorm:"uniqueIndex:idx_notice_reaction_unique;not null" json:"notice_id"`
-	MachineID string    `gorm:"uniqueIndex:idx_notice_reaction_unique;type:varchar(64);not null" json:"machine_id"`
-	Emoji     string    `gorm:"uniqueIndex:idx_notice_reaction_unique;type:varchar(32);not null" json:"emoji"`
+	NoticeID  uint      `gorm:"index:idx_notice_reaction_user,priority:1;not null" json:"notice_id"`
+	MachineID string    `gorm:"index:idx_notice_reaction_user,priority:2;type:varchar(64);not null" json:"machine_id"`
+	Emoji     string    `gorm:"type:varchar(32);not null" json:"emoji"`
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 }
 
@@ -399,6 +454,23 @@ type UserCommandLog struct {
 	Status      string     `gorm:"type:varchar(16);default:'pending'" json:"status"` // pending / delivered / overwritten
 	CreatedAt   time.Time  `gorm:"autoCreateTime;index" json:"created_at"`
 	DeliveredAt *time.Time `json:"delivered_at"`
+}
+
+// ClientCommand 3.1 客户端可靠命令队列，确认前保持可重投。
+type ClientCommand struct {
+	ID               uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	CommandID        string     `gorm:"uniqueIndex;type:varchar(64);not null" json:"command_id"`
+	MachineID        string     `gorm:"index:idx_client_command_pending,priority:1;type:varchar(64);not null" json:"machine_id"`
+	Payload          string     `gorm:"type:text;not null" json:"payload"`
+	SourceType       string     `gorm:"type:varchar(32)" json:"source_type"`
+	SourceID         uint       `gorm:"default:0" json:"source_id"`
+	UserCommandLogID uint       `gorm:"index;default:0" json:"user_command_log_id"`
+	Status           string     `gorm:"index:idx_client_command_pending,priority:2;type:varchar(16);default:'pending'" json:"status"`
+	Attempts         int        `gorm:"default:0" json:"attempts"`
+	LastError        string     `gorm:"type:varchar(500)" json:"last_error"`
+	LastDeliveredAt  *time.Time `json:"last_delivered_at"`
+	AcknowledgedAt   *time.Time `json:"acknowledged_at"`
+	CreatedAt        time.Time  `gorm:"autoCreateTime;index" json:"created_at"`
 }
 
 // UserUIDCounter 公开 UID 计数器，单行存储下一个可分配的 seq_id 值

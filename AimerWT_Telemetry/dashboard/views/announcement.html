@@ -80,10 +80,8 @@
                         <textarea class="input" style="width: 100%; height: 80px; font-family: inherit; padding: 10px; resize: vertical;" id="announcementAlertContent" placeholder="此内容将以弹窗形式展示..."></textarea>
                     </div>
                     <div class="form-group" style="margin: 0;">
-                        <label style="margin-bottom: 6px;">推送范围</label>
-                        <select class="select" style="width: 100%;" id="announcementAlertScope">
-                            <option value="all">all（全部用户）</option>
-                        </select>
+                        <label style="margin-bottom: 6px;">受众规则（版本、用户组均可不选）</label>
+                        <div id="announcementAlertTargeting" class="audience-rule-editor"></div>
                     </div>
                     <button class="btn primary" style="width: 100%; justify-content: center;" onclick="app.submitAnnouncement('alert')">发布紧急通知</button>
                 </div>
@@ -127,10 +125,8 @@
                 </div>
                 <div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 12px;">
                     <div class="form-group" style="margin: 0;">
-                        <label style="margin-bottom: 6px;">推送范围</label>
-                        <select class="select" style="width: 100%;" id="announcementUpdateScope">
-                            <option value="all">all（全部用户）</option>
-                        </select>
+                        <label style="margin-bottom: 6px;">受众规则（版本、用户组均可不选）</label>
+                        <div id="announcementUpdateTargeting" class="audience-rule-editor"></div>
                     </div>
                     <div class="form-group" style="margin: 0;">
                         <label style="margin-bottom: 6px;">更新说明</label>

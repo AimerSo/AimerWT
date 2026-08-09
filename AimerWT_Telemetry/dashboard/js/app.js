@@ -1506,6 +1506,10 @@ const app = {
             const scopeLabel = (scope) => {
                 scope = String(scope || '');
                 if (!scope || scope === 'all') return '全部用户';
+                if (['全部用户', '星标用户', '管理员'].includes(scope) ||
+                    scope.startsWith('版本 ') || scope.startsWith('标签 ') || scope.includes(' 且 ') || scope.includes('；或 ')) {
+                    return scope;
+                }
                 if (scope === 'star') return '星标用户';
                 if (scope === 'admin') return '管理员';
                 if (scope.startsWith('tag:')) return `标签: ${scope.replace('tag:', '')}`;
@@ -1620,10 +1624,8 @@ const app = {
                     <textarea class="input" style="width: 100%; height: 100px; font-family: inherit; padding: 10px;" id="alertContent" placeholder="此处内容将以模态框形式展现..."></textarea>
                 </div>
                 <div class="form-group">
-                    <label>推送范围</label>
-                    <select class="select" style="width: 100%;" id="alertScope">
-                        <option value="all">all（全部用户）</option>
-                    </select>
+                    <label>受众规则（版本、用户组均可不选）</label>
+                    <div id="alertTargeting" class="audience-rule-editor"></div>
                 </div>
             `;
         } else if (action === 'notice') {
@@ -1641,10 +1643,8 @@ const app = {
                     <textarea class="input" style="width: 100%; height: 100px; font-family: inherit; padding: 10px;" id="noticeContent" placeholder="在此输入公告内容（支持 HTML 标签，例如 <strong>加粗</strong>）..."></textarea>
                 </div>
                 <div class="form-group">
-                    <label>覆盖范围</label>
-                    <select class="select" style="width: 100%;" id="noticeScope">
-                        <option value="all">all（全部用户）</option>
-                    </select>
+                    <label>受众规则（版本、用户组均可不选）</label>
+                    <div id="noticeTargeting" class="audience-rule-editor"></div>
                 </div>
             `;
         } else if (action === 'update') {
@@ -1658,10 +1658,8 @@ const app = {
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>推送范围</label>
-                    <select class="select" style="width: 100%;" id="updateScope">
-                        <option value="all">all（全部用户）</option>
-                    </select>
+                    <label>受众规则（版本、用户组均可不选）</label>
+                    <div id="updateTargeting" class="audience-rule-editor"></div>
                 </div>
                 <div class="form-group">
                     <label>推送内容</label>
@@ -1734,11 +1732,12 @@ const app = {
             this.syncMaintenanceReject();
         }
 
-        // 弹窗中的 scope 下拉需要延迟填充（等 DOM 渲染）
+        // 动态内容写入 DOM 后再挂载规则编辑器
         if (['alert', 'notice', 'update'].includes(action)) {
             setTimeout(() => {
-                const scopeIds = ['alertScope', 'noticeScope', 'updateScope'];
-                this._fillScopeSelects(scopeIds);
+                const editor_id = `${action}Targeting`;
+                this.setAudienceTargeting(editor_id, null, 'all');
+                this._fillScopeSelects([]);
             }, 50);
         }
     },
@@ -1894,16 +1893,22 @@ const app = {
             payload.alert_active = document.getElementById('alertStatus').value === 'on';
             payload.title = document.getElementById('alertTitle').value;
             payload.content = document.getElementById('alertContent').value;
-            payload.scope = document.getElementById('alertScope').value;
+            const targeting = this.readAudienceTargeting('alertTargeting');
+            payload.alert_targeting = targeting;
+            payload.scope = this.legacyScopeForTargeting(targeting);
         } else if (action === 'notice') {
             payload.notice_active = document.getElementById('noticeStatus').value === 'on';
             payload.content = document.getElementById('noticeContent').value;
-            payload.scope = document.getElementById('noticeScope').value;
+            const targeting = this.readAudienceTargeting('noticeTargeting');
+            payload.notice_targeting = targeting;
+            payload.scope = this.legacyScopeForTargeting(targeting);
         } else if (action === 'update') {
             payload.update_active = document.getElementById('updateStatus').value === 'on';
             payload.content = document.getElementById('updateContent').value;
             payload.url = document.getElementById('updateUrl').value;
-            payload.scope = document.getElementById('updateScope').value;
+            const targeting = this.readAudienceTargeting('updateTargeting');
+            payload.update_targeting = targeting;
+            payload.scope = this.legacyScopeForTargeting(targeting);
         }
 
         const btn = document.getElementById('controlModalSubmit');
@@ -1953,11 +1958,9 @@ const app = {
     initAnnouncement() {
         this.loadAnnouncementStatus();
         this.loadNoticeList();
-        this._fillScopeSelects([
-            'announcementNoticeScope',
-            'announcementAlertScope',
-            'announcementUpdateScope'
-        ]);
+        this.setAudienceTargeting('announcementAlertTargeting', null, 'all');
+        this.setAudienceTargeting('announcementUpdateTargeting', null, 'all');
+        this._fillScopeSelects([]);
     },
 
     /**
@@ -1968,6 +1971,7 @@ const app = {
             const res = await fetch(`${this.config.apiBase}/admin/stats`);
             if (!res.ok) return;
             const data = await res.json();
+            this.setAudienceOptions(data);
             const versions = data.version_stats || data.version_options || [];
             const tags = data.tag_options || [];
 
@@ -2031,8 +2035,9 @@ const app = {
     initBanner() {
         this._bannerItems = [];
         this._bannerEditingIndex = -1;
+        this.setAudienceTargeting('bannerTargeting', null, 'all');
         this.loadBannerStatus();
-        this._fillScopeSelects(['bannerScope']);
+        this._fillScopeSelects([]);
     },
 
     toggleBannerActionFields() {
@@ -2047,6 +2052,28 @@ const app = {
         const normalized = String(type || 'none').trim().toLowerCase();
         return ['activity', 'ad'].includes(normalized) ? normalized : 'none';
     },
+
+    normalizeBannerColor(raw) {
+        const color = String(raw || '').trim();
+        return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color) ? color : '';
+    },
+
+    syncBannerColorPicker(input_id, picker_id, fallback_color) {
+        const picker = document.getElementById(picker_id);
+        if (!picker) return;
+
+        const normalized = this.normalizeBannerColor(document.getElementById(input_id)?.value);
+        let picker_color = normalized;
+        if (/^#[0-9a-fA-F]{3,4}$/.test(normalized)) {
+            picker_color = `#${normalized[1]}${normalized[1]}${normalized[2]}${normalized[2]}${normalized[3]}${normalized[3]}`;
+        } else if (/^#[0-9a-fA-F]{8}$/.test(normalized)) {
+            picker_color = normalized.slice(0, 7);
+        }
+
+        const fallback = /^#[0-9a-fA-F]{6}$/.test(String(fallback_color || '')) ? fallback_color : '#000000';
+        picker.value = /^#[0-9a-fA-F]{6}$/.test(picker_color) ? picker_color : fallback;
+    },
+
 
     sanitizeBannerTrackingId(raw) {
         return String(raw || '').trim().substring(0, 64);
@@ -2069,6 +2096,9 @@ const app = {
         const trackingType = this.normalizeBannerTrackingType(source.tracking_type);
         return {
             ...source,
+            color: this.normalizeBannerColor(source.color),
+            icon_color: this.normalizeBannerColor(source.icon_color),
+            background_color: this.normalizeBannerColor(source.background_color),
             tracking_type: trackingType,
             tracking_id: trackingType === 'none' ? '' : this.sanitizeBannerTrackingId(source.tracking_id)
         };
@@ -2096,7 +2126,7 @@ const app = {
             if (!res.ok) return;
             const data = await res.json();
             const cfg = data.config || {};
-            const active = !!cfg.notice_active || (!!cfg.update_active && !!cfg.update_content);
+            const active = !!cfg.notice_active;
             const dot = document.getElementById('bannerStatusDot');
             const badge = document.getElementById('bannerStatusBadge');
             if (dot) dot.style.background = active ? 'var(--secondary)' : 'var(--muted)';
@@ -2107,6 +2137,7 @@ const app = {
             }
             if (document.getElementById('bannerInterval') && cfg.banner_interval)
                 document.getElementById('bannerInterval').value = cfg.banner_interval;
+            this.setAudienceTargeting('bannerTargeting', cfg.notice_targeting, cfg.notice_scope || 'all');
 
             this._bannerItems = Array.isArray(cfg.banner_items)
                 ? cfg.banner_items.map((item) => this.normalizeBannerItemForEdit(item))
@@ -2119,19 +2150,6 @@ const app = {
                     action_url: cfg.notice_action_url || '',
                     action_title: cfg.notice_action_title || '',
                     action_content: cfg.notice_action_content || ''
-                })];
-            }
-            if (!this._bannerItems.length && cfg.update_active && cfg.update_content) {
-                this._bannerItems = [this.normalizeBannerItemForEdit({
-                    type: 'update',
-                    text: cfg.update_content,
-                    icon: 'ri-download-2-line',
-                    color: '',
-                    icon_color: '',
-                    action_type: cfg.update_url ? 'url' : 'none',
-                    action_url: cfg.update_url || '',
-                    action_title: '',
-                    action_content: ''
                 })];
             }
             this.renderBannerList();
@@ -2198,6 +2216,10 @@ const app = {
         this.setVal('bannerEditText', '');
         this.setVal('bannerEditColor', '');
         this.setVal('bannerEditIconColor', '');
+        this.setVal('bannerEditBackgroundColor', '');
+        this.syncBannerColorPicker('bannerEditColor', 'bannerEditColorPicker', '#2563eb');
+        this.syncBannerColorPicker('bannerEditIconColor', 'bannerEditIconColorPicker', '#f59e0b');
+        this.syncBannerColorPicker('bannerEditBackgroundColor', 'bannerEditBackgroundColorPicker', '#eff6ff');
         this.setVal('bannerEditActionType', 'none');
         this.setVal('bannerEditUrl', '');
         this.setVal('bannerEditAlertTitle', '');
@@ -2224,6 +2246,10 @@ const app = {
         this.setVal('bannerEditText', item.text || '');
         this.setVal('bannerEditColor', item.color || '');
         this.setVal('bannerEditIconColor', item.icon_color || '');
+        this.setVal('bannerEditBackgroundColor', item.background_color || '');
+        this.syncBannerColorPicker('bannerEditColor', 'bannerEditColorPicker', '#2563eb');
+        this.syncBannerColorPicker('bannerEditIconColor', 'bannerEditIconColorPicker', '#f59e0b');
+        this.syncBannerColorPicker('bannerEditBackgroundColor', 'bannerEditBackgroundColorPicker', '#eff6ff');
         this.setVal('bannerEditActionType', item.action_type || 'none');
         this.setVal('bannerEditUrl', item.action_url || '');
         this.setVal('bannerEditAlertTitle', item.action_title || '');
@@ -2248,6 +2274,17 @@ const app = {
     saveBannerItem() {
         const text = (document.getElementById('bannerEditText')?.value || '').trim();
         if (!text) { this.showAlert('请输入显示文字', 'warning'); return; }
+        const color_inputs = [
+            ['文字颜色', (document.getElementById('bannerEditColor')?.value || '').trim()],
+            ['图标颜色', (document.getElementById('bannerEditIconColor')?.value || '').trim()],
+            ['背景颜色', (document.getElementById('bannerEditBackgroundColor')?.value || '').trim()]
+        ];
+        for (const [color_label, color_value] of color_inputs) {
+            if (color_value && !this.normalizeBannerColor(color_value)) {
+                this.showAlert(color_label + '仅支持 #RGB、#RGBA、#RRGGBB 或 #RRGGBBAA', 'warning');
+                return;
+            }
+        }
         const trackingType = this.normalizeBannerTrackingType(document.getElementById('bannerEditTrackingType')?.value);
         let trackingId = this.sanitizeBannerTrackingId(document.getElementById('bannerEditTrackingId')?.value);
         if (trackingType !== 'none' && !trackingId) trackingId = this.generateBannerTrackingId(trackingType);
@@ -2264,8 +2301,9 @@ const app = {
         const item = {
             type: document.getElementById('bannerEditType')?.value || 'announcement',
             text, icon: (document.getElementById('bannerEditIcon')?.value || '').trim() || 'ri-megaphone-line',
-            color: (document.getElementById('bannerEditColor')?.value || '').trim(),
-            icon_color: (document.getElementById('bannerEditIconColor')?.value || '').trim(),
+            color: this.normalizeBannerColor(color_inputs[0][1]),
+            icon_color: this.normalizeBannerColor(color_inputs[1][1]),
+            background_color: this.normalizeBannerColor(color_inputs[2][1]),
             action_type: document.getElementById('bannerEditActionType')?.value || 'none',
             action_url: (document.getElementById('bannerEditUrl')?.value || '').trim(),
             action_title: (document.getElementById('bannerEditAlertTitle')?.value || '').trim(),
@@ -2302,9 +2340,11 @@ const app = {
     async submitBanner() {
         if (!this._bannerItems.length) { this.showAlert('请先添加至少一条 Banner', 'warning'); return; }
         const interval = parseInt(document.getElementById('bannerInterval')?.value) || 6;
+        const targeting = this.readAudienceTargeting('bannerTargeting');
         const payload = {
             action: 'notice', notice_active: true,
-            scope: document.getElementById('bannerScope')?.value || 'all',
+            notice_targeting: targeting,
+            scope: this.legacyScopeForTargeting(targeting),
             banner_items: this._bannerItems, banner_interval: interval,
             content: this._bannerItems[0]?.text || '',
             notice_action_type: this._bannerItems[0]?.action_type || 'none',
@@ -2325,10 +2365,11 @@ const app = {
     },
 
     async clearBanner() {
+        const targeting = this.readAudienceTargeting('bannerTargeting');
         try {
             const res = await fetch(`${this.config.apiBase}/admin/control`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'notice', notice_active: false, content: '', scope: 'all', banner_items: [] })
+                body: JSON.stringify({ action: 'notice', notice_active: false, content: '', notice_targeting: targeting, scope: this.legacyScopeForTargeting(targeting), banner_items: [] })
             });
             if (!res.ok) throw new Error('服务器返回 ' + res.status);
             await res.json();
@@ -2613,7 +2654,7 @@ const app = {
         const runtime = {
             active,
             count: bannerItems.length || (fallbackText ? 1 : 0),
-            scope: String(cfg?.notice_scope || 'all'),
+            scope: this.audienceTargetingSummary(this.normalizeAudienceTargeting(cfg?.notice_targeting, cfg?.notice_scope || 'all')),
             primaryText: String((bannerItems[0] && bannerItems[0].text) || fallbackText || '').trim(),
             source: bannerItems.length > 0 ? 'banner' : (fallbackText ? 'legacy_notice' : 'none')
         };
@@ -2691,7 +2732,7 @@ const app = {
                 this.setVal('announcementAlertStatus', cfg.alert_active ? 'on' : 'off');
                 this.setVal('announcementAlertTitle', cfg.alert_title || '');
                 this.setVal('announcementAlertContent', cfg.alert_content || '');
-                this.setVal('announcementAlertScope', cfg.alert_scope || 'all');
+                this.setAudienceTargeting('announcementAlertTargeting', cfg.alert_targeting, cfg.alert_scope || 'all');
 
                 // 更新推送状态预览
                 const preview = document.getElementById('updatePushPreview');
@@ -2707,7 +2748,7 @@ const app = {
                 // 回填表单内容
                 this.setVal('announcementUpdateContent', cfg.update_content || '');
                 this.setVal('announcementUpdateUrl', cfg.update_url || '');
-                this.setVal('announcementUpdateScope', cfg.update_scope || 'all');
+                this.setAudienceTargeting('announcementUpdateTargeting', cfg.update_targeting, cfg.update_scope || 'all');
             } else {
                 setChannel('Notice', false);
                 setChannel('Alert', false);
@@ -2731,17 +2772,23 @@ const app = {
         if (type === 'notice') {
             payload.notice_active = document.getElementById('announcementNoticeStatus')?.value === 'on';
             payload.content = document.getElementById('announcementNoticeContent')?.value || '';
-            payload.scope = document.getElementById('announcementNoticeScope')?.value || 'all';
+            const targeting = this.readAudienceTargeting('announcementNoticeTargeting');
+            payload.notice_targeting = targeting;
+            payload.scope = this.legacyScopeForTargeting(targeting);
         } else if (type === 'alert') {
             payload.alert_active = document.getElementById('announcementAlertStatus')?.value === 'on';
             payload.title = document.getElementById('announcementAlertTitle')?.value || '';
             payload.content = document.getElementById('announcementAlertContent')?.value || '';
-            payload.scope = document.getElementById('announcementAlertScope')?.value || 'all';
+            const targeting = this.readAudienceTargeting('announcementAlertTargeting');
+            payload.alert_targeting = targeting;
+            payload.scope = this.legacyScopeForTargeting(targeting);
         } else if (type === 'update') {
             payload.update_active = true;
             payload.content = document.getElementById('announcementUpdateContent')?.value || '';
             payload.url = document.getElementById('announcementUpdateUrl')?.value || '';
-            payload.scope = document.getElementById('announcementUpdateScope')?.value || 'all';
+            const targeting = this.readAudienceTargeting('announcementUpdateTargeting');
+            payload.update_targeting = targeting;
+            payload.scope = this.legacyScopeForTargeting(targeting);
         }
 
         try {
@@ -6618,7 +6665,7 @@ const app = {
     /**
      * 提交封禁反馈
      */
-    submitBanFeedback() {
+    async submitBanFeedback() {
         const hwid = document.getElementById('controlModal').dataset.hwid;
         const reason = document.getElementById('banReason')?.value?.trim();
         const isPermanent = document.getElementById('banPermanent')?.checked;
@@ -6629,14 +6676,31 @@ const app = {
             return;
         }
 
-        if (!isPermanent && (!days || days < 1)) {
+        const durationDays = Number.parseInt(days, 10);
+        if (!isPermanent && (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 3650)) {
             this.showAlert('请输入有效的封禁天数', 'warning');
             return;
         }
 
         const durationText = isPermanent ? '永久' : `${days}天`;
-        this.closeControlModal();
-        this.showAlert(`已封禁用户反馈功能，时长：${durationText}，原因：${reason}`, 'warning');
+        try {
+            const response = await fetch(`${this.config.apiBase}/admin/feedback-bans`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    machine_id: hwid,
+                    reason,
+                    duration_days: isPermanent ? 0 : durationDays,
+                    permanent: Boolean(isPermanent)
+                })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || '封禁保存失败');
+            this.closeControlModal();
+            this.showAlert(`已封禁用户反馈功能，时长：${durationText}，原因：${reason}`, 'success');
+        } catch (error) {
+            this.showAlert(`反馈封禁失败：${error.message}`, 'danger');
+        }
     },
 
     /**
@@ -6695,7 +6759,7 @@ const app = {
     /**
      * 提交封禁AI
      */
-    submitBanAI() {
+    async submitBanAI() {
         const hwid = document.getElementById('controlModal').dataset.hwid;
         const reason = document.getElementById('banAIReason')?.value?.trim();
         const isPermanent = document.getElementById('banAIPermanent')?.checked;
@@ -6706,14 +6770,31 @@ const app = {
             return;
         }
 
-        if (!isPermanent && (!days || days < 1)) {
+        const durationDays = Number.parseInt(days, 10);
+        if (!isPermanent && (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 3650)) {
             this.showAlert('请输入有效的封禁天数', 'warning');
             return;
         }
 
         const durationText = isPermanent ? '永久' : `${days}天`;
-        this.closeControlModal();
-        this.showAlert(`已封禁用户AI功能，时长：${durationText}，原因：${reason}`, 'warning');
+        try {
+            const response = await fetch(`${this.config.apiBase}/admin/ai/bans`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    machine_id: hwid,
+                    reason,
+                    duration_days: isPermanent ? 0 : durationDays,
+                    permanent: Boolean(isPermanent)
+                })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || '封禁保存失败');
+            this.closeControlModal();
+            this.showAlert(`已封禁用户AI功能，时长：${durationText}，原因：${reason}`, 'success');
+        } catch (error) {
+            this.showAlert(`AI 封禁失败：${error.message}`, 'danger');
+        }
     },
 
     /**

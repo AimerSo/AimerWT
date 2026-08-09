@@ -15,6 +15,7 @@
 - 所有操作记录完整的错误上下文
 """
 import os
+import base64
 import hashlib
 import platform
 import shutil
@@ -29,14 +30,9 @@ from utils.logger import get_logger
 from utils.sevenzip import find_7z_executable
 from utils.utils import get_app_data_dir, open_folder_cross_platform
 from wt.wt_sound import VoiceType, Country
+from services.resource_path_manager import DIR_PENDING, DIR_LIBRARY
 
 log = get_logger(__name__)
-
-# 定义标准文件夹名称
-DIR_PENDING = "待解压区"
-DIR_RESOURCE_ROOT = "AimerWT资源库"
-DIR_LIBRARY = f"{DIR_RESOURCE_ROOT}/WT语音包库"
-
 
 # 定义压缩包相关异常类
 class ArchiveError(Exception):
@@ -304,6 +300,14 @@ class LibraryManager:
         try:
             if self.pending_dir.exists():
                 for item in self.pending_dir.iterdir():
+                    if item.is_dir():
+                        try:
+                            for child in item.iterdir():
+                                if child.is_file() and self._is_importable_aimerwt_bank_archive(child):
+                                    archives.append(child)
+                        except Exception:
+                            continue
+                        continue
                     ext = item.suffix.lower()
                     if ext not in self.SUPPORTED_EXTENSIONS:
                         continue
@@ -433,6 +437,7 @@ class LibraryManager:
             "version": "1.0",
             "date": default_date,
             "note": "无详细介绍",
+            "full_desc": "",
             "version_note": [],
             "link_bilibili": "",
             "link_qq_group": "",
@@ -497,7 +502,7 @@ class LibraryManager:
             try:
                 data = self._load_json_with_fallback(found_info_file)
                 if isinstance(data, dict):
-                    for key in ["title", "author", "version", "date", "note", "version_note", "link_bilibili",
+                    for key in ["title", "author", "version", "date", "note", "full_desc", "version_note", "link_bilibili",
                                 "link_qq_group", "link_wtlive", "link_liker", "link_feedback", "link_video", "tags",
                                 "language", "preview_use_random_bank", "preview_audio_files", "related_voicepacks"]:
                         if key in data:
@@ -512,6 +517,10 @@ class LibraryManager:
         details["preview_use_random_bank"] = self._normalize_preview_use_random_bank(
             details.get("preview_use_random_bank"),
             details.get("preview_audio_files"),
+        )
+        details["related_voicepacks"] = self._hydrate_related_voicepack_avatars(
+            mod_dir,
+            details.get("related_voicepacks"),
         )
 
         # 文件详情 (按类型分类)
@@ -540,18 +549,26 @@ class LibraryManager:
                 combined_tags.append(t)
         details["tags"] = combined_tags
 
-        # 合并语言：如果 info.json 没写，或者写的是"未识别"，则使用自动检测结果
-        if not details["language"] or details["language"] == ["未识别"]:
+        raw_languages = details.get("language")
+        if isinstance(raw_languages, str):
+            declared_languages = [raw_languages.strip()] if raw_languages.strip() else []
+        elif isinstance(raw_languages, list):
+            declared_languages = []
+            for language in raw_languages:
+                language_text = str(language or "").strip()
+                if language_text and language_text not in declared_languages:
+                    declared_languages.append(language_text)
+        else:
+            declared_languages = []
+        details["language"] = declared_languages
+
+        # 作者声明优先；仅在未声明语言时使用文件扫描结果
+        if not declared_languages or declared_languages == ["未识别"]:
             if detected_langs:
                 # 按常用语排序或保持扫描顺序
                 details["language"] = sorted(list(detected_langs))
             else:
                 details["language"] = ["未识别"]
-        else:
-            # 如果已有，补充检测到的新语言
-            for l in detected_langs:
-                if l not in details["language"]:
-                    details["language"].append(l)
 
         # 将 tags 映射为前端使用的 capabilities 键
         for t in details["tags"]:
@@ -659,6 +676,37 @@ class LibraryManager:
             "size": total_size,
             "mtime_ns": max_mtime_ns,
         }
+
+    def _hydrate_related_voicepack_avatars(self, mod_dir: Path, raw: Any) -> list[dict[str, Any]]:
+        rows = raw if isinstance(raw, list) else []
+        hydrated: list[dict[str, Any]] = []
+        base = Path(mod_dir).resolve()
+        mime_types = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+            ".gif": "image/gif",
+            ".svg": "image/svg+xml",
+        }
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            avatar_file = str(row.get("avatar_file") or "").strip().replace("\\", "/")
+            if avatar_file and not str(row.get("avatar_url") or "").strip():
+                try:
+                    avatar_path = (base / avatar_file).resolve()
+                    avatar_path.relative_to(base)
+                    mime = mime_types.get(avatar_path.suffix.lower())
+                    if mime and avatar_path.is_file():
+                        encoded = base64.b64encode(avatar_path.read_bytes()).decode("ascii")
+                        row["avatar_url"] = f"data:{mime};base64,{encoded}"
+                except Exception:
+                    pass
+            hydrated.append(row)
+        return hydrated
 
     @staticmethod
     def _normalize_preview_use_random_bank(raw, preview_audio_files=None):
@@ -1130,6 +1178,7 @@ class LibraryManager:
                 100,
                 password_provider=password_provider,
             )
+            self._copy_split_sidecar_files(zip_path, target_dir)
             self._normalize_wtlive_compat_files(target_dir)
             self.log(f"[SUCCESS] 导入成功: {mod_name}", "SUCCESS")
         except ArchivePasswordCanceled:
@@ -1190,6 +1239,7 @@ class LibraryManager:
                     share_progress,
                     password_provider=password_provider,
                 )
+                self._copy_split_sidecar_files(zip_file, target_dir)
                 self._normalize_wtlive_compat_files(target_dir)
 
                 success_count += 1
@@ -1238,6 +1288,29 @@ class LibraryManager:
         if str(Path(archive_path).suffix or "").lower() == ".bank":
             stem = re.sub(r"[（(]\s*AimerWT(?:_JSON)?\s*[）)]", "", stem, flags=re.IGNORECASE).strip()
         return stem or "imported_voicepack"
+
+    def _copy_split_sidecar_files(self, archive_path: Path, target_dir: Path) -> None:
+        archive = Path(archive_path).resolve()
+        pending = Path(self.pending_dir).resolve()
+        source_dir = archive.parent
+        try:
+            if source_dir.parent != pending:
+                return
+        except Exception:
+            return
+
+        target_root = Path(target_dir).resolve()
+        for source in source_dir.rglob("*"):
+            if not source.is_file() or source.resolve() == archive:
+                continue
+            relative = source.relative_to(source_dir)
+            destination = (target_root / relative).resolve()
+            try:
+                destination.relative_to(target_root)
+            except ValueError:
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
 
     def _extract_zip_safely(self, zip_path, target_dir, progress_callback=None, base_progress=0, share_progress=100,
                             password=None):

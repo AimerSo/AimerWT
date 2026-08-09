@@ -72,6 +72,7 @@ const ModelLibrary = {
             refresh_btn.classList.add('is-loading');
         }
         count_el.textContent = this._t('tools.count_refreshing');
+        ResourceLibraryLoading.start('models', { message: '正在读取模型列表...', processed: 0, total: null, show_content: false });
 
         try {
             if (!window.pywebview?.api?.get_models_list) {
@@ -90,7 +91,7 @@ const ModelLibrary = {
             const sort_select = document.getElementById('models-sort-select');
             if (search_input) this._search_query = search_input.value || '';
             if (sort_select) this._sort_key = sort_select.value || 'update_time';
-            this._render_filtered_list();
+            this._render_filtered_list({ replay: true, reason: options?.manual ? 'refresh' : 'initial' });
             if (window.app && typeof app.updateResourceStorage === 'function') app.updateResourceStorage('models');
             this._loaded = true;
         } catch (error) {
@@ -107,12 +108,19 @@ const ModelLibrary = {
 
     // ==================== 卡片渲染 ====================
 
-    _render_card_list(container, items) {
+    _render_card_list(container, items, reveal_options = {}) {
         const placeholder = 'assets/card_image_small.png';
         const CHUNK_SIZE = 24;
         let current_index = 0;
+        const reveal_started_at = window.performance?.now?.() || Date.now();
         this._render_seq = (this._render_seq || 0) + 1;
         const render_seq = this._render_seq;
+        ResourceLibraryLoading.start('models', {
+            message: '正在载入模型卡片...',
+            processed: 0,
+            total: items.length,
+            show_content: false,
+        });
         container.innerHTML = '';
 
         const render_chunk = () => {
@@ -156,12 +164,37 @@ const ModelLibrary = {
             }).join('');
 
             container.insertAdjacentHTML('beforeend', html);
+            const new_items = Array.from(container.querySelectorAll('.small-card')).slice(current_index, current_index + chunk.length);
+            if (window.app && typeof app.applyResourceReveal === 'function') {
+                app.applyResourceReveal(container, {
+                    items: new_items,
+                    order_offset: current_index,
+                    reveal_started_at,
+                    max_animated: 32,
+                    stagger_ms: 62.5,
+                    reveal_window_ms: 2000,
+                    duration_ms: 180,
+                    defer_remaining: true,
+                    once_key: 'models-list',
+                    ...reveal_options,
+                });
+            }
             current_index += CHUNK_SIZE;
+            const rendered_count = Math.min(current_index, items.length);
+            ResourceLibraryLoading.update('models', {
+                message: '正在载入模型卡片...',
+                processed: rendered_count,
+                total: items.length,
+                show_content: rendered_count > 0,
+            });
 
             if (current_index < items.length) {
                 requestAnimationFrame(render_chunk);
-            } else if (window.app && typeof app.updateResourceSelectionSummary === 'function') {
-                app.updateResourceSelectionSummary('models', items.length);
+            } else {
+                if (window.app && typeof app.updateResourceSelectionSummary === 'function') {
+                    app.updateResourceSelectionSummary('models', items.length);
+                }
+                ResourceLibraryLoading.finish('models');
             }
         };
 
@@ -170,24 +203,24 @@ const ModelLibrary = {
 
     filter_list(query) {
         this._search_query = String(query || '');
-        this._render_filtered_list();
+        this._render_filtered_list({ replay: true, reason: 'filter' });
     },
 
     sort_list(sort_key) {
         this._sort_key = sort_key || 'update_time';
-        this._render_filtered_list();
+        this._render_filtered_list({ replay: true, reason: 'sort' });
     },
 
     filter_status(value) {
         this._filter_status = value || 'all';
-        this._render_filtered_list();
+        this._render_filtered_list({ replay: true, reason: 'filter' });
     },
 
     toggle_sort_order() {
         this._sort_asc = !this._sort_asc;
         const btn = document.getElementById('models-sort-order-btn');
         if (btn) btn.classList.toggle('is-asc', this._sort_asc);
-        this._render_filtered_list();
+        this._render_filtered_list({ replay: true, reason: 'sort' });
     },
 
     _get_visible_items() {
@@ -240,7 +273,7 @@ const ModelLibrary = {
         return items;
     },
 
-    _render_filtered_list() {
+    _render_filtered_list(reveal_options = {}) {
         const list_el = document.getElementById('models-list');
         const count_el = document.getElementById('models-count');
         if (!list_el || !count_el) return;
@@ -259,6 +292,7 @@ const ModelLibrary = {
         }
 
         if (items.length === 0) {
+            ResourceLibraryLoading.finish('models');
             if (String(this._search_query || '').trim()) {
                 list_el.innerHTML = `
                     <div class="res-empty-state">
@@ -267,13 +301,21 @@ const ModelLibrary = {
                         <p>${this._t('resource.try_another_keyword')}</p>
                     </div>
                 `;
+                if (window.app && typeof app.applyResourceReveal === 'function') {
+                    app.applyResourceReveal(list_el, {
+                        item_selector: '.res-empty-state',
+                        max_animated: 1,
+                        once_key: 'models-list',
+                        ...reveal_options,
+                    });
+                }
                 return;
             }
             this._render_empty_state(list_el, count_el);
             return;
         }
 
-        this._render_card_list(list_el, items);
+        this._render_card_list(list_el, items, reveal_options);
     },
 
     _bind_card_events() {
@@ -300,12 +342,19 @@ const ModelLibrary = {
                     <p>${this._t('tools.empty_models_desc')}</p>
                 </div>
             `;
+            if (window.app && typeof app.applyResourceReveal === 'function') {
+                app.applyResourceReveal(container, {
+                    item_selector: '.res-empty-state',
+                    max_animated: 1,
+                });
+            }
         }
         if (window.app && typeof app.updateResourceSelectionSummary === 'function') {
             app.updateResourceSelectionSummary('models', 0);
         } else if (count_el) {
             count_el.textContent = this._t('resource.count_items', { count: 0 });
         }
+        ResourceLibraryLoading.finish('models');
     },
 
     // ==================== 编辑弹窗 ====================

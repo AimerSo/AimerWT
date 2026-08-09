@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -469,7 +470,9 @@ class AuthorVoicepackService:
         raw_payload["title"] = title
         normalized = self._normalize_payload(raw_payload, details, safe_name)
         normalized = self._persist_info_media_assets(pack_dir, normalized)
-        self._write_info_json(pack_dir / "info.json", normalized)
+        merged_payload = dict(raw_payload)
+        merged_payload.update(normalized)
+        self._write_info_json(pack_dir / "info.json", merged_payload)
 
         self._invalidate_cache(safe_name)
         return {"success": True, "name": safe_name, "title": title}
@@ -503,11 +506,10 @@ class AuthorVoicepackService:
         else:
             raw = self._lib_mgr._load_json_with_fallback(info_file) or {}
             payload = self._normalize_payload(raw, details, safe_name)
-            self._write_info_json(info_file, payload)
 
         self._invalidate_cache(safe_name)
         refreshed = self._lib_mgr.get_mod_details(safe_name)
-        raw_after = self._lib_mgr._load_json_with_fallback(info_file) or {}
+        raw_after = payload if created else (self._lib_mgr._load_json_with_fallback(info_file) or {})
         mod_data = self._normalize_payload(raw_after, refreshed, safe_name)
 
         if refreshed.get("cover_path"):
@@ -536,15 +538,22 @@ class AuthorVoicepackService:
             return {"success": False, "msg": "语音包文件夹不存在"}
 
         current = self._lib_mgr.get_mod_details(safe_name)
+        existing_info = self._find_info_file(pack_dir)
+        existing_payload = self._lib_mgr._load_json_with_fallback(existing_info) if existing_info else {}
+        existing_payload = existing_payload if isinstance(existing_payload, dict) else {}
         normalized = self._normalize_payload(payload or {}, current, safe_name)
 
         cover_data = str((payload or {}).get("cover_url") or "").strip()
-        if cover_data.startswith("data:image/"):
+        if bool((payload or {}).get("cover_clear", False)):
+            self._remove_cover_files(pack_dir)
+        elif bool((payload or {}).get("cover_changed", False)) and cover_data.startswith("data:image/"):
             self._write_cover_from_data_url(pack_dir, cover_data)
         normalized = self._persist_info_media_assets(pack_dir, normalized)
 
         info_file = pack_dir / "info.json"
-        self._write_info_json(info_file, normalized)
+        merged_payload = dict(existing_payload)
+        merged_payload.update(normalized)
+        self._write_info_json(info_file, merged_payload)
 
         self._invalidate_cache(safe_name)
         refreshed = self._lib_mgr.get_mod_details(safe_name)
@@ -591,7 +600,9 @@ class AuthorVoicepackService:
         raw_payload = self._lib_mgr._load_json_with_fallback(info_file) or {}
         normalized = self._normalize_payload(raw_payload, details, safe_name)
         normalized = self._persist_info_media_assets(pack_dir, normalized)
-        self._write_info_json(pack_dir / "info.json", normalized)
+        merged_payload = dict(raw_payload)
+        merged_payload.update(normalized)
+        self._write_info_json(pack_dir / "info.json", merged_payload)
 
         export_mode = self._normalize_export_mode(export_mode)
         out_name = self._normalize_export_bank_name(package_name or safe_name)
@@ -1232,35 +1243,40 @@ class AuthorVoicepackService:
 
     def _normalize_payload(self, payload: dict[str, Any], details: dict[str, Any], mod_name: str) -> dict[str, Any]:
         data = dict(payload or {})
-        normalized: dict[str, Any] = {
-            "title": str(data.get("title") or details.get("title") or mod_name).strip() or mod_name,
-            "author": str(data.get("author") or details.get("author") or "").strip(),
-            "version": self._normalize_version(data.get("version") or details.get("version") or "1.0"),
-            "date": str(data.get("date") or details.get("date") or "").strip(),
-            "note": str(data.get("note") or details.get("note") or "").strip(),
-            "full_desc": str(data.get("full_desc") or details.get("full_desc") or data.get("note") or "").strip(),
-            "version_note": self._normalize_version_notes(
-                data.get("version_note"), data.get("version") or details.get("version") or "1.0"
-            ),
-            "link_bilibili": self._normalize_link(data.get("link_bilibili") or details.get("link_bilibili") or ""),
-            "link_qq_group": self._normalize_link(data.get("link_qq_group") or details.get("link_qq_group") or ""),
-            "link_wtlive": self._normalize_link(data.get("link_wtlive") or details.get("link_wtlive") or ""),
-            "link_liker": self._normalize_link(data.get("link_liker") or details.get("link_liker") or ""),
-            "link_feedback": self._normalize_link(data.get("link_feedback") or details.get("link_feedback") or ""),
-            "link_video": self._normalize_link(data.get("link_video") or details.get("link_video") or ""),
-            "tags": self._normalize_text_list(data.get("tags") or details.get("tags") or []),
-            "language": self._normalize_text_list(data.get("language") or details.get("language") or [], max_items=3),
-            "preview_use_random_bank": self._normalize_preview_use_random_bank(
-                data.get("preview_use_random_bank"),
-                details.get("preview_use_random_bank"),
-                data.get("preview_audio_files") or details.get("preview_audio_files") or [],
-            ),
-            "preview_audio_files": self._normalize_preview_audio_items(data.get("preview_audio_files") or []),
-            "related_voicepacks": self._normalize_related_voicepacks(data.get("related_voicepacks") or []),
-        }
 
-        if not normalized["tags"]:
-            normalized["tags"] = ["陆战"]
+        def value_or_detail(key: str, default: Any = "") -> Any:
+            if key in data:
+                return data.get(key)
+            return details.get(key, default)
+
+        preview_audio_files = value_or_detail("preview_audio_files", []) or []
+        related_voicepacks = value_or_detail("related_voicepacks", []) or []
+        normalized: dict[str, Any] = {
+            "title": str(value_or_detail("title", mod_name) or mod_name).strip() or mod_name,
+            "author": str(value_or_detail("author", "") or "").strip(),
+            "version": self._normalize_version(value_or_detail("version", "1.0")),
+            "date": str(value_or_detail("date", "") or "").strip(),
+            "note": str(value_or_detail("note", "") or "").strip(),
+            "full_desc": str(value_or_detail("full_desc", "") or "").strip(),
+            "version_note": self._normalize_version_notes(
+                value_or_detail("version_note", []), value_or_detail("version", "1.0") or "1.0"
+            ),
+            "link_bilibili": self._normalize_link(value_or_detail("link_bilibili", "")),
+            "link_qq_group": self._normalize_link(value_or_detail("link_qq_group", "")),
+            "link_wtlive": self._normalize_link(value_or_detail("link_wtlive", "")),
+            "link_liker": self._normalize_link(value_or_detail("link_liker", "")),
+            "link_feedback": self._normalize_link(value_or_detail("link_feedback", "")),
+            "link_video": self._normalize_link(value_or_detail("link_video", "")),
+            "tags": self._normalize_text_list(value_or_detail("tags", [])),
+            "language": self._normalize_text_list(value_or_detail("language", []), max_items=3),
+            "preview_use_random_bank": self._normalize_preview_use_random_bank(
+                data.get("preview_use_random_bank") if "preview_use_random_bank" in data else None,
+                details.get("preview_use_random_bank"),
+                preview_audio_files,
+            ),
+            "preview_audio_files": self._normalize_preview_audio_items(preview_audio_files),
+            "related_voicepacks": self._normalize_related_voicepacks(related_voicepacks),
+        }
 
         return {k: normalized[k] for k in SUPPORTED_INFO_KEYS}
 
@@ -1314,10 +1330,12 @@ class AuthorVoicepackService:
         for idx, item in enumerate(items[:MAX_PREVIEW_AUDIO_COUNT], start=1):
             if not isinstance(item, dict):
                 continue
-            display_name = str(item.get("display_name") or "").strip() or f"试听音频{idx}"
             source_name = str(item.get("source_name") or "").strip()
             source_file = str(item.get("source_file") or "").strip().replace("\\", "/")
             audio_data_url = str(item.get("audio_data_url") or "").strip()
+            if not source_name and not source_file and not audio_data_url:
+                continue
+            display_name = str(item.get("display_name") or "").strip() or f"试听音频{idx}"
             ext = self._normalize_audio_ext(item.get("ext"), source_name, source_file, audio_data_url)
 
             if owner == "main":
@@ -1459,8 +1477,22 @@ class AuthorVoicepackService:
 
     def _write_info_json(self, file_path: Path, payload: dict[str, Any]) -> None:
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=file_path.parent,
+                prefix=f".{file_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                json.dump(payload, temp_file, ensure_ascii=False, indent=2)
+                temp_path = Path(temp_file.name)
+            os.replace(str(temp_path), str(file_path))
+        finally:
+            if temp_path and temp_path.exists():
+                temp_path.unlink()
 
     def _write_cover_from_data_url(self, pack_dir: Path, data_url: str) -> None:
         m = re.match(r"^data:image/([a-zA-Z0-9+.-]+);base64,(.+)$", data_url, re.DOTALL)
@@ -1476,49 +1508,75 @@ class AuthorVoicepackService:
 
         raw = base64.b64decode(b64)
 
-        for old in ["cover.png", "cover.jpg", "cover.jpeg", "cover.webp", "cover.bmp", "cover.gif", "cover.svg"]:
-            old_file = pack_dir / old
-            if old_file.exists():
-                try:
-                    old_file.unlink()
-                except Exception:
-                    pass
-
         out = pack_dir / f"cover.{ext}"
-        with open(out, "wb") as f:
+        temp_out = pack_dir / f".cover.{ext}.tmp"
+        with open(temp_out, "wb") as f:
             f.write(raw)
+        self._remove_cover_files(pack_dir)
+        os.replace(str(temp_out), str(out))
+
+    def _remove_cover_files(self, pack_dir: Path) -> None:
+        for name in ["cover.png", "cover.jpg", "cover.jpeg", "cover.webp", "cover.bmp", "cover.gif", "cover.svg"]:
+            file_path = pack_dir / name
+            if file_path.exists() and file_path.is_file():
+                file_path.unlink()
 
     def _persist_info_media_assets(self, pack_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
         data = json.loads(json.dumps(payload or {}, ensure_ascii=False))
         assets_dir = pack_dir / "_preview_assets"
-        assets_dir.mkdir(parents=True, exist_ok=True)
+        stage_dir = Path(tempfile.mkdtemp(prefix="._preview_assets_stage_", dir=pack_dir))
 
-        for item in data.get("preview_audio_files") or []:
-            src_rel = str(item.get("source_file") or "").strip().replace("\\", "/")
-            legacy_rel = str(item.get("_legacy_source_file") or "").strip().replace("\\", "/")
-            audio_data_url = str(item.get("audio_data_url") or "").strip()
-            if audio_data_url.startswith("data:audio/") and src_rel:
-                self._write_data_url_file(pack_dir / src_rel, audio_data_url)
-            elif src_rel and legacy_rel and src_rel != legacy_rel:
-                self._copy_legacy_file_if_needed(pack_dir, legacy_rel, src_rel)
+        def stage_asset(target_rel: str, legacy_rel: str, data_url: str) -> None:
+            normalized_target = str(target_rel or "").strip().replace("\\", "/")
+            prefix = "_preview_assets/"
+            if not normalized_target.startswith(prefix):
+                return
+            target = stage_dir / normalized_target[len(prefix):]
+            if data_url.startswith("data:"):
+                self._write_data_url_file(target, data_url)
+                return
+            source_rel = str(legacy_rel or normalized_target).strip().replace("\\", "/")
+            source = self._resolve_pack_relative_path(pack_dir, source_rel)
+            if source and source.exists() and source.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
 
-        for related in data.get("related_voicepacks") or []:
-            avatar_rel = str(related.get("avatar_file") or "").strip().replace("\\", "/")
-            legacy_avatar_rel = str(related.get("_legacy_avatar_file") or "").strip().replace("\\", "/")
-            avatar_data_url = str(related.get("avatar_url") or "").strip()
-            if avatar_data_url.startswith("data:image/") and avatar_rel:
-                self._write_data_url_file(pack_dir / avatar_rel, avatar_data_url)
-            elif avatar_rel and legacy_avatar_rel and avatar_rel != legacy_avatar_rel:
-                self._copy_legacy_file_if_needed(pack_dir, legacy_avatar_rel, avatar_rel)
-
-            for item in related.get("preview_audio_files") or []:
+        try:
+            for item in data.get("preview_audio_files") or []:
                 src_rel = str(item.get("source_file") or "").strip().replace("\\", "/")
                 legacy_rel = str(item.get("_legacy_source_file") or "").strip().replace("\\", "/")
                 audio_data_url = str(item.get("audio_data_url") or "").strip()
-                if audio_data_url.startswith("data:audio/") and src_rel:
-                    self._write_data_url_file(pack_dir / src_rel, audio_data_url)
-                elif src_rel and legacy_rel and src_rel != legacy_rel:
-                    self._copy_legacy_file_if_needed(pack_dir, legacy_rel, src_rel)
+                stage_asset(src_rel, legacy_rel, audio_data_url)
+
+            for related in data.get("related_voicepacks") or []:
+                avatar_rel = str(related.get("avatar_file") or "").strip().replace("\\", "/")
+                legacy_avatar_rel = str(related.get("_legacy_avatar_file") or "").strip().replace("\\", "/")
+                avatar_data_url = str(related.get("avatar_url") or "").strip()
+                stage_asset(avatar_rel, legacy_avatar_rel, avatar_data_url)
+
+                for item in related.get("preview_audio_files") or []:
+                    src_rel = str(item.get("source_file") or "").strip().replace("\\", "/")
+                    legacy_rel = str(item.get("_legacy_source_file") or "").strip().replace("\\", "/")
+                    audio_data_url = str(item.get("audio_data_url") or "").strip()
+                    stage_asset(src_rel, legacy_rel, audio_data_url)
+
+            backup_dir = Path(tempfile.mkdtemp(prefix="._preview_assets_backup_", dir=pack_dir))
+            backup_dir.rmdir()
+            had_assets = assets_dir.exists()
+            if had_assets:
+                assets_dir.rename(backup_dir)
+            try:
+                stage_dir.rename(assets_dir)
+            except Exception:
+                if had_assets and backup_dir.exists() and not assets_dir.exists():
+                    backup_dir.rename(assets_dir)
+                raise
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+        except Exception:
+            if stage_dir.exists():
+                shutil.rmtree(stage_dir, ignore_errors=True)
+            raise
 
         return self._strip_transient_media_fields(data)
 

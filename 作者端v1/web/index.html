@@ -5,8 +5,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AimerWT Author MVP</title>
+    <link rel="icon" href="assets/logo.ico">
     <link rel="stylesheet" href="assets/remixicon/remixicon.css">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20260801">
+    <link rel="stylesheet" href="pages/sight_card_preview.css">
     <link rel="stylesheet" href="modal_main.css">
     <link rel="stylesheet" href="guide/guide.css">
 </head>
@@ -55,6 +57,10 @@
                         <i class="ri-file-info-line"></i>
                         <span>语音包信息</span>
                     </div>
+                    <div class="side-item" data-page="sightinfo">
+                        <i class="ri-focus-3-line"></i>
+                        <span>炮镜信息</span>
+                    </div>
                     <div class="side-item" data-page="settings">
                         <i class="ri-book-open-line"></i>
                         <span>说明信息</span>
@@ -97,39 +103,60 @@
                             </button>
                         </section>
 
-                        <section class="home-links" id="home-links-grid"></section>
-
-                        <section class="home-info-wrap">
-                            <h2 class="home-section-title">
-                                <i class="ri-information-line"></i>
-                                信息
-                            </h2>
-                            <div class="home-runtime-grid">
-                                <div class="home-runtime-card">
-                                    <div class="home-runtime-label">应用版本</div>
-                                    <div class="home-runtime-value" id="info-version">-</div>
-                                </div>
-                                <div class="home-runtime-card">
-                                    <div class="home-runtime-label">作者链接</div>
-                                    <div class="home-runtime-value" id="info-author-link">-</div>
-                                </div>
-                                <div class="home-runtime-card">
-                                    <div class="home-runtime-label">加入交流群</div>
-                                    <div class="home-runtime-value" id="info-fans-link">-</div>
-                                </div>
-                                <div class="home-runtime-card">
-                                    <div class="home-runtime-label">最后更新时间</div>
-                                    <div class="home-runtime-value" id="info-updated">-</div>
-                                </div>
+                        <section class="home-dashboard card-like">
+                            <div class="home-dashboard-header">
+                                <h2>主页与联系</h2>
+                                <span>完善信息有助于提升作品可信度与展示效果</span>
                             </div>
+
+                            <section class="home-links" id="home-links-grid"></section>
+
+                            <section class="home-info-wrap">
+                                <h2 class="home-section-title">
+                                    <i class="ri-information-fill"></i>
+                                    信息概览
+                                </h2>
+                                <div class="home-runtime-grid">
+                                    <div class="home-runtime-card">
+                                        <i class="ri-code-box-line"></i>
+                                        <div>
+                                            <div class="home-runtime-label">应用版本</div>
+                                            <div class="home-runtime-value" id="info-version">-</div>
+                                        </div>
+                                    </div>
+                                    <div class="home-runtime-card">
+                                        <i class="ri-links-line"></i>
+                                        <div>
+                                            <div class="home-runtime-label">作者链接</div>
+                                            <div class="home-runtime-value" id="info-author-link">-</div>
+                                        </div>
+                                    </div>
+                                    <div class="home-runtime-card">
+                                        <i class="ri-group-line"></i>
+                                        <div>
+                                            <div class="home-runtime-label">加入交流群</div>
+                                            <div class="home-runtime-value" id="info-fans-link">-</div>
+                                        </div>
+                                    </div>
+                                    <div class="home-runtime-card">
+                                        <i class="ri-calendar-check-line"></i>
+                                        <div>
+                                            <div class="home-runtime-label">最后更新时间</div>
+                                            <div class="home-runtime-value" id="info-updated">-</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <footer class="home-footer">
+                                <div class="home-footer-pill">
+                                    <i class="ri-heart-3-line"></i>
+                                    <span>AimerWT Authoring Station</span>
+                                    <span class="home-footer-separator"></span>
+                                    <span>v1 Beta-Internal Build</span>
+                                </div>
+                            </footer>
                         </section>
-
-                        <footer class="home-footer">
-                            <div class="home-footer-pill">
-                                <span class="home-online-dot"></span>
-                                <span>AimerWT Authoring Station | v1 Beta-Internal Build</span>
-                            </div>
-                        </footer>
                     </div>
 
                     <div class="page" id="page-voicepack">
@@ -365,12 +392,256 @@
                         </div>
                     </div>
 
+                    <div class="page" id="page-sightinfo">
+                        <section class="sightinfo-shell" id="sightinfo-shell" aria-label="炮镜信息工作台">
+                            <header class="sightinfo-project-bar">
+                                <div class="sightinfo-project-heading">
+                                    <div class="sightinfo-project-title-row">
+                                        <h2 id="sight-current-title">尚未选择炮镜项目</h2>
+                                        <span class="sightinfo-dirty-badge" id="sight-dirty-badge" hidden>未保存</span>
+                                        <span class="sightinfo-status-badge" id="sight-project-type">等待载入</span>
+                                    </div>
+                                    <p id="sight-project-subtitle">建立作者项目，映射真实 BLK，并在导出前完成兼容检查。</p>
+                                </div>
+                                <div class="sightinfo-project-actions" aria-label="项目操作">
+                                    <div class="btn-v2-group">
+                                        <button class="btn-v2" type="button" id="btn-sight-new"><i class="ri-add-line"></i><span>新建</span></button>
+                                        <button class="btn-v2" type="button" id="btn-sight-import-folder"><i class="ri-folder-transfer-line"></i><span>导入文件夹</span></button>
+                                        <button class="btn-v2" type="button" id="btn-sight-import-blk"><i class="ri-file-code-line"></i><span>导入 BLK</span></button>
+                                        <button class="btn-v2" type="button" id="btn-sight-import-zip"><i class="ri-file-zip-line"></i><span>导入 ZIP</span></button>
+                                    </div>
+                                    <div class="btn-v2-group">
+                                        <button class="btn-v2" type="button" id="btn-sight-open-project" disabled title="打开当前项目目录"><i class="ri-folder-open-line"></i><span>目录</span></button>
+                                        <button class="btn-v2" type="button" id="btn-sight-rename" disabled title="重命名当前项目"><i class="ri-edit-2-line"></i><span>重命名</span></button>
+                                        <button class="btn-v2 danger-quiet" type="button" id="btn-sight-delete" disabled title="删除当前作者项目"><i class="ri-delete-bin-line"></i><span>删除</span></button>
+                                    </div>
+                                    <div class="btn-v2-group sightinfo-core-actions">
+                                        <button class="btn-v2" type="button" id="btn-sight-rescan" disabled data-sight-desc="重新读取当前项目工作副本的 source 目录，发现新增、移除或改名的 BLK；不会修改原始导入文件。"><i class="ri-refresh-line"></i><span>重新扫描</span></button>
+                                        <button class="btn-v2" type="button" id="btn-sight-validate" disabled data-sight-desc="检查必填项、真实 BLK、输出路径和兼容性；只生成检查结果，不会改动文件。"><i class="ri-shield-check-line"></i><span>兼容检查</span></button>
+                                        <button class="btn-v2 primary" type="button" id="btn-sight-save" disabled data-sight-desc="只保存作者端项目配置，不会写入真实 BLK，也不会生成发布 ZIP。"><i class="ri-save-3-line"></i><span>保存项目</span></button>
+                                        <button class="btn-v2 primary strong" type="button" id="btn-sight-export" disabled data-sight-desc="先执行兼容检查，再把已勾选的真实 BLK 和公开信息打包为可发布 ZIP。"><i class="ri-file-zip-line"></i><span>导出 ZIP</span></button>
+                                    </div>
+                                    <button class="btn-v2 icon-only" type="button" id="btn-sight-open-exports" title="打开炮镜导出区"><i class="ri-folder-download-line"></i></button>
+                                </div>
+                            </header>
+
+                            <div class="sightinfo-workspace">
+                                <aside class="sightinfo-rail" aria-label="炮镜项目和文件">
+                                    <div class="sightinfo-rail-section sightinfo-project-section">
+                                        <div class="sightinfo-section-heading">
+                                            <div><span class="sightinfo-section-label">炮镜项目</span><strong id="sight-project-count">0</strong></div>
+                                            <button class="sightinfo-icon-btn" type="button" id="btn-sight-refresh-projects" title="刷新项目列表"><i class="ri-refresh-line"></i></button>
+                                        </div>
+                                        <label class="sightinfo-search-box" for="sight-project-search">
+                                            <i class="ri-search-line"></i><input id="sight-project-search" type="search" placeholder="搜索项目或作品名" autocomplete="off">
+                                        </label>
+                                        <div class="sightinfo-project-list" id="sight-project-list" role="listbox" aria-label="炮镜项目列表">
+                                            <div class="sightinfo-list-placeholder">正在读取项目…</div>
+                                        </div>
+                                    </div>
+                                    <div class="sightinfo-rail-section sightinfo-file-section">
+                                        <div class="sightinfo-section-heading">
+                                            <div><span class="sightinfo-section-label">真实 BLK</span><strong id="sight-file-count">0 / 0</strong></div>
+                                            <span class="sightinfo-rail-hint">以导出路径计数</span>
+                                        </div>
+                                        <label class="sightinfo-search-box" for="sight-file-search">
+                                            <i class="ri-filter-3-line"></i><input id="sight-file-search" type="search" placeholder="筛选文件或路径" autocomplete="off">
+                                        </label>
+                                        <div class="sightinfo-file-list" id="sight-file-list" role="listbox" aria-label="BLK 文件列表">
+                                            <div class="sightinfo-list-placeholder">选择项目后显示文件</div>
+                                        </div>
+                                    </div>
+                                </aside>
+
+                                <main class="sightinfo-editor" aria-label="炮镜项目编辑区">
+                                    <div class="sightinfo-empty-state" id="sight-empty-state">
+                                        <div class="sightinfo-empty-icon"><i class="ri-focus-3-line"></i></div>
+                                        <h3>从一个炮镜项目开始</h3>
+                                        <p>新建空项目，或从已有 BLK、炮镜文件夹、ZIP 中导入。作者端会复制素材到独立工作区，不会修改原件。</p>
+                                        <div class="sightinfo-empty-actions">
+                                            <button class="btn-v2 primary" type="button" data-sight-empty-action="new"><i class="ri-add-line"></i><span>新建项目</span></button>
+                                            <button class="btn-v2" type="button" data-sight-empty-action="folder"><i class="ri-folder-transfer-line"></i><span>导入文件夹</span></button>
+                                            <button class="btn-v2" type="button" data-sight-empty-action="blk"><i class="ri-file-code-line"></i><span>导入 BLK</span></button>
+                                            <button class="btn-v2" type="button" data-sight-empty-action="zip"><i class="ri-file-zip-line"></i><span>导入 ZIP</span></button>
+                                        </div>
+                                    </div>
+
+                                    <div class="sightinfo-editor-content" id="sight-editor-content" hidden>
+                                        <nav class="sightinfo-tabs" role="tablist" aria-label="炮镜项目信息分类">
+                                            <button class="sightinfo-tab active" type="button" role="tab" aria-selected="true" data-sight-tab="basic"><i class="ri-information-line"></i><span>基础信息</span></button>
+                                            <button class="sightinfo-tab" type="button" role="tab" aria-selected="false" data-sight-tab="files"><i class="ri-route-line"></i><span>BLK 映射</span><em id="sight-tab-file-count">0</em></button>
+                                            <button class="sightinfo-tab" type="button" role="tab" aria-selected="false" data-sight-tab="groups"><i class="ri-stack-line"></i><span>作者分组</span><em id="sight-tab-group-count">0</em></button>
+                                            <button class="sightinfo-tab" type="button" role="tab" aria-selected="false" data-sight-tab="cover"><i class="ri-image-line"></i><span>封面与链接</span></button>
+                                            <button class="sightinfo-tab" type="button" role="tab" aria-selected="false" data-sight-tab="advanced"><i class="ri-settings-4-line"></i><span>高级</span></button>
+                                        </nav>
+
+                                        <div class="sightinfo-panels">
+                                            <section class="sightinfo-panel active" role="tabpanel" data-sight-panel="basic">
+                                                <div class="sightinfo-panel-heading">
+                                                    <div><span class="sightinfo-eyebrow">作品级公开信息</span><h3>让用户知道这套炮镜是什么</h3><p>这些字段写入导出包的公开元数据；项目文件夹名只用于作者端管理。</p></div>
+                                                </div>
+                                                <div class="sightinfo-form-grid two-column">
+                                                    <label class="sightinfo-field span-2"><span>作品名称 <b>*</b></span><input class="sightinfo-input" type="text" data-sight-field="package.package_name" maxlength="120" placeholder="用户端卡片显示的名称"></label>
+                                                    <label class="sightinfo-field"><span>作者 <b>*</b></span><input class="sightinfo-input" type="text" data-sight-field="package.author" maxlength="80" placeholder="默认读取个人主页名称"></label>
+                                                    <label class="sightinfo-field"><span>版本</span><input class="sightinfo-input" type="text" data-sight-field="package.version" maxlength="32" placeholder="例如 1.0.0"></label>
+                                                    <label class="sightinfo-field span-2"><span>详细说明</span><textarea class="sightinfo-textarea tall" data-sight-field="package.description" maxlength="4000" placeholder="介绍设计思路、刻度用途、使用方式和适用范围"></textarea></label>
+                                                    <label class="sightinfo-field span-2"><span>作者留言</span><textarea class="sightinfo-textarea" data-sight-field="package.note" maxlength="1000" placeholder="面向用户的补充说明、注意事项或更新提示"></textarea></label>
+                                                </div>
+
+                                                <div class="sightinfo-form-section">
+                                                    <div class="sightinfo-form-section-title"><div><strong>主分类与适配条件</strong><span>主分类决定客户端三类筛选；自定义标签只用于补充检索。</span></div></div>
+                                                    <div class="sightinfo-category-row" id="sight-category-options">
+                                                        <label><input type="checkbox" value="historical" data-sight-category><span><i class="ri-history-line"></i>史实</span></label>
+                                                        <label><input type="checkbox" value="competitive" data-sight-category><span><i class="ri-crosshair-2-line"></i>竞技</span></label>
+                                                        <label><input type="checkbox" value="fun" data-sight-category><span><i class="ri-emotion-happy-line"></i>娱乐</span></label>
+                                                    </div>
+                                                    <div class="sightinfo-form-grid two-column">
+                                                        <label class="sightinfo-field span-2" data-sight-desc="写入公开标签，用户可在详情中看到并搜索；不会新增史实、竞技、娱乐之外的筛选分类，也不影响安装路径。"><span>自定义标签</span><input class="sightinfo-input" type="text" id="sight-custom-tags" placeholder="以逗号分隔，例如：德系、二战、简洁刻度"><small>多个标签用逗号分隔；不要重复填写史实、竞技、娱乐。仅填写自定义标签时，兼容检查仍会提醒缺少主分类。</small></label>
+                                                        <div class="span-2" id="sight-package-vehicle-selector" data-sight-vehicle-scope="package"></div>
+                                                        <datalist id="sight-vehicle-catalog"></datalist>
+                                                        <label class="sightinfo-field span-2" data-sight-desc="列出这套作品经过作者确认可正常显示的分辨率，多个值用逗号分隔；用于详情展示和兼容提示。"><span>适配分辨率列表</span><input class="sightinfo-input" type="text" data-sight-list-field="package.target_resolutions" placeholder="例如：1920x1080, 2560x1440"></label>
+                                                        <label class="sightinfo-field" data-sight-desc="从适配列表中指定默认展示的一项；不填写时由客户端结合文件信息选择。"><span>首选分辨率</span><input class="sightinfo-input" type="text" data-sight-field="package.target_resolution" placeholder="应为上方列表中的一项"></label>
+                                                        <label class="sightinfo-field"><span>灵敏度说明</span><input class="sightinfo-input" type="text" data-sight-field="package.sensitivity" placeholder="例如：建议缩放灵敏度 35%"></label>
+                                                    </div>
+                                                </div>
+
+                                                <details class="sightinfo-details">
+                                                    <summary><span>客户端悬浮信息</span><small>选填，留空时由客户端按文件信息归纳</small></summary>
+                                                    <div class="sightinfo-form-grid three-column">
+                                                        <label class="sightinfo-field"><span>炮镜类型</span><input class="sightinfo-input" type="text" data-sight-field="package.hover_text.sight_type" placeholder="例如：历史刻度"></label>
+                                                        <label class="sightinfo-field" data-sight-desc="明确告诉用户这套炮镜是否支持自动抬炮。选择“未声明”时，客户端会尝试从 BLK 分析；作者声明优先。">
+                                                            <span>自动抬炮</span>
+                                                            <select class="sightinfo-select" data-sight-optional-bool-field="package.apply_correction_to_gun">
+                                                                <option value="">未声明（使用 BLK 自动分析）</option>
+                                                                <option value="true">支持自动抬炮</option>
+                                                                <option value="false">不支持自动抬炮</option>
+                                                            </select>
+                                                            <input class="sightinfo-input" type="text" data-sight-field="package.hover_text.gun_correction" placeholder="悬浮信息补充说明（可选）">
+                                                            <small>作者声明优先于 BLK 自动分析。</small>
+                                                        </label>
+                                                        <label class="sightinfo-field"><span>适配分辨率</span><input class="sightinfo-input" type="text" data-sight-field="package.hover_text.target_resolution" placeholder="例如：适配 16:9"></label>
+                                                    </div>
+                                                </details>
+                                            </section>
+
+                                            <section class="sightinfo-panel" role="tabpanel" data-sight-panel="files" hidden>
+                                                <div class="sightinfo-panel-heading with-actions">
+                                                    <div><span class="sightinfo-eyebrow">发布白名单</span><h3>真实 BLK 与 ZIP 路径映射</h3><p>只有勾选的真实 BLK 会进入发布包；输出路径同时参与元数据匹配和安装路径推导。</p></div>
+                                                    <button class="btn-v2" type="button" id="btn-sight-analyze-all" data-sight-desc="只读取并分析所有已勾选、源文件存在的发布 BLK，更新当前项目的分析结果；不会写入或修改 BLK。"><i class="ri-radar-line"></i><span>分析全部发布 BLK</span></button>
+                                                </div>
+                                                <div class="sightinfo-batch-bar">
+                                                    <label class="sightinfo-check-all" data-sight-desc="只选择当前筛选结果的这一页，最多 30 个文件；翻页后可继续选择。"><input type="checkbox" id="sight-select-all-files"><span>选择本页</span></label>
+                                                    <select class="sightinfo-select" id="sight-batch-ammo" aria-label="批量弹种">
+                                                        <option value="">弹种：不修改</option><option value="apfsds">APFSDS</option><option value="heat">HEAT</option><option value="heatfs">HEAT-FS</option><option value="aphe">APHE</option><option value="he">HE</option><option value="atgm">ATGM</option><option value="apds">APDS</option><option value="hesh">HESH</option><option value="smoke">Smoke</option><option value="universal">Universal</option><option value="ap">AP</option><option value="apbc">APBC</option><option value="apc">APC</option><option value="apcbc">APCBC</option><option value="aphebc">APHEBC</option><option value="aphec">APHEC</option><option value="aphecbc">APHECBC</option><option value="sapcbc">SAPCBC</option><option value="apcr">APCR</option><option value="heat_mp">HEAT-MP</option><option value="he_or">HE-OR</option><option value="heat_grenade">HEAT Grenade</option><option value="he_tf">HE-TF</option><option value="he_vt">HE-VT</option><option value="shrapnel">Shrapnel</option><option value="he_grenade">HE Grenade</option><option value="rocket">Rocket</option><option value="vog">VOG</option><option value="atgm_tandem">ATGM Tandem</option><option value="atgm_he">ATGM-HE</option><option value="atgm_top_attack">ATGM Top Attack</option><option value="atgm_vt">ATGM-VT</option><option value="sam">SAM</option>
+                                                    </select>
+                                                    <input class="sightinfo-input compact" type="text" id="sight-batch-target-dir" placeholder="批量目标目录" data-sight-desc="批量改写所选文件在 ZIP 中的目标目录；留空表示不修改这个字段。">
+                                                    <input class="sightinfo-input compact" type="text" id="sight-batch-resolution" placeholder="批量分辨率" data-sight-desc="批量填写所选文件的目标分辨率；留空表示不修改这个字段。">
+                                                    <input class="sightinfo-input compact wide" type="text" id="sight-batch-vehicles" aria-label="批量旧版载具文字，逗号分隔" placeholder="批量旧版载具文字，逗号分隔" data-sight-desc="批量填写旧资源使用的展示文字，不会自动变成结构化车辆 ID；需要时再用下方“匹配旧文字”转换。">
+                                                    <button class="btn-v2" type="button" id="btn-sight-apply-batch" data-sight-desc="只修改已选择文件中填写了批量值的字段；空白批量项保持原值。">应用到所选</button>
+                                                </div>
+                                                <div class="sightinfo-file-editor" id="sight-file-editor"></div>
+                                            </section>
+
+                                            <section class="sightinfo-panel" role="tabpanel" data-sight-panel="groups" hidden>
+                                                <div class="sightinfo-panel-heading with-actions">
+                                                    <div><span class="sightinfo-eyebrow">多文件包导航</span><h3>作者分组</h3><p>每个 BLK 最多属于一个作者分组；不分组也能安装，但多文件包会给出提醒。</p></div>
+                                                    <button class="btn-v2 primary" type="button" id="btn-sight-add-group"><i class="ri-add-line"></i><span>新建分组</span></button>
+                                                </div>
+                                                <div class="sightinfo-group-editor" id="sight-group-editor"></div>
+                                                <div class="sightinfo-assignment-editor" id="sight-assignment-editor"></div>
+                                            </section>
+
+                                            <section class="sightinfo-panel" role="tabpanel" data-sight-panel="cover" hidden>
+                                                <div class="sightinfo-panel-heading"><div><span class="sightinfo-eyebrow">卡片与外部内容</span><h3>封面与链接</h3><p>封面会复制进作者项目，导出时统一生成 ZIP 根目录的 preview.webp。</p></div></div>
+                                                <div class="sightinfo-cover-layout">
+                                                    <div class="sightinfo-cover-stage" id="sight-cover-stage">
+                                                        <img id="sight-cover-preview" alt="炮镜封面预览" hidden>
+                                                        <div class="sightinfo-cover-placeholder" id="sight-cover-placeholder"><i class="ri-image-add-line"></i><span>尚未选择封面</span><small>支持 PNG、JPG、JPEG、WEBP</small></div>
+                                                        <div class="sightinfo-cover-actions"><button class="btn-v2 primary" type="button" id="btn-sight-select-cover">选择封面</button><button class="btn-v2" type="button" id="btn-sight-clear-cover">清除</button></div>
+                                                    </div>
+                                                    <div class="sightinfo-cover-fields">
+                                                        <div class="sightinfo-readonly-row"><span>项目内素材</span><code id="sight-cover-source">未设置</code></div>
+                                                        <label class="sightinfo-field"><span>视频链接</span><input class="sightinfo-input" type="url" data-sight-field="package.link_video" placeholder="作品介绍、演示或教程视频"></label>
+                                                        <label class="sightinfo-field"><span>WT Live 链接</span><input class="sightinfo-input" type="url" data-sight-field="package.link_wtlive" placeholder="留空时不写入公开元数据"></label>
+                                                        <label class="sightinfo-field"><span>Bilibili 链接</span><input class="sightinfo-input" type="url" data-sight-field="package.link_bilibili" placeholder="留空时不写入公开元数据"></label>
+                                                    </div>
+                                                </div>
+                                            </section>
+
+                                            <section class="sightinfo-panel" role="tabpanel" data-sight-panel="advanced" hidden>
+                                                <div class="sightinfo-panel-heading"><div><span class="sightinfo-eyebrow">导出与迁移</span><h3>高级设置</h3><p>此处影响文件名、旧元数据迁移确认和未知公开字段保留，不改变主程序安装规则。</p></div></div>
+                                                <div class="sightinfo-form-grid two-column">
+                                                    <label class="sightinfo-field span-2" data-sight-desc="设置导出文件的名称，不需要填写 .zip；只改变归档文件名，不会改动项目名称。"><span>ZIP 文件名</span><div class="sightinfo-input-suffix"><input class="sightinfo-input" type="text" data-sight-field="export.archive_name" maxlength="120" placeholder="例如：作者_作品名"><span>.zip</span></div><small>该名称可能成为普通归档安装时的目录名，请避免 Windows 保留名和特殊字符。</small></label>
+                                                </div>
+                                                <div class="sightinfo-schema-grid">
+                                                    <div><span>项目 schema</span><strong id="sight-schema-version">-</strong></div><div><span>公开 meta</span><strong id="sight-meta-version">-</strong></div><div><span>元数据载体</span><strong>真实 BLK 尾部 V2 注释（每个发布文件）</strong></div><div><span>导出载体</span><strong>ZIP 归档包</strong></div>
+                                                </div>
+                                                <label class="sightinfo-migration-box" id="sight-migration-box" hidden>
+                                                    <input type="checkbox" id="sight-migration-confirmed"><span><strong>确认将导入元数据迁移为当前 AimerWT V2 内嵌格式</strong><small id="sight-migration-detail">这里只确认迁移意图；实际写入发生在“写入 BLK”或“导出 ZIP”时，原始导入文件不会被修改。</small></span>
+                                                </label>
+                                                <div class="sightinfo-preserved-box"><i class="ri-archive-stack-line"></i><div><strong>未知公开字段按层级原样保留</strong><p id="sight-preserved-summary">当前项目没有需要保留的未知字段。</p></div></div>
+                                                <div class="sightinfo-workspace-paths"><div><span>项目库</span><code id="sight-workspace-library">-</code></div><div><span>导出区</span><code id="sight-workspace-export">-</code></div></div>
+                                            </section>
+                                        </div>
+                                    </div>
+                                </main>
+
+                                <aside class="sightinfo-inspector" aria-label="兼容检查与用户端预览">
+                                    <div class="sightinfo-inspector-head">
+                                        <div><span class="sightinfo-section-label">兼容检查</span><strong id="sight-report-state">尚未检查</strong></div><span class="sightinfo-report-dot idle" id="sight-report-dot" aria-hidden="true"></span>
+                                    </div>
+                                    <div class="sightinfo-summary-grid" id="sight-report-summary"><div><span>发布载体</span><strong>ZIP</strong></div><div><span>显示类型</span><strong>待推导</strong></div><div><span>真实 BLK</span><strong>0</strong></div><div><span>元数据 BLK</span><strong>0</strong></div></div>
+                                    <section class="sightinfo-inspector-section">
+                                        <div class="sightinfo-inspector-title"><span>安装路径推导</span><small id="sight-target-mode">等待检查</small></div>
+                                        <div class="sightinfo-install-map" id="sight-install-map"><div class="sightinfo-list-placeholder compact">检查后显示 ZIP 路径到 UserSights 的映射</div></div>
+                                    </section>
+                                    <section class="sightinfo-inspector-section sightinfo-report-section">
+                                        <div class="sightinfo-inspector-title"><span>问题清单</span><small id="sight-report-count">0 项</small></div>
+                                        <div class="sightinfo-report-list" id="sight-report-list"><div class="sightinfo-report-empty"><i class="ri-shield-check-line"></i><span>运行兼容检查后，这里会列出阻断项和建议。</span></div></div>
+                                    </section>
+                                    <section class="sightinfo-inspector-section sightinfo-preview-section">
+                                        <div class="sightinfo-inspector-title"><span>单个炮镜预览</span><small>主软件同款 · 点击放大</small></div>
+                                        <div class="sightinfo-runtime-preview-viewport" data-sight-preview-viewport>
+                                            <div class="sightinfo-runtime-preview-stage" id="sight-card-preview" data-sight-preview-stage></div>
+                                        </div>
+                                        <div class="sightinfo-inspector-title sightinfo-preview-subtitle"><span>炮镜组卡片预览</span><small>主软件同款 · 点击放大</small></div>
+                                        <div class="sightinfo-runtime-preview-viewport" data-sight-preview-viewport>
+                                            <div class="sightinfo-runtime-preview-stage" id="sight-package-card-preview" data-sight-preview-stage></div>
+                                        </div>
+                                    </section>
+                                </aside>
+                            </div>
+
+                            <section class="sightinfo-preview-page" id="sight-preview-page" hidden aria-labelledby="sight-preview-page-title">
+                                <header class="sightinfo-preview-page-header">
+                                    <button class="sightinfo-preview-back" type="button" data-sight-preview-close title="返回炮镜编辑页">
+                                        <i class="ri-arrow-left-line"></i><span>返回编辑</span>
+                                    </button>
+                                    <div class="sightinfo-preview-page-heading">
+                                        <span>主软件实际卡片</span>
+                                        <h2 id="sight-preview-page-title">卡片等比预览</h2>
+                                    </div>
+                                    <small id="sight-preview-page-scale">520 × 252 · 等比 145%</small>
+                                </header>
+                                <div class="sightinfo-preview-page-body">
+                                    <p>卡片结构、比例和交互与主软件保持一致；将鼠标放在简介、炮镜类型、自动抬炮或适配分辨率上可查看完整说明。</p>
+                                    <div class="sightinfo-runtime-preview-viewport sightinfo-preview-page-viewport" data-sight-preview-viewport data-sight-preview-detail-viewport>
+                                        <div class="sightinfo-runtime-preview-stage sightinfo-preview-page-stage" id="sight-preview-detail-stage" data-sight-preview-stage></div>
+                                    </div>
+                                </div>
+                            </section>
+                            <div class="sightinfo-preview-tooltip" id="sight-preview-tooltip" role="tooltip" hidden></div>
+
+                            <div class="sightinfo-busy-layer" id="sight-busy-layer" hidden aria-live="polite"><div class="sightinfo-spinner"></div><span id="sight-busy-text">正在处理…</span></div>
+                        </section>
+                    </div>
+
                     <div class="page" id="page-settings">
                         <section class="setting-card card-like settings-guide-card">
                             <h2><i class="ri-book-open-line"></i> 作者端说明与使用指南</h2>
                             <div class="settings-intro-banner">
                                 <i class="ri-information-line"></i>
-                                <p>这是作者端的第一个版本，为了方便作者们适配语音包而编写，但可能存在BUG，遇到BUG和有建议都可以直接向我反馈，未来UI和布局也都可能会有进一步的更改。</p>
+                                <p>这是面向 AimerWT 合作创作者的作者端，用于维护语音包与炮镜的发布信息。遇到问题或有建议都可以直接反馈，后续界面与流程仍会持续完善。</p>
                             </div>
                             <div class="settings-guide-list">
                                 <article class="settings-guide-item">
@@ -392,6 +663,18 @@
                                 <article class="settings-guide-item">
                                     <h4>5. 数据存储</h4>
                                     <p>语音包元数据写入 <code>info.json</code>，预览媒体文件写入语音包目录中的 <code>_preview_assets</code>。</p>
+                                </article>
+                                <article class="settings-guide-item">
+                                    <h4>6. 炮镜作者项目</h4>
+                                    <p>在“炮镜信息”中新建项目，或导入单个 BLK、炮镜文件夹与 ZIP。作者项目使用独立工作副本；需要时可明确选择写回原 BLK 或另存为。</p>
+                                </article>
+                                <article class="settings-guide-item">
+                                    <h4>7. 文件映射与分组</h4>
+                                    <p>逐个确认真实 <code>.blk</code> 的 ZIP 输出路径、弹种与推荐载具；多炮镜可建立展示分组，同一文件首版只归属一个主分组。</p>
+                                </article>
+                                <article class="settings-guide-item">
+                                    <h4>8. 检查与标准 ZIP</h4>
+                                    <p>炮镜项目必须先保存并通过最新兼容性检查才能导出。单炮镜同样导出 ZIP，类型由真实 BLK 数量自动判断。</p>
                                 </article>
                             </div>
                         </section>
@@ -637,6 +920,7 @@
     </div>
 
     <script src="pages/voicepack_page.js"></script>
+    <script src="pages/sightinfo_page.js"></script>
     <script src="pages/settings_page.js"></script>
     <script src="guide/guide.js"></script>
     <script src="script.js"></script>

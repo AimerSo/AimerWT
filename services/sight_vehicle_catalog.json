@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-07-28",
+  "source": "https://wiki.warthunder.com/ground",
+  "vehicles": [
+    {
+      "vehicle_id": "cn_ztz_99a",
+      "display_name": "ZTZ99A",
+      "country": "china",
+      "vehicle_class": "medium_tank",
+      "wiki_url": "https://wiki.warthunder.com/unit/cn_ztz_99a"
+    },
+    {
+      "vehicle_id": "cn_wz_1001",
+      "display_name": "WZ1001(E) LCT",
+      "country": "china",
+      "vehicle_class": "medium_tank",
+      "wiki_url": "https://wiki.warthunder.com/unit/cn_wz_1001"
+    }
+  ]
+}

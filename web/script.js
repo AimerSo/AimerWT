@@ -96,6 +96,15 @@ const DEFAULT_THEME = {
     "--card-shadow-opacity": "0.12"
 };
 
+const DEFAULT_FEEDBACK_CONFIG = Object.freeze({
+    style: "soft",
+    motion: "slide-up",
+    placement: "bottom-right",
+    duration: 5000,
+    max_visible: 4,
+    exit_ms: 300,
+});
+
 /**
  * 前端主控制对象。
  *
@@ -127,10 +136,13 @@ const app = {
     currentModId: null, // 当前正在操作的 mod
     currentTheme: null, // 当前主题对象
     currentThemeData: null, // 当前主题原始数据
+    _feedbackConfig: { ...DEFAULT_FEEDBACK_CONFIG },
     serverUserFeatures: null,
     _appliedThemeKeys: [],
     _libraryLoaded: false,
     _libraryRefreshing: false,
+    _isMinimizing: false,
+    _isExiting: false,
     _skinsLoaded: false,
     _skinsItems: [],
     _skinsSearchQuery: "",
@@ -140,6 +152,39 @@ const app = {
     _sightsItems: [],
     _sightsSearchQuery: "",
     _sightsSortKey: "update_time",
+    _sightsLibraryMode: "packages",
+    _sightsWindowSize: 96,
+    _sightsVisibleLimit: 96,
+    _sightsTransferActive: false,
+    _sightsTransferTotal: 0,
+    _sightsTransferReceived: 0,
+    _selectedSightKeys: new Set(),
+    _sightsSelectionItemMap: new Map(),
+    _sightsCurrentWindowItems: [],
+    _pendingSightDetailRestore: "",
+    _sightBlkOperationIssues: new Map(),
+    _sightDetailActiveName: "",
+    _sightDetailData: null,
+    _sightDetailSelectedGroupId: "",
+    _sightDetailListState: {
+        cursor: null,
+        loading: false,
+        has_more: false,
+        total: 0,
+        rows: [],
+    },
+    _sightDetailActionLoading: false,
+    _sight_detail_batch_loading: false,
+    _sight_detail_summary_collapsed: false,
+    _sightSingleDetailActiveName: "",
+    _sightSingleDetailData: null,
+    _sightSingleDetailSource: null,
+    _sightSingleDetailListState: {
+        loading: false,
+        error: "",
+    },
+    _activeSightCardActionMenu: null,
+    _boundCloseSightCardActionMenu: null,
     _guideReady: false,
     telemetryConnected: false,
     userSeqId: 0,
@@ -175,10 +220,70 @@ const app = {
         return { ...base, ...(overrides || {}) };
     },
 
+    normalizeFeedbackToken(value, fallback) {
+        const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        return normalized || fallback;
+    },
+
+    normalizeFeedbackNumber(value, fallback, minValue = 0) {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return fallback;
+        return Math.max(minValue, num);
+    },
+
+    resolveFeedbackConfig(themeData = null) {
+        const feedbackSource = themeData?.feedback && typeof themeData.feedback === 'object'
+            ? themeData.feedback
+            : {};
+        const styleValue = themeData?.feedback_style
+            || themeData?.feedbackStyle
+            || feedbackSource.style
+            || DEFAULT_FEEDBACK_CONFIG.style;
+        return {
+            ...DEFAULT_FEEDBACK_CONFIG,
+            ...feedbackSource,
+            style: this.normalizeFeedbackToken(styleValue, DEFAULT_FEEDBACK_CONFIG.style),
+            motion: this.normalizeFeedbackToken(feedbackSource.motion, DEFAULT_FEEDBACK_CONFIG.motion),
+            placement: this.normalizeFeedbackToken(feedbackSource.placement, DEFAULT_FEEDBACK_CONFIG.placement),
+            duration: this.normalizeFeedbackNumber(feedbackSource.duration, DEFAULT_FEEDBACK_CONFIG.duration, 0),
+            max_visible: this.normalizeFeedbackNumber(
+                feedbackSource.max_visible ?? feedbackSource.maxVisible,
+                DEFAULT_FEEDBACK_CONFIG.max_visible,
+                1
+            ),
+            exit_ms: this.normalizeFeedbackNumber(
+                feedbackSource.exit_ms ?? feedbackSource.exitMs,
+                DEFAULT_FEEDBACK_CONFIG.exit_ms,
+                0
+            ),
+        };
+    },
+
+    applyFeedbackConfig(config = {}) {
+        const nextConfig = {
+            ...DEFAULT_FEEDBACK_CONFIG,
+            ...(config || {}),
+        };
+        nextConfig.style = this.normalizeFeedbackToken(nextConfig.style, DEFAULT_FEEDBACK_CONFIG.style);
+        nextConfig.motion = this.normalizeFeedbackToken(nextConfig.motion, DEFAULT_FEEDBACK_CONFIG.motion);
+        nextConfig.placement = this.normalizeFeedbackToken(nextConfig.placement, DEFAULT_FEEDBACK_CONFIG.placement);
+        nextConfig.duration = this.normalizeFeedbackNumber(nextConfig.duration, DEFAULT_FEEDBACK_CONFIG.duration, 0);
+        nextConfig.max_visible = this.normalizeFeedbackNumber(nextConfig.max_visible, DEFAULT_FEEDBACK_CONFIG.max_visible, 1);
+        nextConfig.exit_ms = this.normalizeFeedbackNumber(nextConfig.exit_ms, DEFAULT_FEEDBACK_CONFIG.exit_ms, 0);
+
+        const root = document.documentElement;
+        root.dataset.feedbackStyle = nextConfig.style;
+        root.dataset.feedbackMotion = nextConfig.motion;
+        root.dataset.feedbackPlacement = nextConfig.placement;
+        this._feedbackConfig = nextConfig;
+        return nextConfig;
+    },
+
     applyThemeData(themeData) {
         if (!themeData) return;
         const themeColors = this.resolveThemeColors(themeData);
         this.applyTheme({ ...DEFAULT_THEME, ...themeColors });
+        this.applyFeedbackConfig(this.resolveFeedbackConfig(themeData));
         this.currentThemeData = themeData;
     },
 
@@ -191,6 +296,7 @@ const app = {
         this._appliedThemeKeys = [];
         this.currentTheme = { ...DEFAULT_THEME };
         this.currentThemeData = null;
+        this.applyFeedbackConfig(DEFAULT_FEEDBACK_CONFIG);
     },
 
     getDefaultUserFeatures() {
@@ -213,8 +319,6 @@ const app = {
             badge_system_enabled: false,
             nickname_change_enabled: false,
             avatar_upload_enabled: false,
-            notice_comment_enabled: false,
-            notice_reaction_enabled: false,
             user_profile_enabled: false,
             ai_assistant_enabled: false,
             notification_center_enabled: false,
@@ -575,9 +679,11 @@ const app = {
         document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
         document.getElementById(`btn-${tabId}`).classList.add('active');
 
+        const targetPage = document.getElementById(`page-${tabId}`);
+
         // 更新页面显隐
         document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-        document.getElementById(`page-${tabId}`).classList.add('active');
+        targetPage?.classList.add('active');
 
         if (tabId === 'camo') {
             setTimeout(() => {
@@ -615,6 +721,7 @@ const app = {
         const refreshBtn = document.getElementById('btn-refresh-skins');
         if (this._skinsRefreshing) return;
         this._skinsRefreshing = true;
+        ResourceLibraryLoading.start('skins', { message: '正在读取涂装列表...', processed: 0, total: null, show_content: false });
         if (refreshBtn) {
             refreshBtn.disabled = true;
             refreshBtn.classList.add('is-loading');
@@ -626,6 +733,7 @@ const app = {
         const skinsView = document.getElementById('view-skins');
         if (!camoPage || !skinsView) {
             this._skinsRefreshing = false;
+            ResourceLibraryLoading.finish('skins');
             if (refreshBtn) {
                 refreshBtn.disabled = false;
                 refreshBtn.classList.remove('is-loading');
@@ -634,6 +742,7 @@ const app = {
         }
         if (!camoPage.classList.contains('active') || !skinsView.classList.contains('active')) {
             this._skinsRefreshing = false;
+            ResourceLibraryLoading.finish('skins');
             if (refreshBtn) {
                 refreshBtn.disabled = false;
                 refreshBtn.classList.remove('is-loading');
@@ -646,10 +755,6 @@ const app = {
 
         try {
             const forceRefresh = !!(opts && (opts.force || opts.manual));
-            if (this._skinsFallbackTimer) {
-                clearTimeout(this._skinsFallbackTimer);
-                this._skinsFallbackTimer = null;
-            }
 
             const loadBySyncApi = async () => {
                 if (seq !== this._skinsRefreshSeq) return;
@@ -660,6 +765,7 @@ const app = {
                 } catch (err) {
                     console.error(err);
                     this._skinsRefreshing = false;
+                    ResourceLibraryLoading.finish('skins');
                     if (refreshBtn) {
                         refreshBtn.disabled = false;
                         refreshBtn.classList.remove('is-loading');
@@ -670,22 +776,30 @@ const app = {
 
             if (typeof pywebview.api.refresh_skins_async === 'function') {
                 const started = await pywebview.api.refresh_skins_async({ force_refresh: forceRefresh });
-                if (!started) {
-                    await loadBySyncApi();
-                    return;
-                }
-                this._skinsFallbackTimer = setTimeout(loadBySyncApi, 2500);
+                if (!started) await loadBySyncApi();
             } else {
                 await loadBySyncApi();
             }
         } catch (e) {
             console.error(e);
             this._skinsRefreshing = false;
+            ResourceLibraryLoading.finish('skins');
             if (refreshBtn) {
                 refreshBtn.disabled = false;
                 refreshBtn.classList.remove('is-loading');
             }
         }
+    },
+
+    onSkinsScanProgress(progress) {
+        if (!this._skinsRefreshing) return;
+        const state = progress && typeof progress === 'object' ? progress : {};
+        ResourceLibraryLoading.update('skins', {
+            message: String(state.message || '正在检查涂装文件...'),
+            processed: state.processed,
+            total: state.total,
+            show_content: false,
+        });
     },
 
     // 接收后端异步推送的基本列表数据
@@ -694,14 +808,13 @@ const app = {
         const countEl = document.getElementById('skins-count');
         const refreshBtn = document.getElementById('btn-refresh-skins');
 
-        if (this._skinsFallbackTimer) {
-            clearTimeout(this._skinsFallbackTimer);
-            this._skinsFallbackTimer = null;
-        }
-
         if (!listEl || !countEl || !res || !res.valid) {
             this._skinsRefreshing = false;
-            if (refreshBtn) refreshBtn.classList.remove('is-loading');
+            ResourceLibraryLoading.finish('skins');
+            if (refreshBtn) {
+                refreshBtn.disabled = false;
+                refreshBtn.classList.remove('is-loading');
+            }
             return;
         }
 
@@ -713,33 +826,33 @@ const app = {
         if (searchInput) this._skinsSearchQuery = searchInput.value || "";
         if (sortSelect) this._skinsSortKey = sortSelect.value || "update_time";
 
-        this._renderSkinsView();
+        this._renderSkinsView({ replay: true, reason: 'refresh' });
         this.updateResourceStorage('skins');
     },
 
     filterSkinsNew(query) {
         this._skinsSearchQuery = String(query || "");
         if (this._skinsRefreshing && !this._skinsLoaded) return;
-        this._renderSkinsView();
+        this._renderSkinsView({ replay: true, reason: 'filter' });
     },
 
     sortSkinsNew(sortKey) {
         this._skinsSortKey = sortKey || "update_time";
         if (this._skinsRefreshing && !this._skinsLoaded) return;
-        this._renderSkinsView();
+        this._renderSkinsView({ replay: true, reason: 'sort' });
     },
 
     filterSkinsStatus(value) {
         this._skinsFilterStatus = value || 'all';
         if (this._skinsRefreshing && !this._skinsLoaded) return;
-        this._renderSkinsView();
+        this._renderSkinsView({ replay: true, reason: 'filter' });
     },
 
     toggleSkinsSortOrder() {
         this._skinsSortAsc = !this._skinsSortAsc;
         const btn = document.getElementById('skins-sort-order-btn');
         if (btn) btn.classList.toggle('is-asc', this._skinsSortAsc);
-        this._renderSkinsView();
+        this._renderSkinsView({ replay: true, reason: 'sort' });
     },
 
     _getFilteredSkins() {
@@ -791,7 +904,7 @@ const app = {
         return items;
     },
 
-    _renderSkinsView() {
+    _renderSkinsView(revealOptions = {}) {
         const listEl = document.getElementById('skins-list');
         const countEl = document.getElementById('skins-count');
         if (!listEl || !countEl) return;
@@ -799,6 +912,12 @@ const app = {
         this._skinsRenderSeq = (this._skinsRenderSeq || 0) + 1;
         const seq = this._skinsRenderSeq;
         const items = this._getFilteredSkins();
+        ResourceLibraryLoading.start('skins', {
+            message: '正在载入涂装卡片...',
+            processed: 0,
+            total: items.length,
+            show_content: false,
+        });
         this.updateResourceSelectionSummary('skins', items.length);
 
         const selectAll = document.getElementById('skins-select-all');
@@ -817,6 +936,12 @@ const app = {
                 </div>
             `;
             this.updateResourceSelectionSummary('skins', 0);
+            this.applyResourceReveal(listEl, {
+                item_selector: '.res-empty-state',
+                max_animated: 1,
+                once_key: 'skins-list',
+                ...revealOptions,
+            });
             this._finishSkinsRender();
             return;
         }
@@ -824,6 +949,7 @@ const app = {
         listEl.innerHTML = '';
         const CHUNK_SIZE = 24;
         let currentIndex = 0;
+        const revealStartedAt = window.performance?.now?.() || Date.now();
         const placeholder = 'assets/card_image_small.png';
 
         const renderChunk = () => {
@@ -873,7 +999,27 @@ const app = {
             }).join('');
 
             listEl.insertAdjacentHTML('beforeend', html);
+            const newItems = Array.from(listEl.querySelectorAll('.small-card')).slice(currentIndex, currentIndex + chunk.length);
+            this.applyResourceReveal(listEl, {
+                items: newItems,
+                order_offset: currentIndex,
+                reveal_started_at: revealStartedAt,
+                max_animated: 32,
+                stagger_ms: 62.5,
+                reveal_window_ms: 2000,
+                duration_ms: 180,
+                defer_remaining: true,
+                once_key: 'skins-list',
+                ...revealOptions,
+            });
             currentIndex += CHUNK_SIZE;
+            const renderedCount = Math.min(currentIndex, items.length);
+            ResourceLibraryLoading.update('skins', {
+                message: '正在载入涂装卡片...',
+                processed: renderedCount,
+                total: items.length,
+                show_content: renderedCount > 0,
+            });
 
             if (currentIndex < items.length) {
                 requestAnimationFrame(renderChunk);
@@ -889,6 +1035,7 @@ const app = {
     _finishSkinsRender() {
         const refreshBtn = document.getElementById('btn-refresh-skins');
         this._skinsRefreshing = false;
+        ResourceLibraryLoading.finish('skins');
         if (refreshBtn) {
             refreshBtn.disabled = false;
             refreshBtn.classList.remove('is-loading');
@@ -1736,7 +1883,7 @@ const app = {
             return;
         }
         const api = window.pywebview?.api;
-        if (!api?.select_sight_import_file || !api?.import_sight_file_from_path) {
+        if (!api?.select_sight_import_file || !api?.import_sight_file_from_path || !api?.preview_sight_import) {
             this.showAlert(this.t("common.error"), this.t("common.feature_not_ready"), "error");
             return;
         }
@@ -1747,8 +1894,27 @@ const app = {
                 this.showAlert(this.t("common.error"), selected?.msg || this.t("common.select_path_failed", { message: this.t("resource.import_sight_file") }), "error");
                 return;
             }
-            const options = await this.buildSightImportOptions(selected.path);
-            if (!options) return;
+            let preview = null;
+            let options = null;
+            try {
+                if (window.MinimalistLoading) {
+                    MinimalistLoading.show(false, this.t("loading.sight.preview_summary"));
+                    MinimalistLoading.update(5, this.t("loading.sight.reading_file"));
+                }
+                const initialPreview = await api.preview_sight_import(selected.path, { conflict_strategy: "backup" });
+                if (window.MinimalistLoading) MinimalistLoading.hide();
+                options = await this.buildSightImportOptions(selected.path, initialPreview);
+                if (!options) return;
+                if (window.MinimalistLoading) {
+                    MinimalistLoading.show(false, this.t("loading.sight.preview_summary"));
+                    MinimalistLoading.update(45, "正在生成最终部署预览");
+                }
+                preview = await api.preview_sight_import(selected.path, options);
+            } finally {
+                if (window.MinimalistLoading) MinimalistLoading.hide();
+            }
+            const confirmed = await this.confirmSightImportPreview(preview);
+            if (!confirmed) return;
             const started = await api.import_sight_file_from_path(selected.path, options);
             if (!started) {
                 this.showAlert(this.t("common.error"), this.t("common.operation_failed", { message: this.t("resource.import_sight_file") }), "error");
@@ -1762,16 +1928,78 @@ const app = {
         return this.importSightsFileDialog();
     },
 
-    async buildSightImportOptions(fileNameOrPath) {
+    async buildSightImportOptions(fileNameOrPath, previewModel = null) {
         const text = String(fileNameOrPath || "");
         const lower = text.toLowerCase();
         const options = { conflict_strategy: "backup" };
         const needsTargetDialog = [".blk", ".zip", ".rar", ".7z"].some(ext => lower.endsWith(ext));
         if (!needsTargetDialog) return options;
-        return this.showSightImportTargetDialog(fileNameOrPath);
+        return this.showSightImportTargetDialog(fileNameOrPath, previewModel || {});
     },
 
-    showSightImportTargetDialog(fileNameOrPath) {
+    _renderSightImportPreviewHtml(preview) {
+        const deploymentPreview = preview?.deployment_preview || preview || {};
+        const deploymentSummary = deploymentPreview?.summary || {};
+        const deploymentTargets = Array.isArray(deploymentPreview?.file_targets) ? deploymentPreview.file_targets : [];
+        const legacyEntries = Array.isArray(preview?.install_entries) ? preview.install_entries : [];
+        const entries = deploymentTargets.length ? deploymentTargets : legacyEntries;
+        const warnings = [
+            ...(Array.isArray(preview?.warnings) ? preview.warnings : []),
+            ...(Array.isArray(deploymentPreview?.warnings) ? deploymentPreview.warnings : []),
+        ];
+        const warningText = warnings.map(item => typeof item === 'string' ? item : String(item?.message || item?.code || '')).filter(Boolean);
+        const stat = (label, value) => `
+            <span class="sight-import-preview-stat">
+                <b>${this._escapeHtml(label)}</b>
+                ${this._escapeHtml(String(value ?? 0))}
+            </span>
+        `;
+        const entryHtml = entries.length
+            ? entries.slice(0, 50).map(entry => {
+                const target = entry.target_relative_path
+                    || `${entry.target_dir || ''}/${entry.target_name || entry.source || ''}`;
+                const hasConflict = !!entry.exists;
+                return `
+                    <div class="sight-import-preview-entry${hasConflict ? ' has-conflict' : ''}">
+                        <span>${this._escapeHtml(target)}</span>
+                        ${hasConflict ? '<em>目标已存在</em>' : '<em>新增或安全复用</em>'}
+                    </div>
+                `;
+            }).join('')
+            : '<div class="sight-import-preview-empty">没有可展示的安装项</div>';
+        return `
+            <div class="sight-import-preview">
+                <div class="sight-import-preview-title">${this._escapeHtml(preview?.file_name || '炮镜文件')}</div>
+                <div class="sight-import-preview-grid">
+                    ${stat('源 BLK', deploymentSummary?.resource_file_count ?? preview?.real_blk_count ?? preview?.blk_count)}
+                    ${stat('伪 BLK', preview?.meta_blk_count ?? 0)}
+                    ${stat('最终目标', deploymentSummary?.target_count ?? entries.length)}
+                    ${stat('作者推荐', deploymentSummary?.author_recommended_file_count ?? 0)}
+                    ${stat('回退 all_tanks', deploymentSummary?.fallback_all_tanks_count ?? 0)}
+                    ${stat('文件名冲突', deploymentSummary?.filename_collision_count ?? preview?.conflict_count ?? 0)}
+                    ${stat('部署模式', deploymentPreview?.mode || preview?.target_mode || 'legacy')}
+                </div>
+                ${warningText.length ? `<div class="sight-import-preview-warnings">${warningText.map(item => this._escapeHtml(item)).join('<br>')}</div>` : ''}
+                <div class="sight-import-preview-list">${entryHtml}</div>
+            </div>
+        `;
+    },
+
+    async confirmSightImportPreview(preview) {
+        const deploymentPreview = preview?.deployment_preview || preview || {};
+        if (!preview || preview.success === false || deploymentPreview.success === false) {
+            const firstError = Array.isArray(deploymentPreview?.errors) ? deploymentPreview.errors[0] : null;
+            this.showAlert(
+                this.t("common.error"),
+                preview?.msg || firstError?.message || "炮镜导入预检失败",
+                "error",
+            );
+            return false;
+        }
+        const html = this._renderSightImportPreviewHtml(preview);
+        return this.confirm("确认应用炮镜", html, false, "开始应用");
+    },
+    showSightImportTargetDialog(fileNameOrPath, previewModel = {}) {
         return new Promise((resolve) => {
             const modalId = "modal-sight-import-target";
             let modal = document.getElementById(modalId);
@@ -1780,49 +2008,85 @@ const app = {
                 modal.id = modalId;
                 modal.className = "modal-overlay";
                 modal.innerHTML = `
-                    <div class="modal-content sight-import-target-modal">
-                        <h2>${this.t("sight_import.title")}</h2>
+                    <div class="modal-content sight-import-target-modal sight-deployment-modal">
+                        <h2>应用此炮镜</h2>
                         <p class="subtitle" id="sight-import-file-name"></p>
                         <div class="sight-import-target-options">
-                            <label class="sight-import-target-option">
-                                <input type="radio" name="sight-import-target-mode" value="all" checked>
-                                <span>
-                                    <strong>${this.t("sight_import.apply_all")}</strong>
-                                    <small>${this.t("sight_import.apply_all_desc")}</small>
-                                </span>
+                            <label class="sight-import-target-option" data-deployment-mode="author_recommended">
+                                <input type="radio" name="sight-import-target-mode" value="author_recommended">
+                                <span><strong>按作者推荐车辆应用</strong><small id="sight-author-recommendation-desc">读取作者推荐中…</small></span>
                             </label>
                             <label class="sight-import-target-option">
-                                <input type="radio" name="sight-import-target-mode" value="vehicle">
-                                <span>
-                                    <strong>${this.t("sight_import.apply_vehicle")}</strong>
-                                    <small>${this.t("sight_import.apply_vehicle_desc")}</small>
-                                </span>
+                                <input type="radio" name="sight-import-target-mode" value="all_tanks">
+                                <span><strong>应用于全部坦克</strong><small>部署到 all_tanks；仍需在游戏内选择炮镜</small></span>
+                            </label>
+                            <label class="sight-import-target-option">
+                                <input type="radio" name="sight-import-target-mode" value="custom_vehicles">
+                                <span><strong>自定义车辆</strong><small>填写一个或多个战争雷霆车辆 ID</small></span>
                             </label>
                         </div>
-                        <input id="sight-import-target-input" class="input-v2 sight-import-target-input" placeholder="${this.t("sight_import.vehicle_placeholder")}">
+                        <input id="sight-import-target-input" class="input-v2 sight-import-target-input" list="sight-vehicle-catalog" placeholder="例如 cn_ztz_99a, cn_wz_1001">
+                        <label class="sight-deployment-remember"><input id="sight-deployment-remember" type="checkbox" checked> 记住此炮镜的选择</label>
+                        <div class="sight-deployment-risk" id="sight-deployment-risk" role="status"></div>
+                        <details class="sight-deployment-details" id="sight-deployment-details">
+                            <summary>预览文件位置</summary>
+                            <div id="sight-deployment-target-list"></div>
+                        </details>
                         <div class="modal-actions">
                             <button class="btn secondary" id="sight-import-target-cancel">${this.t("common.cancel")}</button>
-                            <button class="btn primary" id="sight-import-target-ok">
-                                <i class="ri-upload-cloud-2-line"></i> ${this.t("sight_import.start")}
-                            </button>
+                            <button class="btn primary" id="sight-import-target-ok"><i class="ri-crosshair-2-line"></i> 确认应用</button>
                         </div>
                     </div>
                 `;
                 document.body.appendChild(modal);
             }
 
+            const deploymentPreview = previewModel?.deployment_preview || {};
+            const summary = deploymentPreview?.summary || {};
+            const authorAvailable = !!previewModel?.author_recommendation_available
+                || Number(summary?.author_recommended_file_count || 0) > 0;
             const fileNameEl = modal.querySelector("#sight-import-file-name");
             const inputEl = modal.querySelector("#sight-import-target-input");
             const okBtn = modal.querySelector("#sight-import-target-ok");
             const cancelBtn = modal.querySelector("#sight-import-target-cancel");
+            const rememberEl = modal.querySelector("#sight-deployment-remember");
+            const riskEl = modal.querySelector("#sight-deployment-risk");
+            const targetListEl = modal.querySelector("#sight-deployment-target-list");
+            const authorDescEl = modal.querySelector("#sight-author-recommendation-desc");
             const modeInputs = Array.from(modal.querySelectorAll('input[name="sight-import-target-mode"]'));
+            const authorInput = modeInputs.find(item => item.value === "author_recommended");
             let done = false;
 
+            if (authorInput) authorInput.disabled = !authorAvailable;
+            if (authorDescEl) {
+                const recommendedCount = Number(summary?.author_recommended_file_count || 0);
+                const fallbackCount = Number(summary?.fallback_all_tanks_count || 0);
+                authorDescEl.textContent = authorAvailable
+                    ? `${recommendedCount} 个文件有作者推荐${fallbackCount ? `，${fallbackCount} 个回退 all_tanks` : ''}`
+                    : "作者没有提供可执行的结构化车辆推荐";
+            }
+            if (targetListEl) {
+                const targets = Array.isArray(deploymentPreview?.file_targets) ? deploymentPreview.file_targets : [];
+                targetListEl.innerHTML = targets.length
+                    ? targets.slice(0, 50).map(item => `<div>${this._escapeHtml(item.target_relative_path || '')}</div>`).join('')
+                    : '<div>选择应用方式后，将在下一步显示最终文件位置。</div>';
+            }
+
             const updateInputState = () => {
-                const mode = modeInputs.find(item => item.checked)?.value || "all";
-                inputEl.disabled = mode !== "vehicle";
-                if (mode !== "vehicle") inputEl.value = "";
-                if (mode === "vehicle") inputEl.focus();
+                const mode = modeInputs.find(item => item.checked)?.value || "all_tanks";
+                inputEl.disabled = mode !== "custom_vehicles";
+                if (mode === "custom_vehicles") inputEl.focus();
+                const warnings = Array.isArray(deploymentPreview?.warnings) ? deploymentPreview.warnings : [];
+                if (mode === "all_tanks") {
+                    const riskCount = warnings.filter(item => String(item?.code || '').startsWith('all_tanks_match_exp_class_')).length;
+                    riskEl.textContent = riskCount
+                        ? `兼容性提醒：${riskCount} 个文件的 matchExpClass 缺失、为空或无法读取；软件不会自动修改 BLK。`
+                        : "all_tanks 只表示文件部署位置，不代表已经在游戏内选中或验证全部车辆兼容。";
+                } else if (mode === "author_recommended") {
+                    riskEl.textContent = "将按文件 > 炮镜组 > 作品的优先级应用推荐；没有推荐的包内文件回退到 all_tanks。";
+                } else {
+                    riskEl.textContent = "只接受安全的车辆内部 ID；未收录但格式合法的 ID 会在最终预览中提示确认。";
+                }
             };
             const cleanup = () => {
                 okBtn.removeEventListener("click", onOk);
@@ -1838,14 +2102,23 @@ const app = {
                 resolve(value);
             };
             const onOk = () => {
-                const mode = modeInputs.find(item => item.checked)?.value || "all";
-                const targetDir = mode === "vehicle" ? String(inputEl.value || "").trim() : "all_tanks";
-                if (mode === "vehicle" && !targetDir) {
-                    this.showAlert(this.t("common.info"), this.t("sight_import.vehicle_required"), "warn");
+                const mode = modeInputs.find(item => item.checked)?.value || "all_tanks";
+                const selectedVehicleIds = mode === "custom_vehicles"
+                    ? Array.from(new Set(String(inputEl.value || '').split(/[\s,，;；]+/).map(value => value.trim()).filter(Boolean)))
+                    : [];
+                if (mode === "custom_vehicles" && !selectedVehicleIds.length) {
+                    this.showAlert(this.t("common.info"), "自定义车辆至少需要填写一个车辆 ID", "warn");
                     inputEl.focus();
                     return;
                 }
-                finish({ conflict_strategy: "backup", target_dir: targetDir || "all_tanks" });
+                finish({
+                    conflict_strategy: "backup",
+                    deployment_request: {
+                        mode,
+                        selected_vehicle_ids: selectedVehicleIds,
+                        remember: !!rememberEl?.checked,
+                    },
+                });
             };
             const onCancel = () => finish(null);
             const onOverlay = (event) => {
@@ -1853,23 +2126,29 @@ const app = {
             };
 
             if (fileNameEl) fileNameEl.textContent = this.t("sight_import.file_label", { name: String(fileNameOrPath || "").split(/[\\/]/).pop() });
+            const defaultMode = authorAvailable ? "author_recommended" : "all_tanks";
             modeInputs.forEach(input => {
-                input.checked = input.value === "all";
+                input.checked = input.value === defaultMode;
                 input.addEventListener("change", updateInputState);
             });
             if (inputEl) inputEl.value = "";
+            if (rememberEl) rememberEl.checked = true;
             updateInputState();
-
             okBtn.addEventListener("click", onOk);
             cancelBtn.addEventListener("click", onCancel);
             modal.addEventListener("click", onOverlay);
             this.openModal(modalId);
         });
     },
-
     async uploadArchiveFileForImport(file, targetType, importOptions) {
         const api = window.pywebview?.api;
-        if (!api?.begin_browser_archive_import || !api?.append_browser_archive_chunk || !api?.finish_browser_archive_import) {
+        const requiresSightPreview = targetType === 'sights';
+        if (
+            !api?.begin_browser_archive_import
+            || !api?.append_browser_archive_chunk
+            || !api?.finish_browser_archive_import
+            || (requiresSightPreview && !api?.preview_browser_archive_import)
+        ) {
                 this.showAlert(this.t("common.error"), this.t("drop.drag_api_not_ready"), "error");
             return false;
         }
@@ -1921,6 +2200,34 @@ const app = {
                 }
                 if (chunkIndex % 8 === 0) {
                     await new Promise(resolve => setTimeout(resolve, 0));
+                }
+            }
+
+            if (targetType === 'sights') {
+                if (window.MinimalistLoading) {
+                    MinimalistLoading.update(96, this.t("loading.sight.preview_summary"));
+                }
+                const initialPreview = await api.preview_browser_archive_import(sessionId);
+                if (window.MinimalistLoading) MinimalistLoading.hide();
+                const selectedOptions = await this.buildSightImportOptions(fileName, initialPreview);
+                if (!selectedOptions) {
+                    if (api?.cancel_browser_archive_import) await api.cancel_browser_archive_import(sessionId);
+                    sessionId = "";
+                    return false;
+                }
+                if (!api?.set_browser_archive_import_options) {
+                    throw new Error("当前版本无法保存炮镜部署选项");
+                }
+                const optionsResult = await api.set_browser_archive_import_options(sessionId, selectedOptions);
+                if (!optionsResult?.success) throw new Error(optionsResult?.msg || "保存炮镜部署选项失败");
+                const preview = await api.preview_browser_archive_import(sessionId);
+                const confirmed = await this.confirmSightImportPreview(preview);
+                if (!confirmed) {
+                    if (api?.cancel_browser_archive_import) {
+                        await api.cancel_browser_archive_import(sessionId);
+                    }
+                    sessionId = "";
+                    return false;
                 }
             }
 
@@ -2055,21 +2362,23 @@ const app = {
                     this.showAlert(this.t("common.info"), this.t("tools.set_sights_path"), "warn");
                     return;
                 }
-                const options = await this.buildSightImportOptions(file?.name || "");
-                if (!options) return;
-                await this.uploadArchiveFileForImport(file, 'sights', options);
+                await this.uploadArchiveFileForImport(file, 'sights', { conflict_strategy: "backup" });
             },
             on_drop: async (zipPath) => {
                 if (!this.sightsPath) {
                     this.showAlert(this.t("common.info"), this.t("tools.set_sights_path"), "warn");
                     return;
                 }
-                if (!window.pywebview?.api?.import_sight_file_from_path) {
+                if (!window.pywebview?.api?.import_sight_file_from_path || !window.pywebview?.api?.preview_sight_import) {
                     this.showAlert(this.t("common.error"), this.t("common.feature_not_ready"), "error");
                     return;
                 }
-                const options = await this.buildSightImportOptions(zipPath);
+                const initialPreview = await pywebview.api.preview_sight_import(zipPath, { conflict_strategy: "backup" });
+                const options = await this.buildSightImportOptions(zipPath, initialPreview);
                 if (!options) return;
+                const preview = await pywebview.api.preview_sight_import(zipPath, options);
+                const confirmed = await this.confirmSightImportPreview(preview);
+                if (!confirmed) return;
                 pywebview.api.import_sight_file_from_path(zipPath, options);
             }
         });
@@ -2590,6 +2899,10 @@ const app = {
         const input = document.getElementById('archive-password-input');
         if (!modal || !input) return;
 
+        if (window.MinimalistLoading && typeof MinimalistLoading.hide === 'function') {
+            MinimalistLoading.hide();
+        }
+
         if (typeof this._archivePasswordCleanup === 'function') {
             try { this._archivePasswordCleanup(); } catch (e) { }
         }
@@ -2668,27 +2981,32 @@ const app = {
     },
 
     ensureGlobalFeedbackLayer() {
-        ['modal-alert', 'toast-error', 'toast-warn', 'toast-info'].forEach(id => {
+        ['modal-alert'].forEach(id => {
             const el = document.getElementById(id);
             if (el && el.parentElement !== document.body) {
                 document.body.appendChild(el);
             }
         });
+
+        let toastRoot = document.getElementById('toast-root');
+        if (!toastRoot) {
+            toastRoot = document.createElement('div');
+            toastRoot.id = 'toast-root';
+            toastRoot.className = 'toast-root';
+            toastRoot.setAttribute('aria-live', 'polite');
+            toastRoot.setAttribute('aria-atomic', 'false');
+            document.body.appendChild(toastRoot);
+        } else if (toastRoot.parentElement !== document.body) {
+            document.body.appendChild(toastRoot);
+        }
     },
 
     initToasts() {
         this.ensureGlobalFeedbackLayer();
         if (this._toastInited) return;
         this._toastInited = true;
-
-        const errorClose = document.getElementById('toast-error-close');
-        if (errorClose) errorClose.addEventListener('click', () => this.hideErrorToast());
-
-        const warnClose = document.getElementById('toast-warn-close');
-        if (warnClose) warnClose.addEventListener('click', () => this.hideWarnToast());
-
-        const infoClose = document.getElementById('toast-info-close');
-        if (infoClose) infoClose.addEventListener('click', () => this.hideInfoToast());
+        this._toastTimers = new Map();
+        this._toastRemoveTimers = new Map();
     },
 
     formatToastMessage(message) {
@@ -2704,16 +3022,17 @@ const app = {
     notifyToast(level, message) {
         const content = this.formatToastMessage(message);
         if (!content) return;
-        if (level === 'ERROR') {
+        const normalized = String(level || '').toUpperCase();
+        if (normalized === 'ERROR') {
             this.showErrorToast(this.t('common.error'), content);
             return;
         }
-        if (level === 'WARN') {
+        if (normalized === 'WARN') {
             this.showWarnToast(this.t('common.warn'), content);
             return;
         }
-        if (level === 'SUCCESS') {
-            this.showInfoToast(this.t('common.success'), content);
+        if (normalized === 'SUCCESS') {
+            this.showSuccessToast(this.t('common.success'), content);
             return;
         }
         this.showInfoToast(this.t('common.info'), content);
@@ -2723,130 +3042,147 @@ const app = {
         this.notifyToast(level, this.t(key, params || {}));
     },
 
-    showErrorToast(title, message, duration = 5000) {
+    normalizeToastType(type) {
+        const value = String(type || 'info').toLowerCase();
+        if (value === 'success' || value === 'info' || value === 'warn' || value === 'error') {
+            return value;
+        }
+        if (value === 'warning') return 'warn';
+        if (value === 'danger' || value === 'failure' || value === 'failed') return 'error';
+        return 'info';
+    },
+
+    getToastIcon(type) {
+        const icons = {
+            info: 'ri-information-line',
+            success: 'ri-checkbox-circle-line',
+            warn: 'ri-alert-line',
+            error: 'ri-error-warning-line',
+        };
+        return icons[this.normalizeToastType(type)] || icons.info;
+    },
+
+    showToast(options = {}) {
         this.ensureGlobalFeedbackLayer();
-        const toast = document.getElementById('toast-error');
-        if (!toast) {
-            this.showAlert(title || this.t('common.error'), message, 'error');
+        const root = document.getElementById('toast-root');
+        if (!root) {
+            this.showAlert(options.title || this.t('common.info'), options.message || '', options.type || 'info');
+            return null;
+        }
+
+        const type = this.normalizeToastType(options.type);
+        const feedbackConfig = this._feedbackConfig || DEFAULT_FEEDBACK_CONFIG;
+        const duration = Number.isFinite(Number(options.duration)) ? Number(options.duration) : feedbackConfig.duration;
+        const maxVisible = Number.isFinite(Number(options.maxVisible))
+            ? Math.max(1, Number(options.maxVisible))
+            : Math.max(1, Number(feedbackConfig.max_visible || DEFAULT_FEEDBACK_CONFIG.max_visible));
+        const titleKeyMap = {
+            info: 'common.info',
+            success: 'common.success',
+            warn: 'common.warn',
+            error: 'common.error',
+        };
+        const title = String(options.title || this.t(titleKeyMap[type] || 'common.info'));
+        const message = String(options.message || '');
+        const toast = document.createElement('div');
+        const toastId = `toast-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        toast.id = toastId;
+        toast.className = `toast toast--${type}`;
+        if (duration > 0) {
+            toast.classList.add('toast--timed');
+            toast.style.setProperty('--toast-duration', `${duration}ms`);
+        }
+        toast.setAttribute('role', type === 'error' || type === 'warn' ? 'alert' : 'status');
+        toast.innerHTML = `
+            <div class="toast__content feedback-surface">
+                <i class="${this.getToastIcon(type)} toast__icon feedback-icon"></i>
+                <div class="toast__text">
+                    <div class="toast__title feedback-title"></div>
+                    <div class="toast__message feedback-message"></div>
+                </div>
+                <button class="toast__close feedback-close" type="button">
+                    <i class="ri-close-line"></i>
+                </button>
+            </div>
+        `;
+
+        const titleEl = toast.querySelector('.toast__title');
+        const messageEl = toast.querySelector('.toast__message');
+        const closeBtn = toast.querySelector('.toast__close');
+        if (titleEl) titleEl.textContent = title;
+        if (messageEl) messageEl.textContent = message;
+        if (closeBtn) {
+            closeBtn.setAttribute('aria-label', this.t('common.close'));
+            closeBtn.addEventListener('click', () => this.hideToast(toastId));
+        }
+
+        const activeToasts = Array.from(root.querySelectorAll('.toast:not(.is-hiding)'));
+        if (activeToasts.length >= maxVisible) {
+            const oldest = activeToasts[0];
+            if (oldest && oldest.id) {
+                this.hideToast(oldest.id, { immediate: true });
+            }
+        }
+
+        root.appendChild(toast);
+
+        if (!this._toastTimers) this._toastTimers = new Map();
+        if (duration > 0) {
+            this._toastTimers.set(toastId, setTimeout(() => this.hideToast(toastId), duration));
+        }
+
+        return toastId;
+    },
+
+    hideToast(toastId, options = {}) {
+        const feedbackConfig = this._feedbackConfig || DEFAULT_FEEDBACK_CONFIG;
+        const toast = document.getElementById(toastId);
+        if (!toast) return;
+        if (toast.classList.contains('is-hiding') && !options.immediate) return;
+
+        if (this._toastTimers && this._toastTimers.has(toastId)) {
+            clearTimeout(this._toastTimers.get(toastId));
+            this._toastTimers.delete(toastId);
+        }
+        if (this._toastRemoveTimers && this._toastRemoveTimers.has(toastId)) {
+            clearTimeout(this._toastRemoveTimers.get(toastId));
+            this._toastRemoveTimers.delete(toastId);
+        }
+
+        const removeToast = () => {
+            if (this._toastRemoveTimers) {
+                this._toastRemoveTimers.delete(toastId);
+            }
+            if (toast.parentElement) toast.parentElement.removeChild(toast);
+        };
+
+        if (options.immediate) {
+            removeToast();
             return;
         }
 
-        const titleEl = toast.querySelector('.toast-error-title');
-        const messageEl = toast.querySelector('.toast-error-message');
-
-        if (titleEl) titleEl.textContent = title || this.t('common.error');
-        if (messageEl) messageEl.textContent = message || '';
-
-        toast.classList.remove('hiding');
-        toast.classList.add('show');
-
-        if (this._errorToastTimeout) {
-            clearTimeout(this._errorToastTimeout);
-        }
-
-        this._errorToastTimeout = setTimeout(() => {
-            this.hideErrorToast();
-        }, duration);
+        toast.classList.add('is-hiding');
+        if (!this._toastRemoveTimers) this._toastRemoveTimers = new Map();
+        const exitMs = Number.isFinite(Number(options.exitMs))
+            ? Math.max(0, Number(options.exitMs))
+            : Math.max(0, Number(feedbackConfig.exit_ms || DEFAULT_FEEDBACK_CONFIG.exit_ms));
+        this._toastRemoveTimers.set(toastId, setTimeout(removeToast, exitMs));
     },
 
-    hideErrorToast() {
-        const toast = document.getElementById('toast-error');
-        if (!toast) return;
-
-        toast.classList.add('hiding');
-
-        setTimeout(() => {
-            toast.classList.remove('hiding', 'show');
-        }, 300);
-
-        if (this._errorToastTimeout) {
-            clearTimeout(this._errorToastTimeout);
-            this._errorToastTimeout = null;
-        }
+    showErrorToast(title, message, duration = 5000) {
+        return this.showToast({ type: 'error', title, message, duration });
     },
 
     showWarnToast(title, message, duration = 5000) {
-        this.ensureGlobalFeedbackLayer();
-        const toast = document.getElementById('toast-warn');
-        if (!toast) {
-            this.showAlert(title || this.t('common.warn'), message, 'warn');
-            return;
-        }
-
-        const titleEl = toast.querySelector('.toast-warn-title');
-        const messageEl = toast.querySelector('.toast-warn-message');
-
-        if (titleEl) titleEl.textContent = title || this.t('common.warn');
-        if (messageEl) messageEl.textContent = message || '';
-
-        toast.classList.remove('hiding');
-        toast.classList.add('show');
-
-        if (this._warnToastTimeout) {
-            clearTimeout(this._warnToastTimeout);
-        }
-
-        this._warnToastTimeout = setTimeout(() => {
-            this.hideWarnToast();
-        }, duration);
-    },
-
-    hideWarnToast() {
-        const toast = document.getElementById('toast-warn');
-        if (!toast) return;
-
-        toast.classList.add('hiding');
-
-        setTimeout(() => {
-            toast.classList.remove('hiding', 'show');
-        }, 300);
-
-        if (this._warnToastTimeout) {
-            clearTimeout(this._warnToastTimeout);
-            this._warnToastTimeout = null;
-        }
+        return this.showToast({ type: 'warn', title, message, duration });
     },
 
     showInfoToast(title, message, duration = 5000) {
-        this.ensureGlobalFeedbackLayer();
-        const toast = document.getElementById('toast-info');
-        if (!toast) {
-            this.showAlert(title || this.t('common.info'), message, 'info');
-            return;
-        }
-
-        const titleEl = toast.querySelector('.toast-info-title');
-        const messageEl = toast.querySelector('.toast-info-message');
-
-        if (titleEl) titleEl.textContent = title || this.t('modal.alert_default_title');
-        if (messageEl) messageEl.textContent = message || '';
-
-        toast.classList.remove('hiding');
-        toast.classList.add('show');
-
-        if (this._infoToastTimeout) {
-            clearTimeout(this._infoToastTimeout);
-        }
-
-        this._infoToastTimeout = setTimeout(() => {
-            this.hideInfoToast();
-        }, duration);
+        return this.showToast({ type: 'info', title, message, duration });
     },
 
-    hideInfoToast() {
-        const toast = document.getElementById('toast-info');
-        if (!toast) return;
-
-        toast.classList.add('hiding');
-
-        setTimeout(() => {
-            toast.classList.remove('hiding', 'show');
-        }, 300);
-
-        if (this._infoToastTimeout) {
-            clearTimeout(this._infoToastTimeout);
-            this._infoToastTimeout = null;
-        }
+    showSuccessToast(title, message, duration = 5000) {
+        return this.showToast({ type: 'success', title, message, duration });
     },
 
     // 自定义提示弹窗（替代原生 alert）
@@ -2864,6 +3200,7 @@ const app = {
         const iconEl = document.getElementById('alert-icon');
         const linkBtn = document.getElementById('alert-link-btn');
         const allowHtml = !!(options && options.allowHtml);
+        const normalizedIconType = this.normalizeToastType(iconType);
 
         if (titleEl) titleEl.textContent = title || this.t('modal.alert_default_title');
         if (msgEl) {
@@ -2885,16 +3222,16 @@ const app = {
         // 根据类型设置图标
         if (iconEl) {
             let iconClass = 'ri-information-line';
-            let iconColor = 'var(--primary)';
-            if (iconType === 'error') {
+            let iconColor = 'var(--feedback-info)';
+            if (normalizedIconType === 'error') {
                 iconClass = 'ri-error-warning-line';
-                iconColor = 'var(--status-error)';
-            } else if (iconType === 'success') {
+                iconColor = 'var(--feedback-error)';
+            } else if (normalizedIconType === 'success') {
                 iconClass = 'ri-checkbox-circle-line';
-                iconColor = 'var(--status-success)';
-            } else if (iconType === 'warn') {
+                iconColor = 'var(--feedback-success)';
+            } else if (normalizedIconType === 'warn') {
                 iconClass = 'ri-alert-line';
-                iconColor = 'var(--status-waiting)';
+                iconColor = 'var(--feedback-warn)';
             }
             iconEl.innerHTML = `<i class="${iconClass}" style="font-size: 48px; color: ${iconColor};"></i>`;
         }
@@ -3067,18 +3404,27 @@ const app = {
         const root = document.documentElement;
         const btn = document.getElementById('btn-theme');
 
+        let nextTheme = 'Light';
         if (root.getAttribute('data-theme') === 'light') {
             // 切换到深色
+            nextTheme = 'Dark';
             root.setAttribute('data-theme', 'dark');
             // 换成太阳图标
-            btn.innerHTML = '<i class="ri-sun-line"></i>';
-            pywebview.api.set_theme('Dark');
+            if (btn) btn.innerHTML = '<i class="ri-sun-line"></i>';
         } else {
             // 切换到浅色
+            nextTheme = 'Light';
             root.setAttribute('data-theme', 'light');
             // 换成月亮图标
-            btn.innerHTML = '<i class="ri-moon-line"></i>';
-            pywebview.api.set_theme('Light');
+            if (btn) btn.innerHTML = '<i class="ri-moon-line"></i>';
+        }
+        try {
+            localStorage.setItem('aimer_theme_mode', nextTheme);
+        } catch (_) { }
+        if (window.pywebview?.api?.set_theme) {
+            Promise.resolve(pywebview.api.set_theme(nextTheme)).catch((error) => {
+                console.error('Failed to save theme mode', error);
+            });
         }
         if (this.currentThemeData) {
             this.applyThemeData(this.currentThemeData);
@@ -3102,8 +3448,27 @@ const app = {
     },
 
     // --- 窗口控制 ---
-    minimizeApp() {
-        pywebview.api.minimize_window();
+    async minimizeApp() {
+        if (this._isMinimizing || !window.pywebview?.api?.minimize_window) return;
+        this._isMinimizing = true;
+        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+        try {
+            const result = await pywebview.api.minimize_window(!reduceMotion);
+            if (result?.success === false) {
+                console.warn('[App] 窗口最小化未执行:', result.message || 'unknown');
+            }
+        } catch (error) {
+            console.error('[App] 动画最小化调用失败，尝试普通最小化:', error);
+            try {
+                await pywebview.api.minimize_window(false);
+            } catch (fallbackError) {
+                console.error('[App] 普通最小化调用失败:', fallbackError);
+            }
+        } finally {
+            window.setTimeout(() => {
+                this._isMinimizing = false;
+            }, 180);
+        }
     },
 
     closeApp() {
@@ -3455,14 +3820,32 @@ const app = {
     /**
      * 退出程序
      */
-    exitApp() {
+    async exitApp() {
+        if (this._isExiting) return;
+        this._isExiting = true;
         console.log('[App] 用户选择退出程序');
         if (window.pywebview?.api?.exit_app) {
-            pywebview.api.exit_app();
+            const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+            try {
+                const result = await pywebview.api.exit_app(!reduceMotion);
+                if (result?.success === false) {
+                    await pywebview.api.exit_app(false);
+                }
+            } catch (error) {
+                console.error('[App] 动画退出调用失败，尝试普通退出:', error);
+                try {
+                    await pywebview.api.exit_app(false);
+                } catch (fallbackError) {
+                    console.error('[App] 普通退出调用失败:', fallbackError);
+                    window.close();
+                }
+            }
         } else {
-            // 降级处理
             window.close();
         }
+        window.setTimeout(() => {
+            this._isExiting = false;
+        }, 180);
     },
 
     autoSearch() {
@@ -3552,7 +3935,8 @@ const app = {
     },
 
     appendLog(htmlMsg) {
-        this.appendLogMessage(htmlMsg, null, true);
+        const safeText = String(htmlMsg || '').replace(/<br\s*\/?>/gi, '\n');
+        this.appendLogMessage(safeText, null, false);
     },
 
     appendI18nLog(level, key, params = {}, prefix = '') {
@@ -3751,7 +4135,7 @@ const app = {
         const authorText = String(mod?.author || translate_or('mod.unknown_author', {}, '未知作者'));
         const sizeText = String(mod?.size_str || '0 MB');
         const capabilities = (mod?.capabilities && typeof mod.capabilities === 'object') ? mod.capabilities : {};
-        const imgUrl = sanitizeImageUrl(mod?.cover_url);
+        const imgUrl = sanitizeImageUrl(mod?.cover_url) || 'assets/card_image_small.png';
         let tagsHtml = '';
 
         // 标签映射优先使用 UI_CONFIG；当 UI_CONFIG 不存在时使用内置映射
@@ -3782,16 +4166,23 @@ const app = {
             fullLangList = (titleText.includes("Aimer") || safeModId === "Aimer") ? ["中", "美", "俄"] : ["未识别"];
         }
 
-        // 过滤出主要展示语言 (中/美/英)
-        let displayLangs = fullLangList.filter(lang => ["中", "美", "英"].includes(lang));
-        if (displayLangs.length === 0) {
-            displayLangs = fullLangList.includes("未识别") ? ["未识别"] : ["其他"];
-        }
+        const displayLangs = fullLangList.slice(0, 3);
 
         const langHtml = displayLangs.map(lang => {
             let cls = "";
             if (typeof UI_CONFIG !== 'undefined' && UI_CONFIG.langMap && UI_CONFIG.langMap[lang]) {
                 cls = safeClass(UI_CONFIG.langMap[lang]);
+            }
+            if (!cls) {
+                cls = safeClass({
+                    "中": "lang-cn",
+                    "美": "lang-us",
+                    "英": "lang-us",
+                    "俄": "lang-ru",
+                    "德": "lang-de",
+                    "日": "lang-jp",
+                    "法": "lang-fr",
+                }[lang]);
             }
             return `<span class="lang-text ${cls}">${escapeHtml(localize_lang(lang))}</span>`;
         }).join('<span style="margin:0 2px">/</span>');
@@ -3880,11 +4271,11 @@ const app = {
                 <i class="ri-file-copy-line"></i>
             </button>
 
-            <div class="mod-actions-col">
-                <div class="action-icon action-btn-del-dropdown" data-action="delete-menu" title="${escapeHtml(translate_or('mod.delete_options', {}, '删除选项'))}">
-                    <i class="ri-delete-bin-line"></i>
-                    <i class="ri-arrow-down-s-line" style="font-size: 12px; margin-left: -2px;"></i>
-                </div>
+                <div class="mod-actions-col">
+                    <div class="action-icon action-btn-del-dropdown" data-action="delete-menu" title="${escapeHtml(translate_or('mod.delete_options', {}, '删除选项'))}">
+                        <i class="ri-delete-bin-line"></i>
+                        <i class="ri-arrow-down-s-line action-btn-del-arrow"></i>
+                    </div>
 
                 <div style="flex:1"></div>
 
@@ -5019,12 +5410,26 @@ app.init = async function () {
         }
 
         const themeBtn = document.getElementById('btn-theme');
-        if (state.theme === 'Light') {
+        const savedThemeMode = (() => {
+            try {
+                const value = localStorage.getItem('aimer_theme_mode');
+                return value === 'Dark' || value === 'Light' ? value : '';
+            } catch (_) {
+                return '';
+            }
+        })();
+        const initialThemeMode = savedThemeMode || (state.theme === 'Dark' ? 'Dark' : 'Light');
+        if (initialThemeMode === 'Light') {
             document.documentElement.setAttribute('data-theme', 'light');
-            themeBtn.innerHTML = '<i class="ri-moon-line"></i>';
+            if (themeBtn) themeBtn.innerHTML = '<i class="ri-moon-line"></i>';
         } else {
             document.documentElement.setAttribute('data-theme', 'dark');
-            themeBtn.innerHTML = '<i class="ri-sun-line"></i>';
+            if (themeBtn) themeBtn.innerHTML = '<i class="ri-sun-line"></i>';
+        }
+        if (savedThemeMode && savedThemeMode !== state.theme && window.pywebview?.api?.set_theme) {
+            Promise.resolve(pywebview.api.set_theme(savedThemeMode)).catch((error) => {
+                console.error('Failed to sync local theme mode', error);
+            });
         }
 
         // 加载主题列表并应用上次的选择
@@ -5040,7 +5445,7 @@ app.init = async function () {
         this.renderNoticeBoard();
         this.startTelemetryStatusPolling();
 
-        // 加载语音包库路径信息（设置页显示用）
+        // 加载 AimerWT 资源库路径信息（设置页显示用）
         try {
             await this.loadLibraryPathInfo();
         } catch (e) {
@@ -5302,6 +5707,15 @@ app.switchResourceView = function (target) {
             this.refreshResourcePageI18n(registeredPage);
         }
         this.currentResourcePage = registeredPage;
+        const activeView = document.getElementById(`view-${target}`);
+        if (activeView) {
+            this.applyResourceReveal(activeView, {
+                item_selector: '.res-side-panel .res-panel-card',
+                max_animated: 3,
+                stagger_ms: 60,
+                duration_ms: 180,
+            });
+        }
         return;
     }
 
@@ -5317,6 +5731,15 @@ app.switchResourceView = function (target) {
     document.querySelectorAll('.resource-view').forEach(view => {
         view.classList.toggle('active', view.id === `view-${target}`);
     });
+    const activeView = document.getElementById(`view-${target}`);
+    if (activeView) {
+        this.applyResourceReveal(activeView, {
+            item_selector: '.res-side-panel .res-panel-card',
+            max_animated: 3,
+            stagger_ms: 60,
+            duration_ms: 180,
+        });
+    }
 
     // 刷新对应内容
     if (typeof this.updateResourceStorage === 'function') {
@@ -5389,6 +5812,9 @@ app.refreshResourceDropdownI18n = function () {
         this.resource_filter_dropdowns,
         'resource.filter_label'
     );
+    if (typeof this._syncSightsFilterOptions === 'function') {
+        this._syncSightsFilterOptions();
+    }
 };
 
 app.refreshResourceStatusBadgeI18n = function () {
@@ -5411,7 +5837,7 @@ app.refreshResourcePageI18n = function (page_module) {
         return;
     }
     if (typeof page_module._render_filtered_list === 'function') {
-        page_module._render_filtered_list();
+        page_module._render_filtered_list({ reveal: false });
     }
 };
 
@@ -5432,10 +5858,10 @@ app.refreshDynamicI18n = function () {
 
     const camo_page_active = document.getElementById('page-camo')?.classList.contains('active');
     if (camo_page_active && document.getElementById('view-skins')?.classList.contains('active') && typeof this._renderSkinsView === 'function' && !(this._skinsRefreshing && !this._skinsLoaded)) {
-        this._renderSkinsView();
+        this._renderSkinsView({ reveal: false });
     }
     if (camo_page_active && document.getElementById('view-sights')?.classList.contains('active') && typeof this._renderSightsView === 'function' && !(this._sightsRefreshing && !this._sightsLoaded)) {
-        this._renderSightsView();
+        this._renderSightsView({ reveal: false });
     }
 
     this.refreshResourcePageI18n(this.currentResourcePage);
@@ -5526,6 +5952,109 @@ app.switchResourceViewMode = function (resource_type, mode) {
     }
 };
 
+app.applyResourceReveal = function (container, options = {}) {
+    const root = typeof container === 'string'
+        ? document.querySelector(container)
+        : container;
+    if (!root) return;
+
+    const selector = options.item_selector || '.small-card, .res-card, .res-empty-state';
+    const rawItems = Array.isArray(options.items)
+        ? options.items
+        : Array.from(root.querySelectorAll(selector));
+    const items = rawItems.filter(item => item instanceof HTMLElement);
+    if (!items.length) return;
+
+    const maxAnimated = Math.max(0, Number(options.max_animated ?? 32));
+    const staggerMs = Math.max(0, Number(options.stagger_ms ?? 62.5));
+    const durationMs = Math.max(0, Number(options.duration_ms ?? 180));
+    const revealWindowMs = Math.max(0, Number(options.reveal_window_ms ?? 2000));
+    const maxWindowMs = Math.max(0, Number(options.max_window_ms ?? revealWindowMs));
+    const orderOffset = Math.max(0, Number(options.order_offset ?? 0));
+    const deferRemaining = options.defer_remaining === true;
+    const nowMs = window.performance?.now?.() || Date.now();
+    const revealStartedAt = Number(options.reveal_started_at ?? nowMs);
+    const elapsedMs = Math.max(0, nowMs - revealStartedAt);
+
+    items.forEach(item => {
+        item.classList.remove('resource-reveal-item');
+        item.classList.remove('resource-reveal-deferred');
+        item.classList.remove('animate-in');
+        item.style.removeProperty('--resource-reveal-delay');
+        item.style.removeProperty('--resource-reveal-duration');
+        item.style.removeProperty('--resource-reveal-rest-delay');
+        delete item.dataset.resourceRevealRun;
+    });
+
+    const revealAllowed = options.reveal !== false;
+    const revealKey = String(options.once_key || '').trim();
+    const replayReveal = options.replay === true;
+    const scrollRoot = options.scroll_root instanceof HTMLElement ? options.scroll_root : root;
+    let currentScrollTop = Number(scrollRoot.scrollTop || 0);
+    for (let parent = root.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+        currentScrollTop = Math.max(currentScrollTop, Number(parent.scrollTop || 0));
+        if (currentScrollTop > 0) break;
+    }
+    const skipScrollTop = Math.max(0, Number(options.skip_scroll_top ?? 8));
+    if (!revealAllowed || (currentScrollTop > skipScrollTop && options.allow_scrolled !== true)) return;
+
+    if (revealKey) {
+        this._resourceRevealPlayed = this._resourceRevealPlayed || new Map();
+        const revealRunKey = String(Math.round(revealStartedAt));
+        const playedRunKey = this._resourceRevealPlayed.get(revealKey);
+        if (playedRunKey && playedRunKey !== revealRunKey && !replayReveal) return;
+        if (!playedRunKey || replayReveal) this._resourceRevealPlayed.set(revealKey, revealRunKey);
+    }
+
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (reduceMotion?.matches) return;
+
+    this._resourceRevealRunSeq = (this._resourceRevealRunSeq || 0) + 1;
+    const resourceRevealRun = String(this._resourceRevealRunSeq);
+    const cleanupItems = [];
+    let cleanupDelayMs = 0;
+
+    items.forEach((item, index) => {
+        const itemIndex = orderOffset + index;
+        const finalOpacity = window.getComputedStyle?.(item)?.opacity || '1';
+        item.style.setProperty('--resource-reveal-final-opacity', finalOpacity === '0' ? '1' : finalOpacity);
+        if (itemIndex < maxAnimated) {
+            const delayMs = Math.max(0, Math.min(itemIndex * staggerMs, maxWindowMs) - elapsedMs);
+            item.style.setProperty('--resource-reveal-delay', `${delayMs}ms`);
+            item.style.setProperty('--resource-reveal-duration', `${durationMs}ms`);
+            item.dataset.resourceRevealRun = resourceRevealRun;
+            item.classList.add('resource-reveal-item');
+            cleanupItems.push(item);
+            cleanupDelayMs = Math.max(cleanupDelayMs, delayMs + durationMs);
+        } else if (deferRemaining) {
+            const restDelayMs = Math.max(0, revealWindowMs - elapsedMs);
+            item.style.setProperty('--resource-reveal-rest-delay', `${restDelayMs}ms`);
+            item.dataset.resourceRevealRun = resourceRevealRun;
+            item.classList.add('resource-reveal-deferred');
+            cleanupItems.push(item);
+            cleanupDelayMs = Math.max(cleanupDelayMs, restDelayMs + 1);
+        }
+    });
+
+    const cleanupResourceRevealItems = () => {
+        cleanupItems.forEach(item => {
+            if (!(item instanceof HTMLElement)) return;
+            if (item.dataset.resourceRevealRun !== resourceRevealRun) return;
+            item.classList.remove('resource-reveal-item');
+            item.classList.remove('resource-reveal-deferred');
+            item.style.removeProperty('--resource-reveal-delay');
+            item.style.removeProperty('--resource-reveal-duration');
+            item.style.removeProperty('--resource-reveal-rest-delay');
+            item.style.removeProperty('--resource-reveal-final-opacity');
+            delete item.dataset.resourceRevealRun;
+        });
+    };
+
+    if (cleanupItems.length) {
+        window.setTimeout(cleanupResourceRevealItems, Math.ceil(cleanupDelayMs) + 80);
+    }
+};
+
 app.resource_ops_config = {
     skins: {
         label: '涂装',
@@ -5585,6 +6114,66 @@ app.get_resource_label = function (config) {
     return config.label_key ? this.t(config.label_key) : String(config.label || '');
 };
 
+app._getSightItemStableKey = function (item) {
+    const source = item || {};
+    return String(
+        source.enabled_name ||
+        source.name ||
+        source.resource_id ||
+        source.path ||
+        ''
+    ).trim();
+};
+
+app._getSightSelectionItem = function (item) {
+    const key = this._getSightItemStableKey(item);
+    if (!key || item?.is_layout_preview) return null;
+    const installState = this._getSightInstallState(item);
+    return {
+        key,
+        name: String(item?.enabled_name || item?.name || key),
+        disabled: installState.is_disabled,
+        install_status: installState.install_status,
+        managed_by_aimerwt: installState.managed_by_aimerwt,
+        resource_ids: installState.resource_ids,
+    };
+};
+
+app._updateSightsSelectionCache = function (items) {
+    const map = new Map();
+    (Array.isArray(items) ? items : []).forEach((item) => {
+        const selectionItem = this._getSightSelectionItem(item);
+        if (selectionItem) map.set(selectionItem.key, selectionItem);
+    });
+    this._sightsSelectionItemMap = map;
+    this._selectedSightKeys = this._selectedSightKeys instanceof Set ? this._selectedSightKeys : new Set();
+    Array.from(this._selectedSightKeys).forEach((key) => {
+        if (!map.has(key)) this._selectedSightKeys.delete(key);
+    });
+};
+
+app._applySightSelectionState = function () {
+    const selected = this._selectedSightKeys instanceof Set ? this._selectedSightKeys : new Set();
+    document.querySelectorAll('#sights-list .small-card:not([data-layout-preview="1"])').forEach((card) => {
+        const key = String(card.dataset.sightSelectionKey || '').trim();
+        card.classList.toggle('is-selected', !!key && selected.has(key));
+    });
+};
+
+app._toggleSightSelectionByCard = function (card) {
+    if (!card || card.dataset.layoutPreview === '1') return;
+    const key = String(card.dataset.sightSelectionKey || '').trim();
+    if (!key) return;
+    this._selectedSightKeys = this._selectedSightKeys instanceof Set ? this._selectedSightKeys : new Set();
+    if (this._selectedSightKeys.has(key)) {
+        this._selectedSightKeys.delete(key);
+    } else {
+        this._selectedSightKeys.add(key);
+    }
+    card.classList.toggle('is-selected', this._selectedSightKeys.has(key));
+    this.updateResourceSelectionSummary('sights');
+};
+
 app.updateResourceSelectionSummary = function (resource_type, total_count) {
     const type = String(resource_type || '').trim();
     if (!type) return;
@@ -5592,8 +6181,33 @@ app.updateResourceSelectionSummary = function (resource_type, total_count) {
     const count_el = document.getElementById(`${type}-count`);
     const hint_el = document.getElementById(`${type}-selected-hint`);
     const select_all_el = document.getElementById(`${type}-select-all`);
+    if (type === 'sights') {
+        this._selectedSightKeys = this._selectedSightKeys instanceof Set ? this._selectedSightKeys : new Set();
+        const selected_count = this._selectedSightKeys.size;
+        const mapped_count = this._sightsSelectionItemMap instanceof Map ? this._sightsSelectionItemMap.size : 0;
+        const visible_count = Number.isFinite(Number(total_count)) ? Number(total_count) : mapped_count;
+
+        if (count_el) {
+            const count_key = visible_count === 1 ? 'resource.count_item' : 'resource.count_items';
+            count_el.textContent = this.t(count_key, { count: visible_count });
+        }
+        if (hint_el) {
+            const selected_key = selected_count === 1 ? 'resource.selected_item' : 'resource.selected_items';
+            hint_el.textContent = selected_count > 0
+                ? this.t(selected_key, { count: selected_count })
+                : this.t('resource.min_select_one');
+        }
+        if (select_all_el) {
+            select_all_el.checked = visible_count > 0 && selected_count === visible_count;
+            select_all_el.indeterminate = selected_count > 0 && selected_count < visible_count;
+        }
+        if (typeof this.update_resource_ops_buttons === 'function') {
+            this.update_resource_ops_buttons(type);
+        }
+        return;
+    }
     const list_el = document.getElementById(`${type}-list`);
-    const cards = list_el ? Array.from(list_el.querySelectorAll('.small-card, .res-card')) : [];
+    const cards = list_el ? Array.from(list_el.querySelectorAll('.small-card:not([data-layout-preview="1"]), .res-card:not([data-layout-preview="1"])')) : [];
     const selected_count = cards.filter((card) => card.classList.contains('is-selected')).length;
     const visible_count = Number.isFinite(Number(total_count)) ? Number(total_count) : cards.length;
 
@@ -5622,10 +6236,16 @@ app.get_selected_resource_cards = function (resource_type) {
     const type = String(resource_type || '').trim();
     const list_el = document.getElementById(`${type}-list`);
     if (!list_el) return [];
-    return Array.from(list_el.querySelectorAll('.small-card.is-selected, .res-card.is-selected'));
+    return Array.from(list_el.querySelectorAll('.small-card.is-selected:not([data-layout-preview="1"]), .res-card.is-selected:not([data-layout-preview="1"])'));
 };
 
 app.get_selected_resource_items = function (resource_type) {
+    const type = String(resource_type || '').trim();
+    if (type === 'sights') {
+        const map = this._sightsSelectionItemMap instanceof Map ? this._sightsSelectionItemMap : new Map();
+        const selected = this._selectedSightKeys instanceof Set ? this._selectedSightKeys : new Set();
+        return Array.from(selected).map(key => map.get(key)).filter(Boolean);
+    }
     return this.get_selected_resource_cards(resource_type).map(card => {
         const encoded_name = card.dataset.resourceNameEncoded
             || card.dataset.sightNameEncoded
@@ -5742,6 +6362,392 @@ app.delete_selected_resources = async function (resource_type) {
     await config.refresh();
 };
 
+app.delete_single_resource = async function (resource_type, resource_name) {
+    const type = String(resource_type || '').trim();
+    const name = String(resource_name || '').trim();
+    const config = this.resource_ops_config[type];
+    if (!config || !name) return;
+    const api_fn = config && window.pywebview?.api?.[config.delete_api];
+    if (!api_fn) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return;
+    }
+    const label = this.get_resource_label(config);
+    const yes = await this.confirm(
+        this.t('resource.delete_title', { label }),
+        this.t('resource.delete_message', { count: 1, label, names: app._escapeHtml(name) }),
+        true,
+        this.t('resource.confirm_delete')
+    );
+    if (!yes) return;
+    const result = await window.pywebview.api[config.delete_api](name);
+    if (!result || !result.success) {
+        this.showAlert(this.t('common.error'), result?.msg || this.t('resource.delete_failed', { name }), 'error');
+        return;
+    }
+    await config.refresh();
+};
+
+app._showSightsBatchResult = function (result, action) {
+    const successCount = Number(result?.success_count || 0);
+    const failCount = Number(result?.fail_count || 0);
+    const failures = Array.isArray(result?.failures) ? result.failures : [];
+    const actionText = action === 'enable' ? '启用' : '禁用';
+    if (failCount > 0) {
+        const sample = failures.slice(0, 5).map(item => {
+            const name = this._escapeHtml(item?.name || '未知项');
+            const error = this._escapeHtml(item?.error || '未知错误');
+            return `${name}: ${error}`;
+        }).join('<br>');
+        const more = failures.length > 5 ? `<br>还有 ${failures.length - 5} 项未展示` : '';
+        this.showAlert('批量操作完成', `${actionText}成功 ${successCount} 项，失败 ${failCount} 项。<br>${sample}${more}`, 'warn');
+        return;
+    }
+    this.showAlert(this.t('common.success'), `${actionText}成功 ${successCount} 项`, 'success');
+};
+
+app._getSightsTaskResourceIds = function (items) {
+    const ids = [];
+    const seen = new Set();
+    (Array.isArray(items) ? items : []).forEach(item => {
+        const state = this._getSightInstallState(item || {});
+        (Array.isArray(state.resource_ids) ? state.resource_ids : []).forEach(value => {
+            const id = String(value || '').trim();
+            if (!id || seen.has(id)) return;
+            seen.add(id);
+            ids.push(id);
+        });
+    });
+    return ids;
+};
+
+app._getExternalSightItems = function (items = null) {
+    const sourceItems = Array.isArray(items)
+        ? items
+        : Array.isArray(this._sightsItems)
+            ? this._sightsItems
+            : [];
+    const seen = new Set();
+    return sourceItems.filter(item => {
+        const name = String(item?.enabled_name || item?.name || '').trim();
+        const state = this._getSightInstallState(item || {});
+        if (
+            state.managed_by_aimerwt ||
+            (!name.startsWith('file:') && String(item?.item_kind || '') !== 'external_file') ||
+            seen.has(name)
+        ) {
+            return false;
+        }
+        seen.add(name);
+        return true;
+    });
+};
+
+app._updateSightRepositoryTaskLoading = function (task, action) {
+    if (!window.MinimalistLoading) return;
+    const status = String(task?.status || '').trim().toLowerCase();
+    const actionText = action === 'adopt'
+        ? '纳管'
+        : action === 'enable'
+            ? '启用'
+            : '停用';
+    const processed = Number(task?.processed_count || 0);
+    const total = Number(task?.total_count || 0);
+    const terminal = ['succeeded', 'failed', 'canceled', 'missing', 'timeout'].includes(status);
+    const percent = terminal
+        ? 100
+        : total > 0
+            ? Math.max(1, Math.min(99, Math.round((processed / total) * 100)))
+            : 1;
+    const statusText = status === 'canceled'
+        ? `${actionText}炮镜任务已取消`
+        : status === 'timeout'
+            ? `${actionText}炮镜任务等待超时`
+        : status === 'failed'
+            ? `${actionText}炮镜任务需要处理`
+            : status === 'missing'
+                ? `${actionText}炮镜任务需要处理`
+            : terminal
+                ? `${actionText}炮镜任务完成`
+                : `${actionText}炮镜任务处理中：${processed}/${total || '?'}`;
+    MinimalistLoading.update(percent, statusText);
+};
+
+app._finish_sight_repository_task_loading = async function (task, action) {
+    if (!window.MinimalistLoading) return;
+    if (typeof MinimalistLoading.clearCancelAction === 'function') {
+        MinimalistLoading.clearCancelAction();
+    }
+    this._updateSightRepositoryTaskLoading(task || {}, action);
+    if (typeof MinimalistLoading.waitForClose === 'function') {
+        await MinimalistLoading.waitForClose();
+        return;
+    }
+    MinimalistLoading.hide();
+    await new Promise(resolve => setTimeout(resolve, 450));
+};
+
+app._waitSightRepositoryTask = async function (task_id, options = {}) {
+    const taskId = String(task_id || '').trim();
+    const intervalMs = Number(options.interval_ms || 350);
+    const maxAttempts = Number(options.max_attempts || 240);
+    const doneStatuses = ['succeeded', 'failed', 'canceled', 'missing', 'timeout'];
+    const onUpdate = typeof options.on_update === 'function' ? options.on_update : null;
+    if (!taskId) {
+        return {
+            success: false,
+            status: 'missing',
+            errors: [{ error_code: 'missing_task_id', error: '任务 ID 缺失' }],
+            result: { errors: [{ error_code: 'missing_task_id', error: '任务 ID 缺失' }] },
+        };
+    }
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const task = await pywebview.api.get_sight_repository_task(taskId);
+        const status = String(task?.status || '').trim().toLowerCase();
+        if (onUpdate) onUpdate(task || {});
+        if (doneStatuses.includes(status)) return task || {};
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+    return {
+        success: false,
+        task_id: taskId,
+        status: 'timeout',
+        errors: [{ error_code: 'task_timeout', error: '任务等待超时' }],
+        result: { errors: [{ error_code: 'task_timeout', error: '任务等待超时' }] },
+    };
+};
+
+app._showSightRepositoryTaskResult = function (task, action) {
+    const actionText = action === 'adopt'
+        ? '纳管'
+        : action === 'enable'
+            ? '启用'
+            : '停用';
+    const status = String(task?.status || '').trim().toLowerCase();
+    const result = task?.result || {};
+    const taskCountKeys = new Set(['processed_count', 'success_count', 'fail_count', 'skipped_count']);
+    const readCount = (key) => {
+        const value = Number(taskCountKeys.has(key)
+            ? task?.[key] ?? result?.[key] ?? 0
+            : result?.[key] ?? task?.[key] ?? 0);
+        return Number.isFinite(value) ? value : 0;
+    };
+    const counts = [
+        ['纳管', readCount('adopted_count')],
+        ['已管理', readCount('already_managed_count')],
+        ['处理', readCount('processed_count')],
+        ['成功', readCount('success_count')],
+        ['失败', readCount('fail_count')],
+        ['跳过', readCount('skipped_count')],
+        ['冲突', readCount('conflict_count')],
+        ['缺失', readCount('missing_count')],
+        ['被修改', readCount('modified_count')],
+        ['资源库缺失', readCount('resource_missing_count')],
+        ['清单损坏', readCount('manifest_corrupt_count')],
+    ].filter(([, value]) => value > 0);
+    const summary = counts.length
+        ? counts.map(([label, value]) => `${label} ${value}`).join('，')
+        : '没有可处理项目';
+    const conflicts = Array.isArray(result?.conflicts) ? result.conflicts : [];
+    const allErrors = [
+        ...(Array.isArray(task?.errors) ? task.errors : []),
+        ...(Array.isArray(result?.errors) ? result.errors : []),
+    ];
+    const errorKeys = new Set();
+    const errors = allErrors.filter(item => {
+        const key = JSON.stringify([
+            item?.resource_id || item?.target_relative_path || '',
+            item?.error_code || item?.reason || '',
+            item?.error || item?.msg || '',
+        ]);
+        if (errorKeys.has(key)) return false;
+        errorKeys.add(key);
+        return true;
+    });
+    const detailRows = [];
+    conflicts.slice(0, 5).forEach(item => {
+        const target = this._escapeHtml(String(item?.target_relative_path || item?.target || item?.resource_id || '').trim() || '未知文件');
+        const reason = this._escapeHtml(this._formatSightConflictReason(item?.conflict_reason || item?.reason, item?.action));
+        detailRows.push(`${target}: ${reason}`);
+    });
+    errors.slice(0, 5 - detailRows.length).forEach(item => {
+        const target = this._escapeHtml(String(item?.resource_id || item?.target_relative_path || '').trim() || '任务');
+        const reasonCode = String(item?.error_code || item?.reason || '').trim();
+        const reasonText = reasonCode
+            ? this._formatSightConflictReason(reasonCode, item?.action)
+            : String(item?.error || item?.msg || '未知错误');
+        const reason = this._escapeHtml(reasonText);
+        detailRows.push(`${target}: ${reason}`);
+    });
+    const detail = detailRows.length ? `<br>${detailRows.join('<br>')}` : '';
+    const moreCount = Math.max(0, conflicts.length + errors.length - detailRows.length);
+    const more = moreCount > 0 ? `<br>还有 ${moreCount} 项未展示` : '';
+    const hasAttention = status !== 'succeeded' || readCount('fail_count') > 0 || readCount('conflict_count') > 0 || readCount('modified_count') > 0 || readCount('manifest_corrupt_count') > 0 || readCount('resource_missing_count') > 0;
+    const title = status === 'canceled' ? '批量任务已取消' : hasAttention ? '批量任务需要处理' : this.t('common.success');
+    const messageLead = status === 'canceled'
+        ? `${actionText}任务已取消`
+        : status === 'timeout'
+            ? `${actionText}任务等待超时`
+            : hasAttention
+                ? `${actionText}任务需要处理`
+                : `${actionText}任务完成`;
+    this.showAlert(
+        title,
+        `${messageLead}：${summary}${detail}${more}`,
+        hasAttention ? 'warn' : 'success',
+        null,
+        { allowHtml: true }
+    );
+};
+
+app._updateExternalSightsAdoptionButton = function () {
+    const button = document.getElementById('btn-adopt-external-sights');
+    if (!button) return;
+    const externalCount = this._getExternalSightItems().length;
+    button.disabled = !this.sightsPath;
+    button.title = externalCount > 0
+        ? `当前有 ${externalCount} 个外部炮镜可纳管`
+        : '点击检查是否有可纳管的外部炮镜';
+};
+
+app.adoptExternalSights = async function (items = null, options = {}) {
+    const externalItems = this._getExternalSightItems(items);
+    if (!externalItems.length) {
+        this.showInfoToast('未找到可纳管炮镜', '当前没有发现可纳入 AimerWT 管理的外部炮镜。');
+        return false;
+    }
+    if (!window.pywebview?.api?.start_sight_adoption_task || !window.pywebview?.api?.get_sight_repository_task) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return false;
+    }
+
+    const enabledCount = externalItems.filter(item => !item.disabled).length;
+    const disabledCount = externalItems.length - enabledCount;
+    if (!options.skip_confirm) {
+        const contextLead = options.context
+            ? '所选炮镜尚未由 AimerWT 管理。'
+            : '';
+        const confirmed = await this.confirm(
+            '纳入 AimerWT 管理',
+            `${contextLead}将纳管 ${externalItems.length} 个外部炮镜：已启用 ${enabledCount} 个，已停用 ${disabledCount} 个。<br><br>` +
+            '纳管只会保存资源副本并登记管理权，不会移动、改名、覆盖或改变当前启停状态。',
+            false,
+            '纳入管理'
+        );
+        if (!confirmed) return false;
+    }
+
+    const sightNames = externalItems.map(item => String(item?.enabled_name || item?.name || '').trim());
+    const quickButton = document.getElementById('btn-adopt-external-sights');
+    try {
+        if (quickButton) {
+            quickButton.disabled = true;
+            quickButton.classList.add('is-loading');
+            quickButton.setAttribute('aria-busy', 'true');
+        }
+        const started = await pywebview.api.start_sight_adoption_task(sightNames);
+        if (!started?.success || !started?.task_id) {
+            this.showAlert(this.t('common.error'), started?.msg || '纳管任务启动失败', 'error');
+            return false;
+        }
+        if (window.MinimalistLoading) {
+            MinimalistLoading.show(false, '外部炮镜纳管任务已启动');
+            this._updateSightRepositoryTaskLoading(started, 'adopt');
+            if (window.pywebview?.api?.cancel_sight_repository_task && typeof MinimalistLoading.setCancelAction === 'function') {
+                MinimalistLoading.setCancelAction('取消任务', async () => {
+                    MinimalistLoading.update(1, '正在请求取消任务...');
+                    await pywebview.api.cancel_sight_repository_task(started.task_id);
+                });
+            }
+        }
+        const finalTask = await this._waitSightRepositoryTask(started.task_id, {
+            on_update: task => this._updateSightRepositoryTaskLoading(task, 'adopt'),
+        });
+        await this._finish_sight_repository_task_loading(finalTask, 'adopt');
+        await this.refreshSights({ manual: true, force: true });
+        this._showSightRepositoryTaskResult(finalTask, 'adopt');
+        return String(finalTask?.status || '').toLowerCase() === 'succeeded';
+    } catch (error) {
+        if (window.MinimalistLoading) {
+            if (typeof MinimalistLoading.clearCancelAction === 'function') MinimalistLoading.clearCancelAction();
+            MinimalistLoading.hide();
+            if (typeof MinimalistLoading.waitForClose === 'function') {
+                await MinimalistLoading.waitForClose();
+            }
+        }
+        this.showAlert(this.t('common.error'), error?.message || String(error), 'error');
+        return false;
+    } finally {
+        if (quickButton) {
+            quickButton.classList.remove('is-loading');
+            quickButton.removeAttribute('aria-busy');
+        }
+        this._updateExternalSightsAdoptionButton();
+    }
+};
+
+app._runSightsBatchOperation = async function (action) {
+    const selected = this.get_selected_resource_items('sights');
+    const targetItems = action === 'enable'
+        ? selected.filter(item => item.disabled)
+        : selected.filter(item => !item.disabled);
+    if (!targetItems.length) return;
+
+    if (!window.pywebview?.api?.start_sight_repository_task || !window.pywebview?.api?.get_sight_repository_task) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return;
+    }
+
+    const unmanagedItems = targetItems.filter(item => !this._getSightInstallState(item || {}).managed_by_aimerwt);
+    if (unmanagedItems.length) {
+        const externalItems = this._getExternalSightItems(unmanagedItems);
+        if (externalItems.length) {
+            await this.adoptExternalSights(externalItems, { context: true });
+        } else {
+            this.showAlert(this.t('common.info'), '所选项目尚未由 AimerWT 管理，且不能作为独立 BLK 纳管', 'warn');
+        }
+        return;
+    }
+
+    const resourceIds = this._getSightsTaskResourceIds(targetItems);
+    if (!resourceIds.length) {
+        this.showAlert(this.t('common.info'), '没有找到可操作的 AimerWT 炮镜资源', 'warn');
+        return;
+    }
+
+    const taskAction = action === 'enable' ? 'enable_resource' : 'disable_resource';
+    const actionText = action === 'enable' ? '启用' : '停用';
+    try {
+        const started = await pywebview.api.start_sight_repository_task(taskAction, null, resourceIds);
+        if (window.MinimalistLoading) {
+            MinimalistLoading.show(false, `${actionText}炮镜任务已启动`);
+            this._updateSightRepositoryTaskLoading(started || {}, action);
+            if (started?.task_id && window.pywebview?.api?.cancel_sight_repository_task && typeof MinimalistLoading.setCancelAction === 'function') {
+                MinimalistLoading.setCancelAction('取消任务', async () => {
+                    MinimalistLoading.update(1, '正在请求取消任务...');
+                    await pywebview.api.cancel_sight_repository_task(started.task_id);
+                });
+            }
+        }
+        const status = String(started?.status || '').trim().toLowerCase();
+        const finalTask = ['succeeded', 'failed', 'canceled', 'missing'].includes(status) || !started?.task_id
+            ? started
+            : await this._waitSightRepositoryTask(started.task_id, {
+                on_update: task => this._updateSightRepositoryTaskLoading(task, action),
+            });
+        await this._finish_sight_repository_task_loading(finalTask || started || {}, action);
+        await this.refreshSights({ manual: true });
+        this._showSightRepositoryTaskResult(finalTask || started || {}, action);
+    } catch (e) {
+        if (window.MinimalistLoading) {
+            if (typeof MinimalistLoading.clearCancelAction === 'function') MinimalistLoading.clearCancelAction();
+            MinimalistLoading.hide();
+            if (typeof MinimalistLoading.waitForClose === 'function') await MinimalistLoading.waitForClose();
+        }
+        this.showAlert(this.t('common.error'), e?.message || String(e), 'error');
+    }
+};
+
 app.getSelectedSightCards = function () {
     return this.get_selected_resource_cards('sights');
 };
@@ -5759,11 +6765,11 @@ app.openSelectedSightFolder = function () {
 };
 
 app.enableSelectedSights = function () {
-    return this.enable_selected_resources('sights');
+    return this._runSightsBatchOperation('enable');
 };
 
 app.disableSelectedSights = function () {
-    return this.disable_selected_resources('sights');
+    return this._runSightsBatchOperation('disable');
 };
 
 app.deleteSelectedSights = function () {
@@ -5772,10 +6778,20 @@ app.deleteSelectedSights = function () {
 
 app.setResourceSelection = function (resource_type, selected) {
     const type = String(resource_type || '').trim();
+    if (type === 'sights') {
+        this._selectedSightKeys = new Set();
+        if (selected) {
+            const map = this._sightsSelectionItemMap instanceof Map ? this._sightsSelectionItemMap : new Map();
+            map.forEach((_item, key) => this._selectedSightKeys.add(key));
+        }
+        this._applySightSelectionState();
+        this.updateResourceSelectionSummary(type);
+        return;
+    }
     const list_el = document.getElementById(`${type}-list`);
     if (!list_el) return;
 
-    list_el.querySelectorAll('.small-card, .res-card').forEach((card) => {
+    list_el.querySelectorAll('.small-card:not([data-layout-preview="1"]), .res-card:not([data-layout-preview="1"])').forEach((card) => {
         card.classList.toggle('is-selected', !!selected);
     });
     this.updateResourceSelectionSummary(type);
@@ -5799,6 +6815,11 @@ app.initResourceSelectionControls = function () {
                 if (event.target.closest('button, a, input, select, textarea, [role="button"]')) return;
                 const card = event.target.closest('.small-card, .res-card');
                 if (!card || !list_el.contains(card)) return;
+                if (card.dataset.layoutPreview === '1') return;
+                if (resource_type === 'sights') {
+                    this._toggleSightSelectionByCard(card);
+                    return;
+                }
                 card.classList.toggle('is-selected');
                 this.updateResourceSelectionSummary(resource_type);
             });
@@ -5837,6 +6858,7 @@ app.loadSightsView = function () {
     const primaryText = primaryBtn ? primaryBtn.querySelector('span') : null;
     const primaryIcon = primaryBtn ? primaryBtn.querySelector('i') : null;
     const secondaryBtn = document.getElementById('btn-sights-secondary');
+    const adoptBtn = document.getElementById('btn-adopt-external-sights');
     const secondaryText = secondaryBtn ? secondaryBtn.querySelector('span') : null;
 
     // 自动搜索 UID 列表
@@ -5849,7 +6871,9 @@ app.loadSightsView = function () {
         if (primaryIcon) primaryIcon.className = 'ri-folder-open-line';
 
         if (secondaryBtn) secondaryBtn.disabled = false;
+        if (adoptBtn) adoptBtn.disabled = false;
         if (secondaryText) secondaryText.textContent = this.t('resource.open_usersights_folder');
+        ResourceLibraryLoading.start('sights', { message: '正在读取炮镜列表...', processed: 0, total: null, show_content: false });
 
         setTimeout(() => {
             const camoPage = document.getElementById('page-camo');
@@ -5867,7 +6891,9 @@ app.loadSightsView = function () {
     if (primaryText) primaryText.textContent = this.t('tools.manual_select_path');
     if (primaryIcon) primaryIcon.className = 'ri-folder-open-line';
 
+    ResourceLibraryLoading.finish('sights');
     if (secondaryBtn) secondaryBtn.disabled = true;
+    if (adoptBtn) adoptBtn.disabled = true;
     if (secondaryText) secondaryText.textContent = this.t('resource.open_usersights_folder');
 };
 
@@ -5995,10 +7021,34 @@ app.openSightsFolder = async function () {
     }
 };
 
+app._finish_sights_render = function () {
+    if (this._sightsTransferActive) {
+        ResourceLibraryLoading.update('sights', {
+            message: '正在载入炮镜列表...',
+            processed: this._sightsTransferReceived,
+            total: this._sightsTransferTotal,
+            show_content: this._sightsItems.length > 0,
+        });
+        return;
+    }
+    const refreshBtn = document.getElementById('btn-refresh-sights');
+    this._sightsRefreshing = false;
+    ResourceLibraryLoading.finish('sights');
+    if (refreshBtn) {
+        refreshBtn.disabled = false;
+        refreshBtn.classList.remove('is-loading');
+    }
+};
+
 app.refreshSights = async function (opts) {
-    if (!this.sightsPath || !window.pywebview?.api) return;
+    if (!this.sightsPath || !window.pywebview?.api) {
+        ResourceLibraryLoading.finish('sights');
+        return;
+    }
     const canAsyncRefresh = typeof pywebview.api.refresh_sights_async === 'function';
     if (!canAsyncRefresh && typeof pywebview.api.get_sights_list !== 'function') return;
+    const restoreDetail = String(opts?.restore_detail || '').trim();
+    if (restoreDetail) this._pendingSightDetailRestore = restoreDetail;
 
     const camoPage = document.getElementById('page-camo');
     const sightsView = document.getElementById('view-sights');
@@ -6013,12 +7063,14 @@ app.refreshSights = async function (opts) {
     if (!isManual && this._lastSightsRefreshAt && (now - this._lastSightsRefreshAt) < 800) return;
     this._lastSightsRefreshAt = now;
     this._sightsRefreshing = true;
+    ResourceLibraryLoading.start('sights', { message: '正在读取炮镜列表...', processed: 0, total: null, show_content: false });
     this._sightsRefreshSeq = (this._sightsRefreshSeq || 0) + 1;
     const seq = this._sightsRefreshSeq;
 
     const listEl = document.getElementById('sights-list');
     const countEl = document.getElementById('sights-count');
     let waitingForAsyncPush = false;
+    let renderStarted = false;
 
     try {
         if (refreshBtn) {
@@ -6045,25 +7097,103 @@ app.refreshSights = async function (opts) {
         const sortSelect = document.getElementById('sights-sort-select');
         if (searchInput) this._sightsSearchQuery = searchInput.value || "";
         if (sortSelect) this._sightsSortKey = sortSelect.value || "update_time";
-        this._renderSightsView();
+        this._resetSightsWindow();
+        renderStarted = true;
+        this._renderSightsView({ replay: true, reason: 'refresh' });
+        await this._restoreSightDetailAfterListRefresh();
         this.updateResourceStorage('sights');
+        this._updateExternalSightsAdoptionButton();
         this._sightsLoaded = true;
+        this.requestSightsSourceIndex();
     } catch (e) {
         console.error(e);
         waitingForAsyncPush = false;
     } finally {
-        if (!waitingForAsyncPush && seq === this._sightsRefreshSeq) this._sightsRefreshing = false;
-        if (!waitingForAsyncPush && refreshBtn) {
-            refreshBtn.disabled = false;
-            refreshBtn.classList.remove('is-loading');
+        if (!waitingForAsyncPush && !renderStarted && seq === this._sightsRefreshSeq) {
+            this._finish_sights_render();
         }
     }
 };
 
+app.onSightsScanProgress = function (progress) {
+    if (!this._sightsRefreshing || this._sightsTransferActive) return;
+    const state = progress && typeof progress === 'object' ? progress : {};
+    ResourceLibraryLoading.update('sights', {
+        message: String(state.message || '正在检查炮镜文件...'),
+        processed: state.processed,
+        total: null,
+        show_content: false,
+    });
+};
+
+app.onSightsListTransferStart = function (payload) {
+    const state = payload && typeof payload === 'object' ? payload : {};
+    this._sightsTransferActive = true;
+    this._sightsTransferTotal = Math.max(0, Number(state.total || 0));
+    this._sightsTransferReceived = 0;
+    this._sightsItems = [];
+    this._sightsLoaded = false;
+    this._resetSightsWindow();
+    ResourceLibraryLoading.start('sights', {
+        message: '正在载入炮镜列表...',
+        processed: 0,
+        total: this._sightsTransferTotal,
+        show_content: false,
+    });
+};
+
+app.onSightsListBatch = function (payload) {
+    if (!this._sightsTransferActive) return;
+    const state = payload && typeof payload === 'object' ? payload : {};
+    const batch = Array.isArray(state.items) ? state.items : [];
+    const wasEmpty = this._sightsItems.length === 0;
+    if (batch.length > 0) this._sightsItems.push(...batch);
+    this._sightsTransferReceived = Math.max(
+        this._sightsItems.length,
+        Number(state.processed || 0),
+    );
+    if (wasEmpty && this._sightsItems.length > 0) {
+        const searchInput = document.getElementById('sights-search-input');
+        const sortSelect = document.getElementById('sights-sort-select');
+        if (searchInput) this._sightsSearchQuery = searchInput.value || '';
+        if (sortSelect) this._sightsSortKey = sortSelect.value || 'update_time';
+        this._sightsLoaded = true;
+        this._resetSightsWindow();
+        this._renderSightsView({ replay: true, reason: 'first_batch' });
+    }
+    ResourceLibraryLoading.update('sights', {
+        message: '正在载入炮镜列表...',
+        processed: this._sightsTransferReceived,
+        total: this._sightsTransferTotal,
+        show_content: this._sightsItems.length > 0,
+    });
+};
+
+app.onSightsListTransferComplete = function (payload) {
+    const result = payload && typeof payload === 'object' ? payload : {};
+    this._sightsTransferActive = false;
+    this._sightsTransferReceived = this._sightsItems.length;
+    this._sightsTransferTotal = Math.max(this._sightsTransferTotal, this._sightsItems.length);
+    const searchInput = document.getElementById('sights-search-input');
+    const sortSelect = document.getElementById('sights-sort-select');
+    if (searchInput) this._sightsSearchQuery = searchInput.value || '';
+    if (sortSelect) this._sightsSortKey = sortSelect.value || 'update_time';
+    this._sightsLoaded = true;
+    this._resetSightsWindow();
+    this._renderSightsView({ replay: true, reason: 'transfer_complete' });
+    this._restoreSightDetailAfterListRefresh();
+    this.updateResourceStorage('sights');
+    this._updateExternalSightsAdoptionButton();
+    this.requestSightsSourceIndex();
+    if (result.scan_error) console.warn('炮镜扫描未完整完成:', result.scan_error);
+};
 app.onSightsListReady = function (result) {
-    const refreshBtn = document.getElementById('btn-refresh-sights');
+    this._sightsTransferActive = false;
+    this._sightsTransferTotal = 0;
+    this._sightsTransferReceived = 0;
     const camoPage = document.getElementById('page-camo');
     const sightsView = document.getElementById('view-sights');
+    let renderStarted = false;
 
     try {
         if (!camoPage || !sightsView) return;
@@ -6075,56 +7205,434 @@ app.onSightsListReady = function (result) {
         const sortSelect = document.getElementById('sights-sort-select');
         if (searchInput) this._sightsSearchQuery = searchInput.value || "";
         if (sortSelect) this._sightsSortKey = sortSelect.value || "update_time";
-        this._renderSightsView();
+        renderStarted = true;
+        this._renderSightsView({ replay: true, reason: 'refresh' });
+        this._restoreSightDetailAfterListRefresh();
         this.updateResourceStorage('sights');
+        this._updateExternalSightsAdoptionButton();
         this._sightsLoaded = true;
+        this.requestSightsSourceIndex();
     } finally {
-        this._sightsRefreshing = false;
-        if (refreshBtn) {
-            refreshBtn.disabled = false;
-            refreshBtn.classList.remove('is-loading');
-        }
+        if (!renderStarted) this._finish_sights_render();
     }
+};
+
+app.requestSightsSourceIndex = function () {
+    if (!this.sightsPath || !window.pywebview?.api?.refresh_sight_source_index_async) return;
+    if (this._sightsSourceIndexing) return;
+    if (this._sightsTransferActive) return;
+    const visibleItems = Array.isArray(this._sightsCurrentWindowItems)
+        ? this._sightsCurrentWindowItems
+        : [];
+    const names = visibleItems
+        .filter(item => item?.item_kind === 'legacy_folder' && item?.source_indexed !== true)
+        .map(item => String(item?.enabled_name || item?.name || '').trim())
+        .filter(Boolean);
+    if (!names.length) return;
+    this._sightsSourceIndexing = true;
+    Promise.resolve(pywebview.api.refresh_sight_source_index_async({
+        names,
+        limit_per_sight: 2,
+    })).catch((error) => {
+        this._sightsSourceIndexing = false;
+        console.warn('后台索引炮镜来源失败:', error);
+    });
+};
+app.onSightsSourceIndexReady = function (result) {
+    this._sightsSourceIndexing = false;
+    if (!result || result.success === false || !Array.isArray(result.items)) return;
+    const sourceMap = new Map(result.items.map(item => [String(item.enabled_name || item.name || ''), item]));
+    let changed = false;
+    this._sightsItems = (Array.isArray(this._sightsItems) ? this._sightsItems : []).map(item => {
+        const enabledName = String(item.enabled_name || item.name || '');
+        const source = sourceMap.get(enabledName);
+        if (!source) return item;
+        const metaSummary = Object.assign({}, item.meta_summary || {});
+        metaSummary.source_hints = Array.isArray(source.source_hints) ? source.source_hints : [];
+        metaSummary.source_files = Array.isArray(source.source_files) ? source.source_files : [];
+        metaSummary.source_indexed = !!source.source_indexed;
+        changed = true;
+        return Object.assign({}, item, {
+            meta_summary: metaSummary,
+            source_indexed: !!source.source_indexed,
+        });
+    });
+    if (changed) this._renderSightsView({ reveal: false, reason: 'source_index' });
 };
 
 app.filterSightsNew = function (query) {
     this._sightsSearchQuery = String(query || "");
-    this._renderSightsView();
+    this._resetSightsWindow();
+    this._renderSightsView({ replay: true, reason: 'filter' });
 };
 
 app.sortSightsNew = function (sortKey) {
     this._sightsSortKey = sortKey || "update_time";
-    this._renderSightsView();
+    this._resetSightsWindow();
+    this._renderSightsView({ replay: true, reason: 'sort' });
 };
 
 app.filterSightsStatus = function (value) {
     this._sightsFilterStatus = value || 'all';
-    this._renderSightsView();
+    this._resetSightsWindow();
+    this._renderSightsView({ replay: true, reason: 'filter' });
+};
+
+app._getSightsFilterOptionsForMode = function (mode) {
+    const tr = (key, fallback) => this.t(key, {}, fallback);
+    const detailOptions = [
+        { value: 'all', label: tr('resource.filter_all', '全部') },
+        { value: 'enabled', label: tr('resource.filter_enabled', '已启用') },
+        { value: 'disabled', label: tr('resource.filter_stopped', '已停用') },
+        { value: 'with_meta', label: tr('resource.filter_with_meta', '有元数据') },
+        { value: 'without_meta', label: tr('resource.filter_without_meta', '无元数据') },
+        { value: 'with_source', label: tr('resource.filter_with_source', '有来源尾注') },
+        { value: 'tag_historical', label: tr('resource.filter_tag_historical', '史实瞄具') },
+        { value: 'tag_competitive', label: tr('resource.filter_tag_competitive', '竞技瞄具') },
+        { value: 'tag_fun', label: tr('resource.filter_tag_fun', '娱乐瞄具') },
+        { value: 'ammo_apfsds', label: tr('resource.filter_ammo_apfsds', 'APFSDS') },
+        { value: 'ammo_heatfs', label: tr('resource.filter_ammo_heatfs', 'HEAT-FS') },
+        { value: 'ammo_atgm', label: tr('resource.filter_ammo_atgm', 'ATGM') },
+    ];
+    if (mode === 'enabled') {
+        return [
+            { value: 'all', label: tr('resource.filter_all', '全部') },
+            { value: 'single', label: tr('resource.sight_tab_single', '单独炮镜') },
+            { value: 'packages', label: tr('resource.sight_tab_packages', '炮镜包') },
+            { value: 'tag_historical', label: tr('resource.filter_tag_historical', '史实瞄具') },
+            { value: 'tag_competitive', label: tr('resource.filter_tag_competitive', '竞技瞄具') },
+            { value: 'tag_fun', label: tr('resource.filter_tag_fun', '娱乐瞄具') },
+        ];
+    }
+    return detailOptions;
+};
+
+app._syncSightsFilterOptions = function () {
+    const selectEl = document.getElementById('sights-filter-select');
+    const mode = this._sightsLibraryMode || 'packages';
+    const options = this._getSightsFilterOptionsForMode(mode);
+    const values = new Set(options.map(option => option.value));
+    const currentValue = this._sightsFilterStatus || selectEl?.value || 'all';
+    const nextValue = values.has(currentValue) ? currentValue : 'all';
+
+    this._sightsFilterStatus = nextValue;
+    if (selectEl) {
+        selectEl.innerHTML = options.map(option => (
+            `<option value="${this._escapeHtml(option.value)}">${this._escapeHtml(option.label)}</option>`
+        )).join('');
+        selectEl.value = nextValue;
+    }
+
+    const dropdown = this.resource_filter_dropdowns?.sights;
+    if (dropdown) {
+        dropdown.setOptions(options, true);
+        dropdown.setValue(nextValue, false);
+    }
+};
+
+app.setSightsLibraryMode = function (mode) {
+    const nextMode = ['single', 'packages', 'enabled'].includes(mode) ? mode : 'packages';
+    const shouldAnimate = (this._sightsLibraryMode || 'packages') !== nextMode;
+    this._sightsLibraryMode = nextMode;
+    this._resetSightsWindow();
+
+    document.querySelectorAll('#view-sights .sights-mode-tab').forEach((tab) => {
+        const active = tab.dataset.sightsMode === nextMode;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+
+    this._syncSightsFilterOptions();
+    this._renderSightsView({ replay: true, reason: 'mode' });
+    if (shouldAnimate) this._animateSightsModeSwitch();
+};
+
+app._animateSightsModeSwitch = function () {
+    const listEl = document.getElementById('sights-list');
+    if (!listEl) return;
+    listEl.classList.remove('is-mode-switching');
+    void listEl.offsetWidth;
+    listEl.classList.add('is-mode-switching');
+    window.setTimeout(() => {
+        listEl.classList.remove('is-mode-switching');
+    }, 190);
 };
 
 app.toggleSightsSortOrder = function () {
     this._sightsSortAsc = !this._sightsSortAsc;
     const btn = document.getElementById('sights-sort-order-btn');
     if (btn) btn.classList.toggle('is-asc', this._sightsSortAsc);
-    this._renderSightsView();
+    this._resetSightsWindow();
+    this._renderSightsView({ replay: true, reason: 'sort' });
+};
+
+app._getSightInstallState = function (item) {
+    const source = item || {};
+    const summary = source.meta_summary || {};
+    const name = String(item?.name || '');
+    const legacyDisabled = !!source.legacy_disabled || !!source.disabled || name.endsWith('.AimerWT_BAN');
+    const isTruthyFlag = value => value === true || value === 1 || ['1', 'true', 'yes', 'y', 'on'].includes(String(value || '').trim().toLowerCase());
+    const countValue = value => {
+        const num = Number(value || 0);
+        return Number.isFinite(num) && num > 0 ? num : 0;
+    };
+    const statusCandidates = [
+        source.install_status,
+        source.activation_state,
+        source.package_activation_state,
+        source.enabled_state,
+        source.status,
+        source.sight_status,
+        summary.activation_state,
+        summary.package_activation_state,
+        summary.enabled_state,
+        summary.status,
+    ].map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
+    const explicitStatus = statusCandidates[0] || '';
+    const resourceIds = Array.isArray(source.resource_ids)
+        ? source.resource_ids.map(value => String(value || '').trim()).filter(Boolean)
+        : [];
+    const installedFileCount = countValue(source.installed_file_count);
+    const expectedFileCount = countValue(source.expected_file_count);
+    const missingCount = countValue(source.missing_count);
+    const modifiedCount = countValue(source.modified_count);
+    const conflictCount = countValue(source.conflict_count);
+    const baselineSource = String(source.baseline_source || '').trim();
+    const partialFlags = [
+        source.package_partial_enabled,
+        source.partial_enabled,
+        source.partially_enabled,
+        summary.package_partial_enabled,
+        summary.partial_enabled,
+        summary.partially_enabled,
+    ];
+    const partialStatuses = [
+        'partial',
+        'partially_enabled',
+        'partial_enabled',
+        'partial_disabled',
+        'mixed',
+        'needs_attention',
+        'conflict',
+        'modified',
+        'missing',
+    ];
+    const disabledStatuses = [
+        'disabled',
+        'stopped',
+        'off',
+        'inactive',
+        'disabled_by_rename',
+        'legacy_disabled',
+    ];
+    const isPartial = partialFlags.some(isTruthyFlag)
+        || statusCandidates.some(value => partialStatuses.includes(value))
+        || missingCount > 0
+        || modifiedCount > 0
+        || conflictCount > 0;
+    const isDisabled = !isPartial && (legacyDisabled || statusCandidates.some(value => disabledStatuses.includes(value)));
+    const key = isPartial ? 'partial' : isDisabled ? 'disabled' : 'enabled';
+    const labelKey = key === 'partial'
+        ? 'resource.sight_status_partial'
+        : key === 'disabled'
+            ? 'resource.sight_status_disabled'
+            : 'resource.sight_status_enabled';
+    const managedByAimerWT = source.managed_by_aimerwt !== undefined
+        ? !!source.managed_by_aimerwt
+        : resourceIds.length > 0 || (explicitStatus && explicitStatus !== 'external');
+
+    return {
+        key,
+        label_key: labelKey,
+        install_status: explicitStatus || (legacyDisabled ? 'legacy_disabled' : managedByAimerWT ? key : 'external'),
+        raw_status: explicitStatus,
+        managed_by_aimerwt: managedByAimerWT,
+        legacy_disabled: legacyDisabled,
+        is_enabled: key === 'enabled',
+        is_partial: key === 'partial',
+        is_disabled: key === 'disabled',
+        is_active: key !== 'disabled',
+        is_external: explicitStatus === 'external' || !managedByAimerWT,
+        installed_file_count: installedFileCount,
+        expected_file_count: expectedFileCount,
+        missing_count: missingCount,
+        modified_count: modifiedCount,
+        conflict_count: conflictCount,
+        baseline_source: baselineSource,
+        resource_ids: resourceIds,
+    };
+};
+
+app._isSightDisabled = function (item) {
+    return this._getSightInstallState(item).is_disabled;
+};
+
+app._get_sight_display_file_count = function (item) {
+    const resource_ids = Array.isArray(item?.resource_ids)
+        ? item.resource_ids.filter(resource_id => String(resource_id || '').trim())
+        : [];
+    const resource_file_count = Number(item?.resource_file_count || 0);
+    return resource_ids.length === 1 && resource_file_count > 0
+        ? resource_file_count
+        : Number(item?.file_count || 0);
+};
+
+app._isSingleSightItem = function (item) {
+    const resourceType = String(item?.resource_type || '').trim().toLowerCase();
+    if (resourceType === 'single') return true;
+    if (resourceType === 'package') return false;
+    if (item?.item_kind === 'external_file') return true;
+    return this._get_sight_display_file_count(item) === 1;
+};
+
+app._isSightAdaptedItem = function (item) {
+    const summary = item?.meta_summary || {};
+    const hasValidMeta = summary.parse_status === 'has_meta';
+    return !!(hasValidMeta || summary.author || summary.package_name || summary.description);
+};
+
+app._normalizeSightTag = function (tag) {
+    const text = String(tag || '').trim().toLowerCase();
+    const normalized = text.replace(/[\s_-]+/g, '');
+    const tagMap = {
+        historical: 'historical',
+        history: 'historical',
+        historic: 'historical',
+        '史实': 'historical',
+        '史實': 'historical',
+        '史实瞄具': 'historical',
+        '史實瞄具': 'historical',
+        '历史还原': 'historical',
+        '歷史還原': 'historical',
+        competitive: 'competitive',
+        competition: 'competitive',
+        esports: 'competitive',
+        '竞技': 'competitive',
+        '競技': 'competitive',
+        '竞技瞄具': 'competitive',
+        '競技瞄具': 'competitive',
+        fun: 'fun',
+        casual: 'fun',
+        entertainment: 'fun',
+        '娱乐': 'fun',
+        '娛樂': 'fun',
+        '娱乐瞄具': 'fun',
+        '娛樂瞄具': 'fun',
+    };
+    return tagMap[text] || tagMap[normalized] || normalized;
+};
+
+app._getSightCategoryTags = function (metaSummary) {
+    const summary = metaSummary || {};
+    const rawTags = Array.isArray(summary.tags) ? summary.tags : [];
+    const defs = [
+        { key: 'historical', label: this.t('resource.sight_tag_historical') },
+        { key: 'competitive', label: this.t('resource.sight_tag_competitive') },
+        { key: 'fun', label: this.t('resource.sight_tag_fun') },
+    ];
+    const tagSet = new Set(rawTags.map(tag => this._normalizeSightTag(tag)).filter(Boolean));
+    return defs.filter(def => tagSet.has(def.key));
+};
+
+app._isSightFeaturedItem = function (item) {
+    const summary = item?.meta_summary || {};
+    return !!(
+        item?.featured ||
+        item?.card_featured ||
+        item?.author_featured ||
+        summary.featured ||
+        summary.card_featured ||
+        summary.author_featured
+    );
+};
+
+app._getSightCardStatus = function (item) {
+    return this._getSightInstallState(item);
+};
+
+app._formatSightCountLabel = function (item) {
+    const count = this._get_sight_display_file_count(item);
+    const known = Number(item?.resource_file_count || 0) > 0 || item?.file_count_known !== false;
+    return this.t(known ? 'resource.sight_count' : 'resource.sight_count_more', { count });
+};
+
+app._getSightModeEmptyCopy = function (hasQuery) {
+    if (hasQuery) {
+        return {
+            title: this.t('resource.no_matching_sights'),
+            desc: this.t('resource.try_another_keyword'),
+        };
+    }
+
+    const mode = this._sightsLibraryMode || 'packages';
+    if (mode === 'single') {
+        return {
+            title: this.t('resource.empty_single_sights'),
+            desc: this.t('resource.empty_single_sights_desc'),
+        };
+    }
+    if (mode === 'enabled') {
+        return {
+            title: this.t('resource.empty_enabled_sights'),
+            desc: this.t('resource.empty_enabled_sights_desc'),
+        };
+    }
+    return {
+        title: this.t('tools.empty_sights'),
+        desc: this.t('tools.empty_sights_desc'),
+    };
+};
+
+app._get_sight_card_priority = function (item) {
+    const is_large_card = !!item?.is_layout_preview
+        || this._isSightFeaturedItem(item || {})
+        || this._isSightAdaptedItem(item || {});
+    return is_large_card ? 1 : 0;
 };
 
 app._getFilteredSights = function () {
     const query = String(this._sightsSearchQuery || "").trim().toLowerCase();
     let items = Array.isArray(this._sightsItems) ? this._sightsItems.slice() : [];
 
+    const libraryMode = this._sightsLibraryMode || 'packages';
+    if (libraryMode === 'single') {
+        items = items.filter(item => this._isSingleSightItem(item));
+    } else if (libraryMode === 'packages') {
+        items = items.filter(item => !this._isSingleSightItem(item));
+    } else if (libraryMode === 'enabled') {
+        items = items.filter(item => this._getSightInstallState(item).is_active);
+    }
+
     /* 状态筛选 */
     const filterStatus = this._sightsFilterStatus || 'all';
     if (filterStatus !== 'all') {
         items = items.filter(item => {
-            const name = String(item.name || '');
-            const isDisabled = !!item.disabled || name.endsWith('.AimerWT_BAN');
-            return filterStatus === 'disabled' ? isDisabled : !isDisabled;
+            const metaSummary = item.meta_summary || {};
+            const installState = this._getSightInstallState(item);
+            if (filterStatus === 'single') return this._isSingleSightItem(item);
+            if (filterStatus === 'packages') return !this._isSingleSightItem(item);
+            if (filterStatus === 'disabled') return installState.is_disabled;
+            if (filterStatus === 'enabled') return installState.is_active;
+            if (filterStatus === 'with_meta') return !!item.has_meta;
+            if (filterStatus === 'without_meta') return !item.has_meta;
+            if (filterStatus === 'with_source') {
+                return Array.isArray(metaSummary.source_hints) && metaSummary.source_hints.length > 0;
+            }
+            if (filterStatus.startsWith('tag_')) {
+                const tag = this._normalizeSightTag(filterStatus.slice(4));
+                return Array.isArray(metaSummary.tags) && metaSummary.tags.map(v => this._normalizeSightTag(v)).includes(tag);
+            }
+            if (filterStatus.startsWith('ammo_')) {
+                const ammo = filterStatus.slice(5);
+                return Array.isArray(metaSummary.ammo_types) && metaSummary.ammo_types.map(v => String(v || '').toLowerCase()).includes(ammo);
+            }
+            return true;
         });
     }
 
     if (query) {
         items = items.filter(item => {
+            const metaSummary = item.meta_summary || {};
             const searchText = [
                 item.display_name,
                 item.folder_name || item.name,
@@ -6132,7 +7640,15 @@ app._getFilteredSights = function () {
                 item.path,
                 item.preview_path,
                 item.file_count,
-                item.size_bytes
+                item.size_bytes,
+                metaSummary.author,
+                metaSummary.package_name,
+                metaSummary.description,
+                metaSummary.tags,
+                metaSummary.ammo_types,
+                metaSummary.recommended_vehicles,
+                metaSummary.source_hints,
+                metaSummary.source_files
             ].filter(v => v !== null && v !== undefined).join(" ").toLowerCase();
             return searchText.includes(query);
         });
@@ -6141,13 +7657,16 @@ app._getFilteredSights = function () {
     const sortKey = this._sightsSortKey || "update_time";
     const asc = !!this._sightsSortAsc;
     items.sort((a, b) => {
+        const priority_diff = this._get_sight_card_priority(b) - this._get_sight_card_priority(a);
+        if (priority_diff !== 0) return priority_diff;
+
         let cmp = 0;
         if (sortKey === "name") {
             const aName = String(a.display_name || a.name || "");
             const bName = String(b.display_name || b.name || "");
             cmp = aName.localeCompare(bName, "zh-CN", { numeric: true });
         } else if (sortKey === "size") {
-            cmp = Number(b.size_bytes || 0) - Number(a.size_bytes || 0);
+            cmp = Number(b.file_count || 0) - Number(a.file_count || 0);
         } else {
             const bTime = Number(b.mtime || b.update_time || 0);
             const aTime = Number(a.mtime || a.update_time || 0);
@@ -6156,79 +7675,2529 @@ app._getFilteredSights = function () {
         return asc ? -cmp : cmp;
     });
 
+
     return items;
 };
 
-app._renderSightsView = function () {
+app._renderSightCardSummary = function (metaSummary) {
+    const tags = this._getSightCategoryTags(metaSummary || {});
+    if (tags.length === 0) return '';
+    return `
+        <div class="sight-card-summary">
+            ${tags.map(tag => `<span class="sight-card-summary-chip sight-tag-${tag.key}">${this._escapeHtml(tag.label)}</span>`).join('')}
+        </div>
+    `;
+};
+
+app._formatSightAmmoTypeLabel = function (value) {
+    const key = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    const labels = {
+        apfsds: 'APFSDS',
+        heat: 'HEAT',
+        heatfs: 'HEAT-FS',
+        aphe: 'APHE',
+        he: 'HE',
+        atgm: 'ATGM',
+        apds: 'APDS',
+        hesh: 'HESH',
+        smoke: this.t('resource.sight_ammo_smoke', {}, '烟雾弹'),
+        universal: this.t('resource.sight_ammo_universal', {}, '通用'),
+        atgmtandem: `ATGM · ${this.t('resource.sight_ammo_tandem', {}, '串联战斗部')}`,
+        atgmhe: 'ATGM · HE',
+        atgmtopattack: `ATGM · ${this.t('resource.sight_ammo_top_attack', {}, '攻顶')}`,
+        atgmvt: 'ATGM · VT',
+    };
+    return labels[key] || String(value || '').trim().replace(/_/g, '-').toUpperCase();
+};
+
+app._getSightHoverText = function (metaSummary, key) {
+    const hoverText = metaSummary?.hover_text;
+    if (!hoverText || typeof hoverText !== 'object') return '';
+    return String(hoverText[key] || '').trim();
+};
+
+app._buildSightTooltipAttr = function (text) {
+    const value = String(text || '').trim();
+    return value ? ` data-sight-desc="${this._escapeHtml(value)}"` : '';
+};
+
+app._normalizeSightResolutionKey = function (value) {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return '';
+    const pair = text.match(/(\d{3,5})\s*[x×*]\s*(\d{3,5})/);
+    if (pair) return `${Number(pair[1])}x${Number(pair[2])}`;
+    const p = text.match(/(\d{3,5})\s*p/);
+    if (p) {
+        const height = Number(p[1]);
+        const widthMap = {
+            720: 1280,
+            1080: 1920,
+            1440: 2560,
+            2160: 3840,
+        };
+        if (widthMap[height]) return `${widthMap[height]}x${height}`;
+    }
+    return text.replace(/\s+/g, '');
+};
+
+app._collectSightResolutionEntries = function (metaSummary, fallbackResolution = '') {
+    const entries = [];
+    const seen = new Set();
+    const appendValue = (value) => {
+        if (Array.isArray(value)) {
+            value.forEach(appendValue);
+            return;
+        }
+        String(value || '')
+            .split(/[,，;；|、\n]+/)
+            .map(item => item.trim())
+            .filter(Boolean)
+            .forEach((label) => {
+                const key = this._normalizeSightResolutionKey(label);
+                if (!key || seen.has(key)) return;
+                seen.add(key);
+                entries.push({ key, label });
+            });
+    };
+
+    appendValue(metaSummary?.target_resolutions);
+    appendValue(metaSummary?.target_resolution);
+    appendValue(fallbackResolution);
+    return entries;
+};
+
+app._getCurrentScreenResolutionKey = function () {
+    const screenInfo = window.screen || {};
+    const ratio = Number(window.devicePixelRatio || 1) || 1;
+    const width = Number(screenInfo.width || 0);
+    const height = Number(screenInfo.height || 0);
+    if (!width || !height) return '';
+    return this._normalizeSightResolutionKey(`${Math.round(width * ratio)}x${Math.round(height * ratio)}`);
+};
+
+app._getSightPreferredResolutionDisplay = function (metaSummary, fallbackResolution = '') {
+    const entries = this._collectSightResolutionEntries(metaSummary, fallbackResolution);
+    if (!entries.length) return null;
+
+    const screenKey = this._getCurrentScreenResolutionKey();
+    const reversedScreenKey = (() => {
+        const parts = screenKey.match(/^(\d+)x(\d+)$/);
+        return parts ? `${parts[2]}x${parts[1]}` : '';
+    })();
+    const matchIndex = entries.findIndex(entry => entry.key === screenKey || entry.key === reversedScreenKey);
+    const primaryIndex = matchIndex >= 0 ? matchIndex : 0;
+    const primary = entries[primaryIndex];
+    const hidden = entries.filter((_, index) => index !== primaryIndex);
+    const customText = this._getSightHoverText(metaSummary, 'target_resolution');
+    const hiddenText = hidden.length ? `还支持：${hidden.map(entry => entry.label).join('、')}` : '';
+    const tooltip = [customText, hiddenText].filter(Boolean).join('；');
+
+    return {
+        primary: primary.label,
+        hidden_count: hidden.length,
+        tooltip,
+    };
+};
+
+app._renderFeaturedSingleSightGunCorrection = function (value, options = {}) {
+    const isLoading = options.loading === true;
+    const state = isLoading ? 'loading' : (value === true ? 'yes' : (value === false ? 'no' : 'unknown'));
+    const text = isLoading ? '读取中' : this._formatSightFeatureFlag(value);
+    return `
+        <span class="sight-featured-single-gun-correction is-${state}">
+            ${this._escapeHtml(this.t('resource.sight_single_detail_gun_correction', {}, '自动抬炮'))}：
+            <b data-sight-gun-correction-value>${this._escapeHtml(text)}</b>
+        </span>
+    `;
+};
+
+app._buildFeaturedSingleSightGunCorrectionTooltip = function (feature, customText = '') {
+    const parts = [];
+    const value = feature?.apply_correction_to_gun;
+    parts.push(`${this.t('resource.sight_single_detail_gun_correction', {}, '自动抬炮')}：${this._formatSightFeatureFlag(value)}`);
+    if (customText) parts.push(String(customText).trim());
+    if (feature?.note) parts.push(`作者说明：${String(feature.note).trim()}`);
+    if (feature?.target_resolution) parts.push(`分辨率：${String(feature.target_resolution).trim()}`);
+    if (feature?.range_min !== null && feature?.range_min !== undefined
+        && feature?.range_max !== null && feature?.range_max !== undefined) {
+        parts.push(`瞄距：${feature.range_min}–${feature.range_max} m`);
+    }
+    return Array.from(new Set(parts.filter(Boolean))).join('；');
+};
+
+app._updateFeaturedSingleSightGunCorrection = function (card, feature) {
+    if (!card?.isConnected) return;
+    const host = card?.querySelector('.sight-featured-single-gun-correction');
+    const valueEl = host?.querySelector('[data-sight-gun-correction-value]');
+    if (!host || !valueEl) return;
+    const declared_value = card.dataset.sightGunCorrectionDeclared;
+    const value = declared_value === 'true'
+        ? true
+        : (declared_value === 'false' ? false : feature?.apply_correction_to_gun);
+    const effective_feature = { ...(feature || {}), apply_correction_to_gun: value };
+    host.classList.remove('is-loading', 'is-yes', 'is-no', 'is-unknown');
+    host.classList.add(value === true ? 'is-yes' : (value === false ? 'is-no' : 'is-unknown'));
+    valueEl.textContent = this._formatSightFeatureFlag(value);
+    const row = host.closest('.sight-featured-single-info-row.is-gun-correction');
+    if (row) {
+        const customText = row.dataset.sightGunCorrectionCustom || '';
+        const tooltip = this._buildFeaturedSingleSightGunCorrectionTooltip(effective_feature, customText);
+        row.dataset.sightDesc = tooltip;
+        row.setAttribute('aria-label', tooltip);
+    }
+};
+
+app._loadFeaturedSingleSightGunCorrection = async function (card) {
+    if (!card?.isConnected) return;
+    const encodedName = card.dataset.sightEnabledNameEncoded || card.dataset.sightNameEncoded || '';
+    const sightName = decodeURIComponent(encodedName);
+    if (!sightName) {
+        this._updateFeaturedSingleSightGunCorrection(card, null);
+        return;
+    }
+
+    const cacheKey = `${sightName}|${card.dataset.sightMtime || ''}`;
+    this._sightGunCorrectionCache ||= new Map();
+    this._sightGunCorrectionPending ||= new Map();
+    if (this._sightGunCorrectionCache.has(cacheKey)) {
+        this._updateFeaturedSingleSightGunCorrection(card, this._sightGunCorrectionCache.get(cacheKey));
+        return;
+    }
+
+    const api = window.pywebview?.api?.get_sight_detail;
+    if (!api) {
+        this._updateFeaturedSingleSightGunCorrection(card, null);
+        return;
+    }
+
+    let request = this._sightGunCorrectionPending.get(cacheKey);
+    if (!request) {
+        request = window.pywebview.api.get_sight_detail(sightName).then(detail => {
+            if (!detail || detail.success === false) return null;
+            return Array.isArray(detail.blk_features) ? (detail.blk_features[0] || null) : null;
+        }).catch(() => null);
+        this._sightGunCorrectionPending.set(cacheKey, request);
+    }
+
+    const feature = await request;
+    this._sightGunCorrectionPending.delete(cacheKey);
+    if (feature) this._sightGunCorrectionCache.set(cacheKey, feature);
+    this._updateFeaturedSingleSightGunCorrection(card, feature);
+};
+
+app.observeFeaturedSingleSightGunCorrection = function (items = []) {
+    const cards = Array.from(items).filter(item => item?.matches?.('.sight-package-card.is-featured-single'));
+    if (!cards.length) return;
+
+    if (!this._sightGunCorrectionObserver && 'IntersectionObserver' in window) {
+        this._sightGunCorrectionObserver = new IntersectionObserver(entries => {
+            entries.forEach(entry => {
+                if (!entry.isIntersecting) return;
+                this._sightGunCorrectionObserver.unobserve(entry.target);
+                this._loadFeaturedSingleSightGunCorrection(entry.target);
+            });
+        }, { rootMargin: '120px 0px' });
+    }
+
+    cards.forEach(card => {
+        if (card.dataset.layoutPreview === '1') {
+            this._updateFeaturedSingleSightGunCorrection(card, {
+                apply_correction_to_gun: true,
+                target_resolution: '2560x1440',
+                range_min: 200,
+                range_max: 6000,
+                note: '布局测试炮镜的作者补充说明。',
+            });
+            return;
+        }
+        const sightName = decodeURIComponent(card.dataset.sightEnabledNameEncoded || card.dataset.sightNameEncoded || '');
+        const cacheKey = `${sightName}|${card.dataset.sightMtime || ''}`;
+        if (this._sightGunCorrectionCache?.has(cacheKey)) {
+            this._updateFeaturedSingleSightGunCorrection(card, this._sightGunCorrectionCache.get(cacheKey));
+        } else if (this._sightGunCorrectionObserver) {
+            this._sightGunCorrectionObserver.observe(card);
+        } else {
+            this._loadFeaturedSingleSightGunCorrection(card);
+        }
+    });
+};
+
+app._renderFeaturedSingleSightResolution = function (metaSummary, fallbackResolution = '') {
+    const display = this._getSightPreferredResolutionDisplay(metaSummary, fallbackResolution);
+    if (!display) return '';
+    const tooltipAttr = this._buildSightTooltipAttr(display.tooltip);
+    const moreHtml = display.hidden_count > 0
+        ? `<span class="sight-featured-single-resolution-more">+${display.hidden_count}</span>`
+        : '';
+    return `
+        <div class="sight-featured-single-resolution-wrap"${tooltipAttr}>
+            <span class="sight-featured-single-resolution">${this._escapeHtml(display.primary)}</span>
+            ${moreHtml}
+        </div>
+    `;
+};
+
+app._renderFeaturedSingleSightLinks = function (metaSummary, encodedName, options = {}) {
+    const links = [
+        { key: 'video', label: '视频', icon: 'ri-play-circle-line', url: metaSummary?.link_video },
+        { key: 'wtlive', label: 'WT', icon: 'ri-global-line', url: metaSummary?.link_wtlive },
+        { key: 'bili', label: 'B站', icon: 'ri-bilibili-line', url: metaSummary?.link_bilibili },
+    ];
+    const buttonHtml = links.map(item => {
+        const url = String(item.url || '').trim();
+        const disabled = url ? '' : ' disabled aria-disabled="true"';
+        const title = url ? item.label : `${item.label} 暂未配置`;
+        return `
+            <button class="sight-featured-link-btn is-${item.key}${url ? '' : ' is-disabled'}" type="button"${disabled}
+                    data-url="${this._escapeHtml(url)}"
+                    title="${this._escapeHtml(title)}"
+                    onclick="event.stopPropagation(); if (!this.disabled) app.openExternal(this.dataset.url || '')">
+                <i class="${item.icon}"></i>
+                <span>${this._escapeHtml(item.label)}</span>
+            </button>
+        `;
+    }).join('');
+    const deleteLabel = this.t('resource.delete_title', { label: this.t('resource.label_sights') });
+    const deleteDisabled = options.is_layout_preview ? ' disabled aria-disabled="true"' : '';
+    const deleteTitle = options.is_layout_preview ? '布局测试卡片' : deleteLabel;
+    const deleteButtonHtml = `
+        <button class="sight-featured-link-btn is-delete${options.is_layout_preview ? ' is-disabled' : ''}" type="button"${deleteDisabled}
+                data-sight-name-encoded="${this._escapeHtml(encodedName || '')}"
+                title="${this._escapeHtml(deleteTitle)}"
+                onclick="event.stopPropagation(); if (!this.disabled) app.delete_single_resource('sights', decodeURIComponent(this.dataset.sightNameEncoded || ''))">
+            <i class="ri-delete-bin-line"></i>
+            <span>${this._escapeHtml(deleteLabel)}</span>
+        </button>
+    `;
+    return `<div class="sight-featured-single-links">${buttonHtml}${deleteButtonHtml}</div>`;
+};
+
+app.openSightCardActionMenu = function (button) {
+    if (!button) return;
+    this.closeSightCardActionMenu();
+    const encodedName = button.dataset.sightNameEncoded || '';
+    const encodedEnabledName = button.dataset.sightEnabledNameEncoded || encodedName;
+    const cover = button.dataset.sightCover || '';
+    const sightKind = button.dataset.sightKind || 'single';
+    const canEdit = button.dataset.sightCanEdit !== 'false';
+    const editDisabled = canEdit ? '' : ' disabled aria-disabled="true"';
+    const menu = document.createElement('div');
+    menu.className = 'sight-card-action-menu';
+    menu.dataset.sightNameEncoded = encodedName;
+    menu.dataset.sightEnabledNameEncoded = encodedEnabledName;
+    menu.dataset.sightCover = cover;
+    menu.dataset.sightKind = sightKind;
+    menu.innerHTML = `
+        <button type="button" data-action="edit"${editDisabled}><i class="ri-edit-line"></i><span>${this._escapeHtml(this.t('resource.sight_card_menu_edit', {}, '编辑页'))}</span></button>
+        <button type="button" data-action="detail"><i class="ri-file-list-3-line"></i><span>${this._escapeHtml(this.t('resource.sight_card_menu_detail', {}, '详情页'))}</span></button>
+        <button type="button" data-action="open-folder"><i class="ri-folder-open-line"></i><span>${this._escapeHtml(this.t('resource.sight_card_menu_open_folder', {}, '打开文件夹'))}</span></button>
+    `;
+    menu.addEventListener('click', (event) => this.handleSightCardActionMenuClick(event));
+    document.body.appendChild(menu);
+    this._positionSightCardActionMenu(menu, button);
+    this._activeSightCardActionMenu = menu;
+    requestAnimationFrame(() => menu.classList.add('is-open'));
+    this._boundCloseSightCardActionMenu = (event) => {
+        if (this._activeSightCardActionMenu && !this._activeSightCardActionMenu.contains(event.target)) {
+            this.closeSightCardActionMenu();
+        }
+    };
+    setTimeout(() => document.addEventListener('click', this._boundCloseSightCardActionMenu), 0);
+};
+
+app.closeSightCardActionMenu = function () {
+    if (this._boundCloseSightCardActionMenu) {
+        document.removeEventListener('click', this._boundCloseSightCardActionMenu);
+        this._boundCloseSightCardActionMenu = null;
+    }
+    if (this._activeSightCardActionMenu) {
+        const menu = this._activeSightCardActionMenu;
+        this._activeSightCardActionMenu = null;
+        const removeMenu = () => {
+            menu.removeEventListener('transitionend', handleTransitionEnd);
+            menu.remove();
+        };
+        const handleTransitionEnd = (event) => {
+            if (event.target === menu && event.propertyName === 'opacity') removeMenu();
+        };
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+            removeMenu();
+            return;
+        }
+        menu.addEventListener('transitionend', handleTransitionEnd);
+        menu.classList.add('is-closing');
+        menu.classList.remove('is-open');
+        setTimeout(removeMenu, 180);
+    }
+};
+
+app.handleSightCardActionMenuClick = async function (event) {
+    event.stopPropagation();
+    const item = event.target.closest('[data-action]');
+    const menu = event.currentTarget;
+    if (!item || !menu) return;
+    if (item.disabled) return;
+    const action = item.dataset.action;
+    const name = decodeURIComponent(menu.dataset.sightNameEncoded || '');
+    const enabledName = decodeURIComponent(menu.dataset.sightEnabledNameEncoded || menu.dataset.sightNameEncoded || '');
+    const cover = menu.dataset.sightCover || '';
+    const sightKind = menu.dataset.sightKind || 'single';
+    this.closeSightCardActionMenu();
+
+    if (action === 'edit') {
+        this.openEditSightModal(name, cover);
+        return;
+    }
+    if (action === 'detail') {
+        if (sightKind === 'package') {
+            await this.toggleSightDetail(enabledName || name);
+        } else {
+            await this.openSightSingleDetail(enabledName || name, { source: { type: 'list' } });
+        }
+        return;
+    }
+    if (action === 'open-folder') {
+        await this.open_sight_card_folder(enabledName || name);
+    }
+};
+
+app.open_sight_card_folder = async function (sight_name) {
+    const normalized_name = String(sight_name || '').trim();
+    if (!normalized_name) return;
+    const folder_api = window.pywebview?.api?.open_sight_folder_by_name;
+    if (!folder_api) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return;
+    }
+    try {
+        const result = await folder_api(normalized_name);
+        if (!result || result.success === false) {
+            this.showAlert(this.t('common.error'), result?.msg || this.t('resource.open_failed', { label: this.t('resource.label_sights') }), 'error');
+        }
+    } catch (error) {
+        this.showAlert(this.t('common.error'), error?.message || String(error), 'error');
+    }
+};
+
+app._positionSightCardActionMenu = function (menu, button) {
+    const rect = button.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const margin = 8;
+    const left = Math.max(margin, Math.min(window.innerWidth - menuRect.width - margin, rect.right - menuRect.width));
+    const top = Math.max(margin, Math.min(window.innerHeight - menuRect.height - margin, rect.bottom + margin));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+};
+
+app.bindSightDescriptionTooltip = function () {
+    const listContainer = document.getElementById('sights-list');
+    if (!listContainer || this._sightDescriptionTooltipBound) return;
+    this._sightDescriptionTooltipBound = true;
+
+    const restoreSightCardTitle = () => {
+        const card = this._sightTooltipTitleOwner;
+        if (!card) return;
+        if (Object.prototype.hasOwnProperty.call(card.dataset, 'sightTooltipOriginalTitle')) {
+            card.setAttribute('title', card.dataset.sightTooltipOriginalTitle);
+            delete card.dataset.sightTooltipOriginalTitle;
+        }
+        this._sightTooltipTitleOwner = null;
+    };
+
+    const suppressSightCardTitle = (descEl) => {
+        const card = descEl.closest('.sight-package-card[title]');
+        if (!card) return;
+        if (this._sightTooltipTitleOwner === card) return;
+        restoreSightCardTitle();
+        card.dataset.sightTooltipOriginalTitle = card.getAttribute('title') || '';
+        card.removeAttribute('title');
+        this._sightTooltipTitleOwner = card;
+    };
+
+    listContainer.addEventListener('mouseover', (event) => {
+        const descEl = event.target.closest('[data-sight-desc]');
+        if (!descEl || !listContainer.contains(descEl)) return;
+        if (descEl.contains(event.relatedTarget)) return;
+        const text = descEl.dataset.sightDesc || '';
+        if (!text) return;
+        suppressSightCardTitle(descEl);
+        app.showTooltip(descEl, text);
+        this._sightDescriptionTooltipTarget = descEl;
+    });
+
+    listContainer.addEventListener('mouseout', (event) => {
+        const descEl = event.target.closest('[data-sight-desc]');
+        if (!descEl || !listContainer.contains(descEl)) return;
+        if (descEl.contains(event.relatedTarget)) return;
+        const nextDescEl = event.relatedTarget?.closest?.('[data-sight-desc]');
+        if (nextDescEl && listContainer.contains(nextDescEl)) return;
+        if (this._sightDescriptionTooltipTarget === descEl) {
+            app.hideTooltip();
+            restoreSightCardTitle();
+            this._sightDescriptionTooltipTarget = null;
+        }
+    });
+};
+
+app._getSightsWindowSize = function () {
+    const mode = this._sightsLibraryMode || 'packages';
+    return mode === 'packages' ? 24 : Number(this._sightsWindowSize || 96);
+};
+
+app._resetSightsWindow = function () {
+    this._sightsVisibleLimit = this._getSightsWindowSize();
+};
+
+app._getSightsRenderWindow = function (items) {
+    items = Array.isArray(items) ? items : [];
+    const total = items.length;
+    const pageSize = Math.max(1, Number(this._getSightsWindowSize() || 96));
+    const currentLimit = Number(this._sightsVisibleLimit || 0);
+    const visibleLimit = Math.max(pageSize, Math.min(total, currentLimit || pageSize));
+    this._sightsVisibleLimit = visibleLimit;
+    return {
+        items: items.slice(0, visibleLimit),
+        visibleLimit,
+        total,
+        hasMore: visibleLimit < total,
+        remaining: Math.max(0, total - visibleLimit),
+    };
+};
+
+app.loadMoreSightsWindow = function () {
+    const pageSize = Math.max(1, Number(this._getSightsWindowSize() || 96));
+    this._sightsVisibleLimit = Number(this._sightsVisibleLimit || pageSize) + pageSize;
+    this._renderSightsView({ replay: true, reason: 'load_more' });
+};
+
+app._renderSightsView = function (revealOptions = {}) {
     const listEl = document.getElementById('sights-list');
     const countEl = document.getElementById('sights-count');
     if (!listEl || !countEl) return;
 
+    this._sightGunCorrectionObserver?.disconnect();
+    this._sightsRenderSeq = (this._sightsRenderSeq || 0) + 1;
+    const seq = this._sightsRenderSeq;
     const items = this._getFilteredSights();
+    this._updateSightsSelectionCache(items);
+    const renderWindow = this._getSightsRenderWindow(items);
+    const visibleItems = renderWindow.items;
+    this._sightsCurrentWindowItems = visibleItems;
+    const libraryMode = this._sightsLibraryMode || 'packages';
+    listEl.dataset.sightsMode = libraryMode;
+    this.bindSightDescriptionTooltip();
     this.updateResourceSelectionSummary('sights', items.length);
-
-    const selectAll = document.getElementById('sights-select-all');
-    if (selectAll) {
-        selectAll.checked = false;
-        selectAll.indeterminate = false;
-    }
 
     if (items.length === 0) {
         const hasQuery = String(this._sightsSearchQuery || "").trim().length > 0;
+        const emptyCopy = this._getSightModeEmptyCopy(hasQuery);
         listEl.innerHTML = `
             <div class="res-empty-state">
                 <i class="ri-crosshair-line"></i>
-                <h3>${hasQuery ? this.t('resource.no_matching_sights') : this.t('tools.empty_sights')}</h3>
-                <p>${hasQuery ? this.t('resource.try_another_keyword') : this.t('tools.empty_sights_desc')}</p>
+                <h3>${emptyCopy.title}</h3>
+                <p>${emptyCopy.desc}</p>
             </div>
         `;
         this.updateResourceSelectionSummary('sights', 0);
+        this.applyResourceReveal(listEl, {
+            item_selector: '.res-empty-state',
+            max_animated: 1,
+            once_key: 'sights-list',
+            ...revealOptions,
+        });
+        this._finish_sights_render();
         return;
     }
 
     const placeholder = 'assets/card_image_small.png';
-    listEl.innerHTML = items.map(item => {
-        const folderName = String(item.name || "");
-        const isDisabled = !!item.disabled || folderName.endsWith(".AimerWT_BAN");
-        const enabledName = String(item.enabled_name || (isDisabled ? folderName.replace(/\.AimerWT_BAN$/, "") : folderName));
-        const displayName = String(item.display_name || enabledName);
-        const cover = item.cover_url || placeholder;
-        const isDefaultCover = !!item.cover_is_default;
-        const safeDisplayName = app._escapeHtml(displayName);
-        const disabledLabel = app._escapeHtml(app.t('resource.status_disabled'));
-        const cardTitle = app._escapeHtml(displayName === folderName
-            ? String(item.path || "")
-            : `${displayName}\n${app.t('resource.original_folder_title', { name: folderName })}\n${item.path || ""}`);
-        const encodedName = encodeURIComponent(folderName);
-        return `
-            <div class="small-card${isDisabled ? ' is-disabled-resource' : ''}" title="${cardTitle}" data-sight-name-encoded="${encodedName}" data-disabled="${isDisabled ? '1' : '0'}">
-                <div class="small-card-img-wrapper" style="position:relative;">
-                    <img class="small-card-img${isDefaultCover ? ' is-default-cover' : ''}" src="${cover}" alt="">
-                    ${isDisabled ? `<div class="resource-status-badge is-disabled">${disabledLabel}</div>` : ''}
-                    <div class="skin-edit-overlay">
-                        <button class="btn-v2 icon-only small secondary skin-edit-btn"
-                                data-sight-name-encoded="${encodedName}"
-                                onclick="app.openEditSightModal(decodeURIComponent(this.dataset.sightNameEncoded || ''), '${cover.replace(/'/g, "\\'")}')">
-                            <i class="ri-edit-line"></i>
-                        </button>
+    const CHUNK_SIZE = 24;
+    let currentIndex = 0;
+    listEl.innerHTML = '';
+    const revealStartedAt = window.performance?.now?.() || Date.now();
+    const loadMoreHtml = renderWindow.hasMore ? `
+        <div class="sights-window-more" data-sights-load-more>
+            <button class="btn-v2 secondary sight-load-more-btn" type="button" onclick="app.loadMoreSightsWindow()">
+                <i class="ri-add-line"></i>
+                <span>显示更多 (${renderWindow.visibleLimit}/${renderWindow.total})</span>
+            </button>
+        </div>
+    ` : '';
+
+    const renderChunk = () => {
+        if (seq !== this._sightsRenderSeq) return;
+
+        const chunk = visibleItems.slice(currentIndex, currentIndex + CHUNK_SIZE);
+        const html = chunk.map(item => {
+            const folderName = String(item.name || "");
+            const installState = app._getSightInstallState(item);
+            const isDisabled = installState.is_disabled;
+            const enabledName = String(item.enabled_name || (isDisabled ? folderName.replace(/\.AimerWT_BAN$/, "") : folderName));
+            const metaSummary = item.meta_summary || {};
+            const displayName = String(metaSummary.package_name || item.display_name || enabledName);
+            const author = String(metaSummary.author || '').trim() || app.t('resource.sight_unknown_author');
+            const description = String(metaSummary.description || '').trim() || app.t('resource.sight_card_no_description');
+            const isSingleSight = app._isSingleSightItem(item);
+            const isLayoutPreview = !!item.is_layout_preview;
+            const isAimerwtAdaptedSight = app._isSightAdaptedItem(item);
+            const isUnifiedPackage = !isSingleSight;
+            const isFeaturedSight = isUnifiedPackage || isAimerwtAdaptedSight || app._isSightFeaturedItem(item) || isLayoutPreview;
+            const isFeaturedSingle = isSingleSight && isFeaturedSight;
+            const isCompactSingle = isSingleSight && !isFeaturedSight;
+            const typeLabel = app.t(isSingleSight ? 'resource.sight_type_single' : 'resource.sight_type_package');
+            const status = installState;
+            const statusLabel = app.t(status.label_key);
+            const countLabel = app._formatSightCountLabel(item);
+            const detailActionLabel = app.t(isSingleSight ? 'resource.view_sight_content' : 'resource.view_sight_package_content');
+            const cover = item.cover_url || placeholder;
+            const isDefaultCover = !!item.cover_is_default || !item.cover_url;
+            const size_text = app._formatBytes(item.size_bytes || 0);
+            const safeDisplayName = app._escapeHtml(displayName);
+            const safeAuthor = app._escapeHtml(author);
+            const safeDescription = app._escapeHtml(description);
+            const safeTypeLabel = app._escapeHtml(typeLabel);
+            const safeStatusLabel = app._escapeHtml(statusLabel);
+            const safeCountLabel = app._escapeHtml(countLabel);
+            const safeDetailActionLabel = app._escapeHtml(detailActionLabel);
+            const safe_more_action_label = app._escapeHtml(app.t('resource.sight_card_menu_more', {}, '\u66f4\u591a\u64cd\u4f5c'));
+            const safe_edit_action_label = app._escapeHtml(app.t('resource.sight_card_menu_edit', {}, '\u7f16\u8f91\u9875'));
+            const safe_detail_quick_action_label = app._escapeHtml(app.t('resource.sight_card_menu_detail', {}, '\u8be6\u60c5\u9875'));
+            const safe_open_folder_action_label = app._escapeHtml(app.t('resource.sight_card_menu_open_folder', {}, '\u6253\u5f00\u6587\u4ef6\u5939'));
+            const selectionKey = app._getSightItemStableKey(item);
+            const canEdit = item.can_edit !== false;
+            const cardTitle = app._escapeHtml(displayName === folderName
+                ? String(item.path || "")
+                : `${displayName}\n${app.t('resource.original_folder_title', { name: folderName })}\n${item.path || ""}`);
+            const encodedName = encodeURIComponent(folderName);
+            const encodedEnabledName = encodeURIComponent(enabledName);
+            const stateBadgeHtml = `<span class="sight-state-badge is-${status.key}"><i></i>${safeStatusLabel}</span>`;
+            const imageStateBadgeHtml = `<div class="sight-image-status">${stateBadgeHtml}</div>`;
+            const compactFooterHtml = `
+                <div class="sight-compact-footer">
+                    <div class="small-card-title sight-package-name" title="${safeDisplayName}">${safeDisplayName}</div>
+                </div>
+            `;
+            const featuredSummaryHtml = app._renderSightCardSummary(metaSummary);
+            const declaredGunCorrection = typeof metaSummary.apply_correction_to_gun === 'boolean'
+                ? metaSummary.apply_correction_to_gun : null;
+            const featuredGunCorrectionHtml = app._renderFeaturedSingleSightGunCorrection(
+                isLayoutPreview ? true : declaredGunCorrection,
+                { loading: !isLayoutPreview && declaredGunCorrection === null },
+            );
+            const featuredResolutionHtml = app._renderFeaturedSingleSightResolution(metaSummary, isLayoutPreview ? '2560x1440' : '');
+            const featuredResolutionRowHtml = featuredResolutionHtml ? `
+                <div class="sight-featured-single-info-row is-resolution">
+                    <i class="ri-aspect-ratio-line"></i>
+                    ${featuredResolutionHtml}
+                </div>
+            ` : '';
+            const featuredSummaryTooltipAttr = app._buildSightTooltipAttr(app._getSightHoverText(metaSummary, 'sight_type'));
+            const featuredGunCorrectionTooltip = app._getSightHoverText(metaSummary, 'gun_correction')
+                || app._getSightHoverText(metaSummary, 'apply_correction_to_gun');
+            const featuredGunCorrectionTooltipAttr = app._buildSightTooltipAttr(featuredGunCorrectionTooltip);
+            const featuredGunCorrectionCustomAttr = featuredGunCorrectionTooltip
+                ? ' data-sight-gun-correction-custom="' + app._escapeHtml(featuredGunCorrectionTooltip) + '"'
+                : '';
+            const featuredSummaryRowHtml = featuredSummaryHtml ? `
+                <div class="sight-featured-single-info-row is-sight-tags"${featuredSummaryTooltipAttr}>
+                    <i class="ri-crosshair-2-line"></i>
+                    ${featuredSummaryHtml}
+                </div>
+            ` : '';
+            const featuredGunCorrectionRowHtml = `
+                <div class="sight-featured-single-info-row is-gun-correction"${featuredGunCorrectionTooltipAttr}${featuredGunCorrectionCustomAttr}>
+                    <i class="ri-arrow-up-circle-line"></i>
+                    ${featuredGunCorrectionHtml}
+                </div>
+            `;
+            const standardBodyHtml = `
+                <div class="small-card-title sight-package-name" title="${safeDisplayName}">${safeDisplayName}</div>
+                <div class="sight-package-author sight-package-author-with-size">
+                    <span class="sight-package-author-main" title="${safeAuthor}"><i class="ri-user-3-line"></i>${safeAuthor}</span>
+                    <span class="sight-package-size" title="${size_text}">${size_text}</span>
+                </div>
+                <div class="sight-package-desc" title="" aria-label="${safeDescription}" data-sight-desc="${safeDescription}">${safeDescription}</div>
+                ${app._renderSightCardSummary(metaSummary)}
+                <div class="small-card-meta sight-package-meta">
+                    ${stateBadgeHtml}
+                    <span class="sight-count-badge"><i class="ri-crosshair-2-line"></i>${safeCountLabel}</span>
+                    ${libraryMode === 'enabled' ? `<span class="sight-type-badge">${safeTypeLabel}</span>` : ''}
+                </div>
+            `;
+            const featuredSingleBodyHtml = `
+                <div class="sight-featured-single-content">
+                    <div class="sight-featured-single-main">
+                        <div class="small-card-title sight-package-name" title="${safeDisplayName}">${safeDisplayName}</div>
+                        <div class="sight-package-author" title="${safeAuthor}"><i class="ri-user-3-line"></i>${safeAuthor}</div>
+                        ${featuredSummaryRowHtml}
+                        ${featuredGunCorrectionRowHtml}
+                        ${featuredResolutionRowHtml}
+                        <div class="sight-package-desc" title="" aria-label="${safeDescription}" data-sight-desc="${safeDescription}">${safeDescription}</div>
+                    </div>
+                    <div class="small-card-meta sight-package-meta sight-featured-single-footer">
+                        ${app._renderFeaturedSingleSightLinks(metaSummary, encodedName, { is_layout_preview: isLayoutPreview })}
                     </div>
                 </div>
-                <div class="small-card-body">
-                    <div class="small-card-title" title="${safeDisplayName}">${safeDisplayName}</div>
-                    <div class="small-card-meta">
-                        <span><i class="ri-file-list-3-line"></i> ${app._escapeHtml(app.t('resource.file_count', { count: item.file_count }))}</span>
+            `;
+            const layoutPreviewActionHtml = `
+                <div class="sight-package-actions is-layout-preview-actions">
+                    <button class="sight-card-main-action" type="button" disabled title="布局测试卡片">
+                        <i class="ri-folder-open-line"></i><span>${safeDetailActionLabel}</span>
+                    </button>
+                    <button class="sight-card-more-action" type="button" disabled title="布局测试卡片">
+                        <i class="ri-more-2-fill"></i>
+                    </button>
+                </div>
+            `;
+            const singleActionHtml = `
+                <div class="sight-package-actions is-single-actions sight-card-quick-actions" role="group" aria-label="${safe_more_action_label}">
+                    <button class="sight-card-more-action sight-card-quick-action" type="button" ${canEdit ? '' : 'disabled aria-disabled="true"'}
+                            data-sight-quick-action="edit"
+                            data-sight-name-encoded="${encodedName}"
+                            data-sight-cover="${app._escapeHtml(cover)}"
+                            onclick="event.stopPropagation(); app.openEditSightModal(decodeURIComponent(this.dataset.sightNameEncoded || ''), this.dataset.sightCover || '')"
+                            title="${safe_edit_action_label}" aria-label="${safe_edit_action_label}">
+                        <i class="ri-edit-line"></i>
+                    </button>
+                    <button class="sight-card-more-action sight-card-quick-action" type="button"
+                            data-sight-quick-action="detail"
+                            data-sight-enabled-name-encoded="${encodedEnabledName}"
+                            onclick="event.stopPropagation(); app.openSightSingleDetail(decodeURIComponent(this.dataset.sightEnabledNameEncoded || ''), { source: { type: 'list' } })"
+                            title="${safe_detail_quick_action_label}" aria-label="${safe_detail_quick_action_label}">
+                        <i class="ri-file-list-3-line"></i>
+                    </button>
+                    <button class="sight-card-more-action sight-card-quick-action" type="button"
+                            data-sight-quick-action="open-folder"
+                            data-sight-enabled-name-encoded="${encodedEnabledName}"
+                            onclick="event.stopPropagation(); app.open_sight_card_folder(decodeURIComponent(this.dataset.sightEnabledNameEncoded || ''))"
+                            title="${safe_open_folder_action_label}" aria-label="${safe_open_folder_action_label}">
+                        <i class="ri-folder-open-line"></i>
+                    </button>
+                </div>
+            `;
+            const packageActionHtml = `
+                <div class="sight-package-actions">
+                    <button class="sight-card-main-action" type="button"
+                            data-sight-enabled-name-encoded="${encodedEnabledName}"
+                            onclick="event.stopPropagation(); app.toggleSightDetail(decodeURIComponent(this.dataset.sightEnabledNameEncoded || ''))"
+                            title="${safeDetailActionLabel}" aria-label="${safeDetailActionLabel}">
+                        <i class="ri-folder-open-line"></i><span>${safeDetailActionLabel}</span>
+                    </button>
+                    <button class="sight-card-more-action sight-card-action-menu-trigger" type="button"
+                            data-sight-name-encoded="${encodedName}"
+                            data-sight-enabled-name-encoded="${encodedEnabledName}"
+                            data-sight-cover="${app._escapeHtml(cover)}"
+                            data-sight-kind="package"
+                            data-sight-can-edit="${canEdit ? 'true' : 'false'}"
+                            onclick="event.stopPropagation(); app.openSightCardActionMenu(this)"
+                            title="${safe_more_action_label}" aria-label="${safe_more_action_label}">
+                        <i class="ri-more-2-fill"></i>
+                    </button>
+                </div>
+            `;
+            const actionHtml = isSingleSight ? singleActionHtml : packageActionHtml;
+            return `
+                <div class="small-card sight-package-card${isDisabled ? ' is-disabled-resource' : ''}${isFeaturedSight ? ' is-featured' : ''}${isFeaturedSingle ? ' is-featured-single' : ''}${isCompactSingle ? ' is-compact-single' : ''}${isLayoutPreview ? ' is-layout-preview' : ''}" title="${cardTitle}" data-resource-name-encoded="${encodedEnabledName}" data-sight-name-encoded="${encodedName}" data-sight-enabled-name-encoded="${encodedEnabledName}" data-sight-selection-key="${app._escapeHtml(selectionKey)}" data-sight-mtime="${Number(item.mtime || 0)}" data-disabled="${isDisabled ? '1' : '0'}" data-sight-kind="${isSingleSight ? 'single' : 'package'}" data-sight-featured="${isFeaturedSight ? '1' : '0'}" data-layout-preview="${isLayoutPreview ? '1' : '0'}" data-sight-gun-correction-declared="${declaredGunCorrection === null ? '' : String(declaredGunCorrection)}" data-sight-activation-state="${status.key}" data-install-status="${app._escapeHtml(installState.install_status)}" data-managed-by-aimerwt="${installState.managed_by_aimerwt ? '1' : '0'}" data-legacy-disabled="${installState.legacy_disabled ? '1' : '0'}" data-sight-resource-count="${installState.resource_ids.length}">
+                    <div class="small-card-img-wrapper" style="position:relative;">
+                        <img class="small-card-img${isDefaultCover ? ' is-default-cover' : ''}" src="${cover}" loading="lazy" alt="">
+                        ${(isCompactSingle || isFeaturedSingle) ? imageStateBadgeHtml : ''}
+                        ${(isCompactSingle || isFeaturedSight) ? actionHtml : ''}
+                    </div>
+                    <div class="small-card-body sight-package-card-body">
+                        ${isCompactSingle ? compactFooterHtml : (isFeaturedSingle ? featuredSingleBodyHtml : standardBodyHtml)}
+                        ${(isCompactSingle || isFeaturedSight) ? '' : actionHtml}
+                    </div>
+                </div>
+                <div class="sight-detail-panel" data-sight-detail-host="${encodedEnabledName}" hidden></div>
+            `;
+        }).join('');
+
+        listEl.insertAdjacentHTML('beforeend', html);
+        const newItems = Array.from(listEl.querySelectorAll('.small-card')).slice(currentIndex, currentIndex + chunk.length);
+        this.applyResourceReveal(listEl, {
+            items: newItems,
+            order_offset: currentIndex,
+            reveal_started_at: revealStartedAt,
+            max_animated: 32,
+            stagger_ms: 62.5,
+            reveal_window_ms: 2000,
+            duration_ms: 180,
+            defer_remaining: true,
+            once_key: 'sights-list',
+            ...revealOptions,
+        });
+        this.observeFeaturedSingleSightGunCorrection(newItems);
+        currentIndex += CHUNK_SIZE;
+        this._applySightSelectionState();
+        this.updateResourceSelectionSummary('sights', items.length);
+        this._restoreSightDetailAfterListRefresh();
+        if (currentIndex < visibleItems.length) {
+            requestAnimationFrame(renderChunk);
+        } else {
+            if (loadMoreHtml) {
+                listEl.insertAdjacentHTML('beforeend', loadMoreHtml);
+            }
+            this._finish_sights_render();
+            this.requestSightsSourceIndex();
+        }
+    };
+
+    renderChunk();
+};
+
+app._findSightCard = function (sight_name) {
+    const encoded = encodeURIComponent(String(sight_name || ""));
+    const cards = Array.from(document.querySelectorAll('#sights-list .small-card'));
+    return cards.find(card => card.dataset.sightEnabledNameEncoded === encoded || card.dataset.sightNameEncoded === encoded) || null;
+};
+
+app._findSightDetailHost = function (sight_name) {
+    const encoded = encodeURIComponent(String(sight_name || ""));
+    const hosts = Array.from(document.querySelectorAll('#sights-list [data-sight-detail-host]'));
+    return hosts.find(host => host.dataset.sightDetailHost === encoded) || null;
+};
+
+app._formatSightMetaValue = function (value) {
+    if (Array.isArray(value)) return value.filter(Boolean).join('、');
+    if (value && typeof value === 'object') {
+        const parts = [];
+        if (value.value !== undefined && value.value !== null && value.value !== '') parts.push(String(value.value));
+        if (value.unit) parts.push(String(value.unit));
+        if (value.note) parts.push(String(value.note));
+        return parts.join(' ');
+    }
+    return value === undefined || value === null ? '' : String(value);
+};
+
+app._renderSightMetaPills = function (label, value, icon) {
+    const text = this._formatSightMetaValue(value).trim();
+    if (!text) return '';
+    return `
+        <span class="sight-meta-pill" title="${this._escapeHtml(label)}">
+            <i class="${icon}"></i>
+            <b>${this._escapeHtml(label)}</b>
+            ${this._escapeHtml(text)}
+        </span>
+    `;
+};
+
+app._formatSightFeatureFlag = function (value) {
+    if (value === true) return '是';
+    if (value === false) return '否';
+    return '未知';
+};
+
+app._renderSightFeatureRow = function (feature, sightName = '', options = {}) {
+    const fileName = String(feature?.display_name || feature?.filename || feature?.relative_path || '未知 BLK');
+    const relPath = String(feature?.relative_path || feature?.filename || '');
+    const diskRelPath = String(feature?.disk_relative_path || relPath);
+    const fileStatus = String(feature?.file_status || (feature?.disabled ? 'disabled_by_rename' : 'enabled'));
+    const isDisabled = feature?.disabled === true || fileStatus === 'disabled_by_rename';
+    const showDetailAction = options.show_detail_action === true;
+    const animate_entry = showDetailAction && options.animate_entry === true;
+    const entry_index = Math.max(0, Number(options.entry_index) || 0);
+    const entry_delay = Math.min(entry_index, 24) * 24;
+    const rowBaseClass = showDetailAction ? 'sight-blk-row sight-package-detail-file-card' : 'sight-blk-row';
+    const rowClass = `${rowBaseClass}${isDisabled ? ' is-disabled-by-rename' : ''}${animate_entry ? ' is-appended' : ''}`;
+    const row_style = animate_entry ? ` style="--sight-append-delay: ${entry_delay}ms;"` : '';
+    const row_selection_action = showDetailAction ? ' onclick="app.toggle_sight_package_detail_row_selection(event, this)"' : '';
+    const stateText = isDisabled ? '已停用' : '已启用';
+    const ammo = this._formatSightAmmoTypeLabel(feature?.matched_ammo_type || '');
+    const encodedSightName = encodeURIComponent(String(sightName || ''));
+    const encodedRelPath = encodeURIComponent(relPath);
+    const rangeText = feature?.has_variable_range
+        ? `${feature.range_min ?? '?'} - ${feature.range_max ?? '?'}`
+        : '无';
+    const sourceHint = String(feature?.tail_comment || '').trim();
+    const metaMatched = feature?.meta_matched;
+    const parseStatus = String(feature?.parse_status || '').trim().toLowerCase();
+    const targetResolution = String(feature?.target_resolution || '').trim();
+    const fileNote = String(feature?.note || '').trim();
+    const fileMetaItems = [
+        targetResolution
+            ? `<span><i class="ri-aspect-ratio-line"></i>${this._escapeHtml(targetResolution)}</span>`
+            : '',
+        fileNote
+            ? `<span><i class="ri-sticky-note-line"></i>${this._escapeHtml(fileNote)}</span>`
+            : '',
+    ].filter(Boolean);
+    return `
+        <div class="${rowClass}" data-sight-blk-path="${this._escapeHtml(relPath)}" data-sight-blk-disk-path="${this._escapeHtml(diskRelPath)}" aria-selected="false"${row_style}${row_selection_action}>
+            <div class="sight-blk-title">
+                <label class="sight-blk-select" title="选择此炮镜文件" onclick="event.stopPropagation();">
+                    <input type="checkbox" data-sight-blk-select value="${this._escapeHtml(relPath)}" aria-label="选择 ${this._escapeHtml(fileName)}" onchange="app.update_sight_package_detail_selection()">
+                </label>
+                <span class="sight-blk-file-name" title="${this._escapeHtml(relPath)}">${this._escapeHtml(fileName)}</span>
+                <div class="sight-blk-title-meta">
+                    <em class="sight-blk-state ${isDisabled ? 'is-disabled' : 'is-enabled'}">${this._escapeHtml(stateText)}</em>
+                    ${ammo ? `<em>${this._escapeHtml(ammo)}</em>` : ''}
+                    ${metaMatched !== undefined ? `<em>${this._escapeHtml(metaMatched
+                        ? this.t('resource.sight_detail_meta_matched', {}, '已匹配元数据')
+                        : this.t('resource.sight_detail_meta_unmatched', {}, '未匹配元数据'))}</em>` : ''}
+                    ${parseStatus === 'analyzed' ? `<em>${this._escapeHtml(this.t('resource.sight_detail_analyzed', {}, '已解析'))}</em>` : ''}
+                    <div class="sight-blk-actions">
+                        <button class="sight-blk-action-btn" type="button" data-sight-row-action data-sight-row-state-disabled="${isDisabled ? 'false' : 'true'}" title="启用此炮镜"
+                                ${isDisabled ? '' : 'disabled'}
+                                onclick="event.stopPropagation(); app.enableSightBlkFeature('${encodedSightName}', '${encodedRelPath}')">
+                            <i class="ri-play-circle-line"></i>
+                        </button>
+                        <button class="sight-blk-action-btn" type="button" data-sight-row-action data-sight-row-state-disabled="${isDisabled ? 'true' : 'false'}" title="停用此炮镜"
+                                ${isDisabled ? 'disabled' : ''}
+                                onclick="event.stopPropagation(); app.disableSightBlkFeature('${encodedSightName}', '${encodedRelPath}')">
+                            <i class="ri-pause-circle-line"></i>
+                        </button>
+                        ${showDetailAction ? `
+                            <button class="sight-blk-action-btn sight-feature-action" type="button" data-sight-row-action data-sight-row-state-disabled="false"
+                                    title="${this._escapeHtml(this.t('resource.sight_card_menu_detail', {}, '详情页'))}"
+                                    aria-label="${this._escapeHtml(this.t('resource.sight_card_menu_detail', {}, '详情页'))}"
+                                    onclick="event.stopPropagation(); app.openSightSingleDetailFromPackage(decodeURIComponent('${encodedRelPath}'))">
+                                <i class="ri-file-list-3-line"></i>
+                            </button>
+                        ` : ''}
                     </div>
                 </div>
             </div>
-        `;
-    }).join('');
-    this.updateResourceSelectionSummary('sights', items.length);
+            <div class="sight-blk-flags">
+                <span>距离示数：${this._escapeHtml(this._formatSightFeatureFlag(feature?.distance_correction))}</span>
+                <span>自动抬炮：${this._escapeHtml(this._formatSightFeatureFlag(feature?.apply_correction_to_gun))}</span>
+                <span>可变标尺：${this._escapeHtml(rangeText)}</span>
+                <span>遮罩黑边：${this._escapeHtml(this._formatSightFeatureFlag(feature?.suspected_mask))}</span>
+            </div>
+            ${fileMetaItems.length ? `<div class="sight-blk-file-meta">${fileMetaItems.join('')}</div>` : ''}
+            ${sourceHint ? `<div class="sight-blk-source">${this._escapeHtml(sourceHint)}</div>` : ''}
+        </div>
+    `;
 };
 
-// --- 语音包库路径管理 ---
+app._appendSightBlkFeatureRows = function (host, features) {
+    const list = host?.querySelector('[data-sight-blk-feature-list]');
+    if (!list || !Array.isArray(features) || !features.length) return;
+    const sightName = host.getAttribute('data-sight-detail-name') || host.dataset.sightDetailName || '';
+    list.insertAdjacentHTML('beforeend', features.map(feature => this._renderSightFeatureRow(feature, sightName)).join(''));
+};
+
+app._rememberSightBlkOperationIssues = function (sight_name, result, enabled, requestedCount = 0) {
+    const decodedName = decodeURIComponent(String(sight_name || '')).trim();
+    if (!decodedName) return;
+    this._sightBlkOperationIssues = this._sightBlkOperationIssues instanceof Map ? this._sightBlkOperationIssues : new Map();
+    const readCount = (key) => {
+        const value = Number(result?.[key] || 0);
+        return Number.isFinite(value) ? value : 0;
+    };
+    const summary = this._formatSightBlkOperationResult(result || {}, enabled, requestedCount);
+    const conflicts = Array.isArray(result?.conflicts) ? result.conflicts.map(item => ({
+        target_relative_path: String(item?.target_relative_path || item?.target || '').trim(),
+        conflict_reason: this._formatSightConflictReason(item?.conflict_reason || item?.reason, item?.action),
+        reason_code: String(item?.conflict_reason || item?.reason || '').trim(),
+    })).filter(item => item.target_relative_path || item.conflict_reason) : [];
+    const counts = {
+        selected_count: readCount('selected_count') || Number(requestedCount || 0),
+        processed_count: readCount('processed_count'),
+        missing_count: readCount('missing_count'),
+        conflict_count: readCount('conflict_count') || conflicts.length,
+        modified_count: readCount('modified_count'),
+        kept_shared_count: readCount('kept_shared_count'),
+        skipped_count: readCount('skipped_count'),
+    };
+    const hasIssues = result?.success === false
+        || counts.missing_count
+        || counts.conflict_count
+        || counts.modified_count
+        || counts.kept_shared_count
+        || conflicts.length;
+    if (!hasIssues) {
+        this._sightBlkOperationIssues.delete(decodedName);
+        return;
+    }
+    this._sightBlkOperationIssues.set(decodedName, {
+        enabled: !!enabled,
+        title: summary.title,
+        message: summary.message,
+        error: String(result?.error || '').trim(),
+        counts,
+        conflicts,
+    });
+};
+
+app.clearSightBlkOperationIssues = function (sight_name) {
+    const decodedName = decodeURIComponent(String(sight_name || '')).trim();
+    if (!decodedName) return;
+    if (this._sightBlkOperationIssues instanceof Map) {
+        this._sightBlkOperationIssues.delete(decodedName);
+    }
+    const host = this._findSightDetailHost(decodedName);
+    host?.querySelector('[data-sight-blk-issues]')?.remove();
+};
+
+app._renderSightBlkOperationIssuesPanel = function (sight_name) {
+    const decodedName = decodeURIComponent(String(sight_name || '')).trim();
+    const store = this._sightBlkOperationIssues instanceof Map ? this._sightBlkOperationIssues : new Map();
+    const issue = decodedName ? store.get(decodedName) : null;
+    if (!issue) return '';
+    const counts = issue.counts || {};
+    const countItems = [
+        ['选择', counts.selected_count],
+        ['处理', counts.processed_count],
+        ['缺失', counts.missing_count],
+        ['冲突', counts.conflict_count],
+        ['被修改', counts.modified_count],
+        ['共享保留', counts.kept_shared_count],
+        ['跳过', counts.skipped_count],
+    ].filter(([, value]) => Number(value || 0) > 0);
+    const countHtml = countItems.map(([label, value]) => (
+        `<span>${this._escapeHtml(label)} ${this._escapeHtml(String(value))}</span>`
+    )).join('');
+    const conflicts = Array.isArray(issue.conflicts) ? issue.conflicts : [];
+    const conflictHtml = conflicts.length ? `
+        <div class="sight-blk-issue-list">
+            ${conflicts.map(item => {
+                const target = String(item?.target_relative_path || '').trim();
+                const reason = String(item?.conflict_reason || '').trim() || '需要处理';
+                return `<div><strong>${this._escapeHtml(target || '未知文件')}</strong><em>${this._escapeHtml(reason)}</em></div>`;
+            }).join('')}
+        </div>
+    ` : '';
+    const encodedName = encodeURIComponent(decodedName);
+    return `
+        <section class="sight-blk-issues" data-sight-blk-issues="${this._escapeHtml(encodedName)}">
+            <div class="sight-blk-issues-head">
+                <strong><i class="ri-error-warning-line"></i>${this._escapeHtml(issue.title || '炮镜文件需要处理')}</strong>
+                <button type="button" onclick="event.stopPropagation(); app.clearSightBlkOperationIssues('${encodedName}')" title="清除本次提示">
+                    <i class="ri-close-line"></i>
+                </button>
+            </div>
+            <p>${this._escapeHtml(issue.message || issue.error || '部分炮镜文件需要处理')}</p>
+            ${countHtml ? `<div class="sight-blk-issue-counts">${countHtml}</div>` : ''}
+            ${conflictHtml}
+        </section>
+    `;
+};
+
+app._renderSightDetailPanel = function (host, detail) {
+    if (!host) return;
+    const meta = detail?.meta || {};
+    const features = Array.isArray(detail?.blk_features) ? detail.blk_features : [];
+    const metaHtml = [
+        this._renderSightMetaPills('作者', meta.author, 'ri-user-3-line'),
+        this._renderSightMetaPills('版本', meta.version, 'ri-price-tag-3-line'),
+        this._renderSightMetaPills('标签', meta.tags, 'ri-price-tag-line'),
+        this._renderSightMetaPills('弹种', meta.ammo_types, 'ri-focus-3-line'),
+        this._renderSightMetaPills('推荐车辆', meta.recommended_vehicles, 'ri-car-line'),
+        this._renderSightMetaPills('分辨率', meta.target_resolution, 'ri-aspect-ratio-line'),
+        this._renderSightMetaPills('灵敏度', meta.sensitivity, 'ri-dashboard-3-line'),
+    ].filter(Boolean).join('');
+    const desc = String(meta.description || '').trim();
+    const warningText = []
+        .concat(detail?.meta_error ? [`元数据错误：${detail.meta_error}`] : [])
+        .concat(Array.isArray(detail?.meta_warnings) ? detail.meta_warnings : [])
+        .filter(Boolean)
+        .join('；');
+    const nextCursor = detail?.blk_feature_cursor || '';
+    const detailName = String(detail?.enabled_name || detail?.name || '').trim();
+    const encodedDetailName = encodeURIComponent(detailName);
+    host.hidden = false;
+    host.dataset.nextCursor = nextCursor;
+    host.dataset.sightDetailName = detailName;
+    host.setAttribute('data-sight-detail-name', detailName);
+    host.innerHTML = `
+        <div class="sight-detail-inner">
+            <div class="sight-detail-head">
+                <strong>${this._escapeHtml(meta.package_name || detail?.enabled_name || detail?.name || '炮镜详情')}</strong>
+                <span>${this._escapeHtml(detail?.parse_status || 'no_meta')}</span>
+            </div>
+            ${desc ? `<p class="sight-detail-desc">${this._escapeHtml(desc)}</p>` : ''}
+            <div class="sight-meta-grid">${metaHtml || '<span class="sight-meta-empty">暂无作者元数据</span>'}</div>
+            ${warningText ? `<div class="sight-detail-warning">${this._escapeHtml(warningText)}</div>` : ''}
+            ${this._renderSightBlkOperationIssuesPanel(detailName)}
+            <div class="sight-blk-summary">
+                <span>BLK 特征：${this._escapeHtml(String(features.length))}/${this._escapeHtml(String(detail?.blk_feature_total || 0))}</span>
+                <div class="sight-blk-batch-actions">
+                    <button class="sight-blk-batch-btn" type="button"
+                            onclick="event.stopPropagation(); app.enableSelectedSightBlkFeatures('${encodedDetailName}')">
+                        <i class="ri-play-list-2-line"></i> 启用所选
+                    </button>
+                    <button class="sight-blk-batch-btn" type="button"
+                            onclick="event.stopPropagation(); app.disableSelectedSightBlkFeatures('${encodedDetailName}')">
+                        <i class="ri-pause-circle-line"></i> 停用所选
+                    </button>
+                </div>
+            </div>
+            <div class="sight-blk-list" data-sight-blk-feature-list></div>
+            ${nextCursor ? `
+                <button class="btn-v2 small secondary sight-load-more-btn" type="button"
+                        onclick="event.stopPropagation(); app.loadMoreSightBlkFeatures('${encodeURIComponent(detail?.enabled_name || detail?.name || '')}', '${this._escapeHtml(String(nextCursor))}')">
+                    <i class="ri-more-line"></i> 加载更多
+                </button>
+            ` : ''}
+        </div>
+    `;
+    this._appendSightBlkFeatureRows(host, features);
+};
+
+app._setSightPackageDetailVisible = function (visible) {
+    const listView = document.getElementById('sight-library-list-view');
+    const detailView = document.getElementById('sight-package-detail-view');
+    const singleView = document.getElementById('sight-single-detail-view');
+    if (listView) listView.hidden = !!visible;
+    if (detailView) detailView.hidden = !visible;
+    if (singleView) singleView.hidden = true;
+};
+
+app._setSightSingleDetailVisible = function (visible) {
+    const listView = document.getElementById('sight-library-list-view');
+    const packageView = document.getElementById('sight-package-detail-view');
+    const singleView = document.getElementById('sight-single-detail-view');
+    if (listView) listView.hidden = !!visible;
+    if (packageView) packageView.hidden = true;
+    if (singleView) singleView.hidden = !visible;
+};
+
+app._getSightSingleDetailFeature = function (detail) {
+    if (detail?.selected_feature) return detail.selected_feature;
+    if (detail?.feature) return detail.feature;
+    const features = Array.isArray(detail?.blk_features) ? detail.blk_features : [];
+    return features.length ? features[0] : null;
+};
+
+app._get_sight_single_detail_values = function (value) {
+    const raw_values = Array.isArray(value) ? value : [value];
+    const values = raw_values
+        .flatMap(item => String(item || '').split(/[,，]/))
+        .map(item => item.trim())
+        .filter(Boolean);
+    return [...new Set(values)];
+};
+
+app._format_sight_single_detail_ammo_list = function (value, fallback) {
+    const values = this._get_sight_single_detail_values(value);
+    return values.length
+        ? values.map(item => this._formatSightAmmoTypeLabel(item)).join('、')
+        : fallback;
+};
+
+app._format_sight_single_detail_vehicle_list = function (value, fallback) {
+    const labels = {
+        ground: this.t('resource.sight_platform_ground'),
+        tank: this.t('resource.sight_platform_ground'),
+        groundvehicles: this.t('resource.sight_platform_ground'),
+        air: this.t('resource.sight_platform_air'),
+        aircraft: this.t('resource.sight_platform_air'),
+        naval: this.t('resource.sight_platform_naval'),
+        ship: this.t('resource.sight_platform_naval'),
+        all: this.t('resource.sight_platform_all'),
+        universal: this.t('resource.sight_platform_all'),
+    };
+    const values = this._get_sight_single_detail_values(value);
+    return values.length
+        ? values.map(item => {
+            const key = item.toLowerCase().replace(/[\s_-]+/g, '');
+            return labels[key] || item;
+        }).join('、')
+        : fallback;
+};
+
+app._format_sight_single_detail_tags = function (value, fallback) {
+    const labels = {
+        historical: this.t('resource.sight_tag_historical'),
+        competitive: this.t('resource.sight_tag_competitive'),
+        fun: this.t('resource.sight_tag_fun'),
+        custom: this.t('resource.sight_tag_custom'),
+    };
+    const values = this._get_sight_single_detail_values(value);
+    return values.length
+        ? values.map(item => labels[this._normalizeSightTag(item)] || item).join('、')
+        : fallback;
+};
+
+app._renderSightSingleDetailInfoItem = function (label, value, icon = 'ri-information-line', item_class = '') {
+    const safe_value = this._escapeHtml(value);
+    const safe_item_class = item_class ? ` ${this._escapeHtml(item_class)}` : '';
+    return `
+        <div class="sight-single-detail-info-item${safe_item_class}">
+            <span><i class="${this._escapeHtml(icon)}"></i>${this._escapeHtml(label)}</span>
+            <strong title="${safe_value}">${safe_value}</strong>
+        </div>
+    `;
+};
+
+app.openSightSingleDetail = async function (sight_name, options = {}) {
+    const decodedName = decodeURIComponent(String(sight_name || '')).trim();
+    if (!decodedName) return;
+    const singleView = document.getElementById('sight-single-detail-view');
+    if (!singleView) return;
+
+    this.closeSightCardActionMenu?.();
+    const seedFeature = options.feature || null;
+    this._sightSingleDetailActiveName = decodedName;
+    this._sightSingleDetailSource = options.source || {
+        type: 'list',
+        library_mode: this._sightsLibraryMode || 'single',
+        search_query: this._sightsSearchQuery || '',
+        filter_value: document.getElementById('sights-filter-select')?.value || 'all',
+        sort_value: this._sightsSortKey || 'update_time',
+    };
+    this._sightSingleDetailData = {
+        success: true,
+        name: decodedName,
+        enabled_name: decodedName,
+        selected_feature: seedFeature,
+        blk_features: seedFeature ? [seedFeature] : [],
+    };
+    this._sightSingleDetailListState = { loading: true, error: '' };
+    this._setSightSingleDetailVisible(true);
+    this.renderSightSingleDetail();
+
+    if (!window.pywebview?.api?.get_sight_detail) {
+        this._sightSingleDetailListState = {
+            loading: false,
+            error: this.t('common.feature_not_ready'),
+        };
+        this.renderSightSingleDetail();
+        return;
+    }
+
+    try {
+        const detail = await pywebview.api.get_sight_detail(decodedName);
+        if (!detail || detail.success === false) {
+            this._sightSingleDetailListState = {
+                loading: false,
+                error: detail?.error || '读取炮镜详情失败',
+            };
+            this.renderSightSingleDetail();
+            return;
+        }
+        this._sightSingleDetailData = {
+            ...detail,
+            selected_feature: seedFeature || detail.selected_feature || null,
+        };
+        this._sightSingleDetailListState = { loading: false, error: '' };
+        this.renderSightSingleDetail();
+    } catch (e) {
+        this._sightSingleDetailListState = {
+            loading: false,
+            error: e?.message || String(e || '读取炮镜详情失败'),
+        };
+        this.renderSightSingleDetail();
+    }
+};
+
+app.closeSightSingleDetail = function () {
+    const source = this._sightSingleDetailSource || { type: 'list' };
+    const singleView = document.getElementById('sight-single-detail-view');
+    const listView = document.getElementById('sight-library-list-view');
+    const packageView = document.getElementById('sight-package-detail-view');
+    this._sightSingleDetailActiveName = '';
+    this._sightSingleDetailData = null;
+    this._sightSingleDetailSource = null;
+    this._sightSingleDetailListState = { loading: false, error: '' };
+    if (singleView) {
+        singleView.hidden = true;
+        singleView.innerHTML = '';
+    }
+
+    if (source.type === 'package_detail') {
+        if (listView) listView.hidden = true;
+        if (packageView) packageView.hidden = false;
+        const fileList = document.querySelector('.sight-package-detail-file-list');
+        if (fileList && Number.isFinite(Number(source.scroll_top))) {
+            requestAnimationFrame(() => {
+                fileList.scrollTop = Number(source.scroll_top);
+            });
+        }
+        return;
+    }
+
+    if (listView) listView.hidden = false;
+    if (packageView) packageView.hidden = true;
+};
+
+app.renderSightSingleDetail = function () {
+    const detailView = document.getElementById('sight-single-detail-view');
+    if (!detailView) return;
+    const detail = this._sightSingleDetailData || {};
+    const meta = detail.meta || {};
+    const feature = this._getSightSingleDetailFeature(detail);
+    const state = this._sightSingleDetailListState || {};
+    const source = this._sightSingleDetailSource || { type: 'list' };
+    const activeName = this._sightSingleDetailActiveName || detail.enabled_name || detail.name || '';
+    const title = String(meta.package_name || detail.display_name || detail.enabled_name || detail.name || activeName || this.t('resource.sight_single_detail_title', {}, '炮镜详情'));
+    const author = String(meta.author || this.t('mod.unknown_author', {}, '未知作者'));
+    const description = String(meta.description || this.t('mod.no_description', {}, '暂无简介介绍'));
+    const cover_source = String(meta.cover_url || detail.cover_url || '').trim();
+    const cover = cover_source || 'assets/card_image_small.png';
+    const cover_is_default = !cover_source || (!!detail.cover_is_default && !meta.cover_url);
+    const author_not_provided = this.t('resource.sight_single_detail_author_not_provided');
+    const not_detected = this.t('resource.sight_single_detail_not_detected');
+    const blk_count = Math.max(0, Number(detail.package_blk_total ?? detail.blk_feature_total ?? (feature ? 1 : 0)) || 0);
+    const fileName = String(feature?.display_name || feature?.filename || feature?.relative_path || '');
+    const relPath = String(feature?.relative_path || feature?.filename || '');
+    const file_summary = fileName || (blk_count
+        ? this.t('resource.sight_single_detail_blk_count', { count: blk_count })
+        : this.t('resource.sight_single_detail_no_blk'));
+    const isDisabled = detail.disabled === true || feature?.disabled === true || String(feature?.file_status || '') === 'disabled_by_rename';
+    const canEdit = detail.can_edit !== false;
+    const rangeText = feature?.has_variable_range
+        ? `${feature.range_min ?? '?'} - ${feature.range_max ?? '?'}`
+        : this._formatSightFeatureFlag(false);
+    const ammo_source = feature?.matched_ammo_type || (Array.isArray(meta.ammo_types) && meta.ammo_types.length ? meta.ammo_types : meta.ammo_type);
+    const vehicle_source = feature?.recommended_vehicles?.length
+        ? feature.recommended_vehicles
+        : (Array.isArray(meta.recommended_vehicles) && meta.recommended_vehicles.length ? meta.recommended_vehicles : meta.platforms);
+    const ammoText = this._format_sight_single_detail_ammo_list(ammo_source, author_not_provided);
+    const vehicleText = this._format_sight_single_detail_vehicle_list(vehicle_source, author_not_provided);
+    const sightTypeText = this.t('resource.sight_type_single');
+    const tagText = this._format_sight_single_detail_tags(meta.tags, author_not_provided);
+    const sourceLabel = source.type === 'package_detail'
+        ? this.t('resource.sight_detail_file_list', {}, '文件列表')
+        : this.t('resource.sight_tab_single', {}, '单独炮镜');
+    const installBadge = isDisabled
+        ? `<span class="sight-detail-status-badge is-disabled"><i class="ri-pause-circle-line"></i>${this._escapeHtml(this.t('resource.sight_status_disabled', {}, '已停用'))}</span>`
+        : `<span class="sight-detail-status-badge is-enabled"><i class="ri-checkbox-circle-line"></i>${this._escapeHtml(this.t('resource.sight_status_enabled', {}, '已启用'))}</span>`;
+    const errorHtml = state.error ? `<div class="sight-package-detail-warning">${this._escapeHtml(state.error)}</div>` : '';
+    const loadingHtml = state.loading ? `<div class="sight-single-detail-loading-inline"><i class="ri-loader-4-line"></i>${this._escapeHtml(this.t('common.loading', {}, '加载中...'))}</div>` : '';
+    const featureHtml = feature ? `
+        <div class="sight-single-detail-info-grid">
+            ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_distance_correction', {}, '距离示数'), this._formatSightFeatureFlag(feature?.distance_correction), 'ri-ruler-line')}
+            ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_gun_correction', {}, '自动抬炮'), this._formatSightFeatureFlag(feature?.apply_correction_to_gun), 'ri-crosshair-2-line')}
+            ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_variable_range', {}, '可变标尺'), rangeText, 'ri-expand-left-right-line')}
+            ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_mask_black_edge', {}, '遮罩黑边'), this._formatSightFeatureFlag(feature?.suspected_mask), 'ri-contrast-2-line')}
+        </div>
+    ` : `
+        <div class="sight-single-detail-empty">
+            <i class="ri-file-search-line"></i>
+            <strong>${this._escapeHtml(this.t('resource.sight_single_detail_no_feature'))}</strong>
+            <span>${this._escapeHtml(this.t('resource.sight_single_detail_no_feature_hint'))}</span>
+        </div>
+    `;
+    const fileHtml = `
+        <div class="sight-single-detail-info-grid">
+            ${feature ? this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_file_name', {}, 'BLK 文件名'), fileName, 'ri-file-code-line') : ''}
+            ${feature ? this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_relative_path', {}, '相对路径'), relPath || fileName, 'ri-route-line') : ''}
+            ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_source_package', {}, '所属资源'), activeName, 'ri-folder-2-line')}
+            ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_file_count'), this.t('resource.sight_single_detail_blk_count', { count: blk_count }), 'ri-file-list-3-line')}
+            ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_status', {}, '管理状态'), isDisabled ? this.t('resource.sight_status_disabled', {}, '已停用') : this.t('resource.sight_status_enabled', {}, '已启用'), 'ri-checkbox-circle-line')}
+            ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_parse_status'), feature ? this.t('resource.sight_detail_analyzed') : not_detected, 'ri-code-box-line')}
+        </div>
+    `;
+
+    detailView.innerHTML = `
+        <div class="sight-single-detail-shell">
+            <div class="sight-package-detail-breadcrumb">
+                <button type="button" class="sight-package-detail-back" onclick="app.closeSightSingleDetail()">
+                    <i class="ri-arrow-left-line"></i>
+                    <span>${this._escapeHtml(this.t('resource.sight_single_detail_back', {}, '返回'))}</span>
+                </button>
+                <span>${this._escapeHtml(this.t('tools.sights', {}, '炮镜库'))}</span>
+                <i class="ri-arrow-right-s-line"></i>
+                <span>${this._escapeHtml(sourceLabel)}</span>
+                <i class="ri-arrow-right-s-line"></i>
+                <strong>${this._escapeHtml(title)}</strong>
+            </div>
+            <header class="sight-single-detail-hero sight-single-detail-layout">
+                <div class="sight-single-detail-cover-frame">
+                    <img class="sight-single-detail-cover${cover_is_default ? ' is-default' : ''}" src="${this._escapeHtml(cover)}" alt="" onerror="this.classList.add('is-default'); this.src='assets/card_image_small.png'">
+                </div>
+                <div class="sight-single-detail-hero-main">
+                    <div class="sight-package-detail-title-row">
+                        <h2>${this._escapeHtml(title)}</h2>
+                        ${installBadge}
+                        <span class="sight-single-detail-actions">
+                            <button type="button" class="btn-v2 small secondary" ${canEdit ? '' : 'disabled aria-disabled="true"'}
+                                    data-sight-name-encoded="${encodeURIComponent(activeName)}"
+                                    data-sight-cover="${this._escapeHtml(cover)}"
+                                    onclick="app.openEditSightModal(decodeURIComponent(this.dataset.sightNameEncoded || ''), this.dataset.sightCover || '')">
+                                <i class="ri-edit-line"></i><span>${this._escapeHtml(this.t('resource.sight_card_menu_edit', {}, '编辑页'))}</span>
+                            </button>
+                            <button type="button" class="btn-v2 small secondary" onclick="app.openSightSingleDetailFolder()">
+                                <i class="ri-folder-open-line"></i><span>${this._escapeHtml(this.t('resource.sight_single_detail_open_folder', {}, '打开文件夹'))}</span>
+                            </button>
+                        </span>
+                    </div>
+                    <div class="sight-package-detail-meta-line">
+                        <span><i class="ri-user-3-line"></i><strong>${this._escapeHtml(author)}</strong></span>
+                        <span><i class="ri-file-code-line"></i>${this._escapeHtml(file_summary)}</span>
+                        <span><i class="ri-crosshair-2-line"></i>${this._escapeHtml(ammoText)}</span>
+                    </div>
+                    <p>${this._escapeHtml(description)}</p>
+                </div>
+            </header>
+            ${errorHtml}
+            ${loadingHtml}
+            <div class="sight-single-detail-body">
+                <section class="sight-single-detail-panel sight-single-detail-section is-feature">
+                    <h3><i class="ri-settings-3-line"></i>${this._escapeHtml(this.t('resource.sight_single_detail_feature_title', {}, '参数信息'))}</h3>
+                    ${featureHtml}
+                </section>
+                <section class="sight-single-detail-panel sight-single-detail-section is-adapt">
+                    <h3><i class="ri-target-line"></i>${this._escapeHtml(this.t('resource.sight_single_detail_adapt_title', {}, '适配信息'))}</h3>
+                    <div class="sight-single-detail-info-grid">
+                        ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_resource_type'), sightTypeText, 'ri-crosshair-line', 'is-resource-type')}
+                        ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_author_tags', {}, '作者标签'), tagText, 'ri-price-tag-3-line', 'is-author-tags')}
+                        ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_vehicle', {}, '适用载具'), vehicleText, 'ri-car-line', 'is-vehicles')}
+                        ${this._renderSightSingleDetailInfoItem(this.t('resource.sight_single_detail_ammo', {}, '弹药类型'), ammoText, 'ri-rocket-line', 'is-ammo')}
+                    </div>
+                </section>
+                <section class="sight-single-detail-panel sight-single-detail-section is-file">
+                    <h3><i class="ri-file-info-line"></i>${this._escapeHtml(this.t('resource.sight_single_detail_file_title', {}, '文件信息'))}</h3>
+                    ${fileHtml}
+                </section>
+            </div>
+        </div>
+    `;
+    this.applyResourceReveal(detailView, {
+        item_selector: [
+            '.sight-single-detail-hero',
+            '.sight-single-detail-panel',
+        ].join(', '),
+        max_animated: 8,
+        stagger_ms: 50,
+        duration_ms: 180,
+    });
+};
+
+app.openSightSingleDetailFolder = async function () {
+    const activeName = String(this._sightSingleDetailActiveName || '').trim();
+    if (!activeName) return;
+    const api = window.pywebview?.api?.open_sight_folder_by_name;
+    if (!api) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return;
+    }
+    try {
+        const result = await api(activeName);
+        if (!result || result.success === false) {
+            this.showAlert(this.t('common.error'), result?.msg || this.t('resource.open_failed', { label: this.t('resource.label_sights') }), 'error');
+        }
+    } catch (e) {
+        this.showAlert(this.t('common.error'), e?.message || String(e), 'error');
+    }
+};
+
+app.openSightSingleDetailFromPackage = async function (relative_path) {
+    const activeName = this._sightDetailActiveName || '';
+    if (!activeName || !relative_path) return;
+    const rows = this._sightDetailListState?.rows || [];
+    const normalizeRelPath = (value) => String(value || '').replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase();
+    const targetPath = normalizeRelPath(relative_path);
+    const feature = rows.find(item => normalizeRelPath(item.relative_path || item.filename) === targetPath) || null;
+    const fileList = document.querySelector('.sight-package-detail-file-list');
+    await this.openSightSingleDetail(activeName, {
+        source: { type: 'package_detail',
+            sight_name: activeName,
+            group_id: this._sightDetailSelectedGroupId || '',
+            scroll_top: fileList ? fileList.scrollTop : 0,
+        },
+        feature,
+    });
+};
+
+app._getSightDetailDisplayName = function (detail) {
+    const meta = detail?.meta || {};
+    return String(meta.package_name || detail?.display_name || detail?.enabled_name || detail?.name || '炮镜包详情');
+};
+
+app._formatSightDetailList = function (value) {
+    const values = Array.isArray(value) ? value : [value];
+    return values.map(item => {
+        if (item && typeof item === 'object') return String(item.name || item.label || '').trim();
+        return String(item || '').trim();
+    }).filter(Boolean).join('、');
+};
+
+app._formatSightDetailUpdatedAt = function (value) {
+    const timestamp = Number(value || 0);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+    try {
+        return new Date(timestamp * 1000).toLocaleString();
+    } catch (_error) {
+        return '';
+    }
+};
+
+app._formatSightDetailSensitivity = function (value) {
+    if (value && typeof value === 'object') {
+        return String(value.note || value.value || '').trim();
+    }
+    return String(value ?? '').trim();
+};
+
+app._getSightDetailGroupDisplayName = function (group) {
+    const groupId = String(group?.group_id || '__all__');
+    if (groupId === '__all__') return this.t('resource.sight_detail_group_all', {}, '全部炮镜');
+    if (groupId === '__ungrouped__') return this.t('resource.sight_detail_group_ungrouped', {}, '未分组');
+    const ammoTypes = Array.isArray(group?.ammo_types) ? group.ammo_types.filter(Boolean) : [];
+    if (groupId.startsWith('ammo_') && ammoTypes.length === 1) {
+        return this._formatSightAmmoTypeLabel(ammoTypes[0]);
+    }
+    return String(group?.name || groupId);
+};
+
+app._renderSightPackageMetaFacts = function (meta) {
+    const facts = [
+        [this.t('resource.sight_detail_recommended_vehicles', {}, '推荐车辆'), this._formatSightDetailList(meta?.recommended_vehicles), 'ri-car-line'],
+        [this.t('resource.sight_detail_target_resolution', {}, '目标分辨率'), this._formatSightDetailList(meta?.target_resolution || meta?.target_resolutions), 'ri-aspect-ratio-line'],
+        [this.t('resource.sight_detail_sensitivity', {}, '建议灵敏度'), this._formatSightDetailSensitivity(meta?.sensitivity), 'ri-sliders-3-line'],
+        [this.t('resource.sight_detail_author_note', {}, '作者备注'), String(meta?.note || meta?.author_note || '').trim(), 'ri-sticky-note-line'],
+    ].filter(([, value]) => value);
+    if (!facts.length) return '';
+    return `<div class="sight-package-detail-facts">
+        ${facts.map(([label, value, icon]) => `
+            <span><i class="${icon}"></i><b>${this._escapeHtml(label)}</b>${this._escapeHtml(value)}</span>
+        `).join('')}
+    </div>`;
+};
+
+app._renderSightPackageDetailStatus = function (detail) {
+    const status = String(detail?.parse_status || 'no_meta');
+    if (status === 'has_meta') return this.t('resource.filter_with_meta', {}, '有元数据');
+    if (status === 'meta_error') return this.t('resource.sight_detail_meta_error', {}, '元数据需要处理');
+    return this.t('resource.sight_detail_meta_missing', {}, '暂无作者元数据');
+};
+
+app.openSightPackageDetail = async function (sight_name) {
+    const decodedName = decodeURIComponent(String(sight_name || '')).trim();
+    if (!decodedName) return;
+    const detailView = document.getElementById('sight-package-detail-view');
+    if (!detailView) return;
+    this._sightDetailActiveName = decodedName;
+    this._sightDetailData = null;
+    this._sightDetailSelectedGroupId = "";
+    this._sightDetailListState = { cursor: null, loading: false, has_more: false, total: 0, rows: [] };
+    this._sightDetailActionLoading = false;
+    this._sight_detail_batch_loading = false;
+    this._sight_detail_summary_collapsed = false;
+    this._setSightPackageDetailVisible(true);
+    detailView.innerHTML = `
+        <div class="sight-package-detail-loading">
+            <i class="ri-loader-4-line"></i>
+            <span>${this._escapeHtml(this.t('common.loading', {}, '加载中...'))}</span>
+        </div>
+    `;
+    if (!window.pywebview?.api?.get_sight_detail) {
+        detailView.innerHTML = `<div class="sight-package-detail-error">${this._escapeHtml(this.t('common.feature_not_ready'))}</div>`;
+        return;
+    }
+    try {
+        const detail = await pywebview.api.get_sight_detail(decodedName);
+        if (!detail || detail.success === false) {
+            detailView.innerHTML = `<div class="sight-package-detail-error">${this._escapeHtml(detail?.error || '读取炮镜详情失败')}</div>`;
+            return;
+        }
+        this._sightDetailData = detail;
+        this._sightDetailSelectedGroupId = String(detail.selected_group_id || detail.groups?.[0]?.group_id || '__all__');
+        this._sightDetailListState = {
+            cursor: detail.blk_feature_cursor || null,
+            loading: false,
+            has_more: !!detail.blk_feature_cursor,
+            total: Number(detail.blk_feature_total || 0),
+            rows: Array.isArray(detail.blk_features) ? detail.blk_features : [],
+        };
+        this.renderSightPackageDetail();
+    } catch (e) {
+        detailView.innerHTML = `<div class="sight-package-detail-error">${this._escapeHtml(e?.message || e || '读取炮镜详情失败')}</div>`;
+    }
+};
+
+app.closeSightPackageDetail = function () {
+    this._sightDetailActiveName = "";
+    this._sightDetailData = null;
+    this._sightDetailSelectedGroupId = "";
+    this._sightDetailListState = { cursor: null, loading: false, has_more: false, total: 0, rows: [] };
+    this._sightDetailActionLoading = false;
+    this._sight_detail_batch_loading = false;
+    this._sight_detail_summary_collapsed = false;
+    this._setSightPackageDetailVisible(false);
+};
+
+app.toggle_sight_package_detail_summary = function () {
+    const detail_view = document.getElementById('sight-package-detail-view');
+    const shell = detail_view?.querySelector('.sight-package-detail-shell');
+    const toggle_button = shell?.querySelector('[data-sight-package-summary-toggle]');
+    const summary = shell?.querySelector('.sight-package-detail-summary');
+    if (!shell || !toggle_button || !summary) return;
+
+    const collapsed = this._sight_detail_summary_collapsed !== true;
+    const label = collapsed ? '展开炮镜包信息' : '收起炮镜包信息';
+    this._sight_detail_summary_collapsed = collapsed;
+    shell.classList.toggle('is-summary-collapsed', collapsed);
+    toggle_button.setAttribute('aria-expanded', String(!collapsed));
+    toggle_button.setAttribute('aria-label', label);
+    toggle_button.setAttribute('title', label);
+    summary.setAttribute('aria-hidden', String(collapsed));
+};
+
+app.changeSightApplicationVehicles = async function (resource_id = "") {
+    const detail = this._sightDetailData || {};
+    const resourceIds = Array.isArray(detail.resource_ids) ? detail.resource_ids.map(value => String(value || '').trim()).filter(Boolean) : [];
+    const resourceId = String(resource_id || (resourceIds.length === 1 ? resourceIds[0] : '')).trim();
+    const api = window.pywebview?.api;
+    if (!resourceId) {
+        this.showAlert('炮镜部署', resourceIds.length > 1 ? '该目录包含多个受管资源，请先在单个资源详情中操作。' : '该炮镜没有可用的 AimerWT 部署记录。', 'warn');
+        return;
+    }
+    if (!api?.preview_sight_resource_deployment || !api?.apply_sight_resource_deployment) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return;
+    }
+    try {
+        const initial = await api.preview_sight_resource_deployment(resourceId, {
+            mode: 'author_recommended',
+            remember: true,
+            change_existing: true,
+        });
+        const initialModel = {
+            file_name: this._getSightDetailDisplayName(detail),
+            deployment_preview: initial,
+            author_recommendation_available: Number(initial?.summary?.author_recommended_file_count || 0) > 0,
+        };
+        const options = await this.showSightImportTargetDialog(initialModel.file_name, initialModel);
+        if (!options?.deployment_request) return;
+        const request = { ...options.deployment_request, change_existing: true };
+        const finalPreview = await api.preview_sight_resource_deployment(resourceId, request);
+        const confirmed = await this.confirmSightImportPreview({
+            success: finalPreview?.success !== false,
+            file_name: initialModel.file_name,
+            deployment_preview: finalPreview,
+        });
+        if (!confirmed) return;
+        const result = await api.apply_sight_resource_deployment(resourceId, request);
+        if (!result?.success) {
+            this.showAlert(this.t('common.error'), result?.msg || '更改应用车辆失败', 'error');
+            return;
+        }
+        this.showAlert(this.t('common.success'), '炮镜已按新的车辆范围部署；旧目标保留为禁用状态。', 'success');
+        await this.refreshSights({ manual: true });
+        if (this._sightDetailActiveName) await this.openSightPackageDetail(this._sightDetailActiveName);
+    } catch (error) {
+        this.showAlert(this.t('common.error'), error?.message || String(error), 'error');
+    }
+};
+app.runSightPackageDetailAction = async function (action) {
+    const detail = this._sightDetailData || {};
+    const activeName = String(this._sightDetailActiveName || detail.enabled_name || detail.name || '').trim();
+    if (!activeName || this._sightDetailActionLoading || this._sight_detail_batch_loading) return;
+    const actionName = String(action || '').trim();
+    const apiNames = {
+        open: 'open_sight_folder_by_name',
+        enable: 'enable_sight',
+        disable: 'disable_sight',
+        delete: 'delete_sight',
+    };
+    if (actionName === 'refresh') {
+        await this.openSightPackageDetail(activeName);
+        return;
+    }
+    const apiName = apiNames[actionName];
+    const api = apiName ? window.pywebview?.api?.[apiName] : null;
+    if (!api) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return;
+    }
+    if (actionName === 'delete') {
+        const label = this.t('resource.label_sights');
+        const confirmed = await this.confirm(
+            this.t('resource.delete_title', { label }),
+            this.t('resource.delete_message', { count: 1, label, names: this._escapeHtml(activeName) }),
+            true,
+            this.t('resource.confirm_delete')
+        );
+        if (!confirmed) return;
+    }
+
+    this._sightDetailActionLoading = true;
+    this.renderSightPackageDetail();
+    try {
+        const result = await window.pywebview.api[apiName](activeName);
+        if (!result || result.success === false) {
+            const fallbackKey = actionName === 'open'
+                ? 'resource.open_failed'
+                : actionName === 'enable'
+                    ? 'resource.enable_failed'
+                    : actionName === 'disable'
+                        ? 'resource.disable_failed'
+                        : 'resource.delete_failed';
+            this.showAlert(this.t('common.error'), result?.msg || this.t(fallbackKey, { name: activeName, label: this.t('resource.label_sights') }), 'error');
+            return;
+        }
+        if (actionName === 'open') return;
+        if (actionName === 'delete') {
+            this.closeSightPackageDetail();
+            await this.refreshSights({ manual: true });
+            return;
+        }
+        const nextName = String(result.name || detail.enabled_name || activeName).trim();
+        await this.refreshSights({ manual: true });
+        await this.openSightPackageDetail(nextName);
+    } catch (error) {
+        this.showAlert(this.t('common.error'), error?.message || String(error), 'error');
+    } finally {
+        this._sightDetailActionLoading = false;
+        if (this._sightDetailData && this._sightDetailActiveName) {
+            this.renderSightPackageDetail();
+        }
+    }
+};
+
+app._getSightDetailStatusBadge = function (detail, options = {}) {
+    const installState = this._getSightInstallState(detail || {});
+    const isEnabled = installState.is_enabled;
+    const isPartial = installState.is_partial;
+    const isDisabled = installState.is_disabled;
+    let cls = 'is-disabled';
+    let icon = 'ri-pause-circle-line';
+    let text = this.t('resource.sight_status_disabled', {}, '已停用');
+    if (isEnabled) {
+        cls = 'is-enabled';
+        icon = 'ri-checkbox-circle-line';
+        text = this.t('resource.sight_status_enabled', {}, '已启用');
+    } else if (isPartial) {
+        cls = 'is-partial';
+        icon = 'ri-indeterminate-circle-line';
+        text = this.t('resource.sight_status_partial', {}, '部分启用');
+    }
+    if (options.useMetaStatus) {
+        const parseStatus = String(detail?.parse_status || 'no_meta');
+        if (parseStatus === 'has_meta') {
+            cls = 'is-meta has-meta';
+            icon = 'ri-database-2-line';
+            text = this.t('resource.filter_with_meta', {}, '有元数据');
+        } else if (parseStatus === 'meta_error') {
+            cls = 'is-meta meta-error';
+            icon = 'ri-error-warning-line';
+            text = this.t('resource.sight_detail_meta_error', {}, '元数据需要处理');
+        } else {
+            cls = 'is-meta';
+            icon = 'ri-database-2-line';
+            text = this.t('resource.sight_detail_meta_missing', {}, '暂无作者元数据');
+        }
+    }
+    return `<span class="sight-detail-status-badge ${cls}"><i class="${icon}"></i>${this._escapeHtml(text)}</span>`;
+};
+
+app._render_sight_detail_file_list_content = function (rows, group_total) {
+    const list_rows = Array.isArray(rows) ? rows : [];
+    const list_state = this._sightDetailListState || {};
+    const remaining_count = Math.max(0, Number(group_total || 0) - list_rows.length);
+    const loading_more = list_state.loading ? 'disabled' : '';
+    return `
+        ${this.renderSightDetailFeatureTable(list_rows)}
+        ${list_state.has_more ? `
+            <button class="btn-v2 small secondary sight-package-detail-load-more${list_state.loading ? ' is-loading' : ''}" type="button" data-sight-detail-load-action aria-busy="${list_state.loading ? 'true' : 'false'}" ${loading_more} onclick="app.load_more_sight_detail_group()">
+                <i class="${list_state.loading ? 'ri-loader-4-line' : 'ri-more-line'}"></i>
+                <span data-sight-detail-load-label>${this._escapeHtml(list_state.loading
+                    ? this.t('common.loading', {}, '加载中...')
+                    : this.t('resource.sight_detail_load_remaining', { count: remaining_count }, `加载剩余 ${remaining_count} 个文件`))}</span>
+            </button>
+        ` : ''}
+    `;
+};
+
+app.renderSightPackageDetail = function () {
+    const detailView = document.getElementById('sight-package-detail-view');
+    const detail = this._sightDetailData || {};
+    if (!detailView) return;
+    const meta = detail.meta || {};
+    const groups = Array.isArray(detail.groups) ? detail.groups : [];
+    const selectedGroupId = this._sightDetailSelectedGroupId || detail.selected_group_id || groups[0]?.group_id || '__all__';
+    const selectedGroup = groups.find(group => String(group.group_id) === String(selectedGroupId)) || groups[0] || null;
+    const rows = Array.isArray(this._sightDetailListState?.rows) ? this._sightDetailListState.rows : [];
+    const cover_source = String(meta.cover_url || detail.cover_url || '').trim();
+    const cover = cover_source || 'assets/card_image_small.png';
+    const cover_is_default = !cover_source || (!!detail.cover_is_default && !meta.cover_url);
+    const title = this._getSightDetailDisplayName(detail);
+    const author = String(meta.author || this.t('mod.unknown_author', {}, '未知作者'));
+    const version = String(meta.version || '').trim();
+    const description = String(meta.description || this.t('mod.no_description', {}, '暂无简介介绍'));
+    const tags = Array.isArray(meta.tags) ? meta.tags.slice(0, 4) : [];
+    const blkCount = String(detail.package_blk_total ?? rows.length);
+    const groupTotal = Number(this._sightDetailListState?.total ?? selectedGroup?.file_count ?? 0);
+    const selectedGroupName = this._getSightDetailGroupDisplayName(selectedGroup || {});
+    const updatedAt = this._formatSightDetailUpdatedAt(detail.mtime);
+    const installState = this._getSightInstallState(detail);
+    const installBadge = this._getSightDetailStatusBadge(detail);
+    const metaBadge = this._getSightDetailStatusBadge(detail, { useMetaStatus: true });
+    const warningText = []
+        .concat(detail.meta_error ? [`${this.t('resource.sight_detail_meta_error', {}, '元数据需要处理')}: ${detail.meta_error}`] : [])
+        .concat(Array.isArray(detail.meta_warnings) ? detail.meta_warnings : [])
+        .filter(Boolean)
+        .join('；');
+    const groupHtml = this.renderSightDetailGroups(groups);
+    const file_list_html = this._render_sight_detail_file_list_content(rows, groupTotal);
+    const actionLoading = this._sightDetailActionLoading ? 'disabled' : '';
+    const metaFacts = this._renderSightPackageMetaFacts(meta);
+    const refreshLabel = this.t('lib.refresh', {}, '刷新');
+    const summary_collapsed = this._sight_detail_summary_collapsed === true;
+    detailView.innerHTML = `
+        <div class="sight-package-detail-shell${summary_collapsed ? ' is-summary-collapsed' : ''}">
+            <div class="sight-package-detail-breadcrumb">
+                <button type="button" class="sight-package-detail-back" onclick="app.closeSightPackageDetail()">
+                    <i class="ri-arrow-left-line"></i>
+                    <span>${this._escapeHtml(this.t('resource.sight_detail_back_to_list', {}, '返回炮镜库'))}</span>
+                </button>
+                <span>${this._escapeHtml(this.t('tools.sights', {}, '炮镜库'))}</span>
+                <i class="ri-arrow-right-s-line"></i>
+                <strong>${this._escapeHtml(title)}</strong>
+                ${selectedGroup ? `<i class="ri-arrow-right-s-line"></i><span data-sight-detail-breadcrumb-group>${this._escapeHtml(selectedGroupName)}</span>` : ''}
+                <button type="button"
+                        class="sight-package-detail-summary-toggle"
+                        data-sight-package-summary-toggle
+                        aria-expanded="${summary_collapsed ? 'false' : 'true'}"
+                        aria-controls="sight-package-detail-summary"
+                        aria-label="${summary_collapsed ? '展开炮镜包信息' : '收起炮镜包信息'}"
+                        title="${summary_collapsed ? '展开炮镜包信息' : '收起炮镜包信息'}"
+                        onclick="app.toggle_sight_package_detail_summary()">
+                    <i class="ri-menu-line"></i>
+                </button>
+            </div>
+            <div class="sight-package-detail-summary" id="sight-package-detail-summary" aria-hidden="${summary_collapsed ? 'true' : 'false'}">
+            <header class="sight-package-detail-hero">
+                <img class="sight-package-detail-cover${cover_is_default ? ' is-default' : ''}" src="${this._escapeHtml(cover)}" alt="" onerror="this.classList.add('is-default'); this.src='assets/card_image_small.png'">
+                <div class="sight-package-detail-hero-main">
+                    <div class="sight-package-detail-title-row">
+                        <div class="sight-package-detail-title-identity">
+                            <h2>${this._escapeHtml(title)}</h2>
+                            ${version ? `<span class="sight-package-detail-version">v${this._escapeHtml(version)}</span>` : ''}
+                            ${installBadge}
+                        </div>
+                        <span class="sight-package-detail-actions">
+                            <button type="button" class="btn-v2 small secondary" data-sight-package-action ${actionLoading} onclick="app.runSightPackageDetailAction('open')">
+                                <i class="ri-folder-open-line"></i><span>${this._escapeHtml(this.t('resource.sight_detail_open_folder', {}, '打开文件夹'))}</span>
+                            </button>
+                            <button type="button" class="btn-v2 small secondary" data-sight-package-action ${actionLoading} onclick="app.runSightPackageDetailAction('${installState.is_disabled ? 'enable' : 'disable'}')">
+                                <i class="${installState.is_disabled ? 'ri-play-circle-line' : 'ri-pause-circle-line'}"></i><span>${this._escapeHtml(this.t(installState.is_disabled ? 'resource.action_enable' : 'resource.action_stop'))}</span>
+                            </button>
+                            <button type="button" class="btn-v2 small secondary" data-sight-package-action ${actionLoading} onclick="app.changeSightApplicationVehicles()">
+                                <i class="ri-road-map-line"></i><span>更改应用车辆</span>
+                            </button>
+                            <button type="button" class="btn-v2 small secondary" data-sight-package-action ${actionLoading} onclick="app.runSightPackageDetailAction('refresh')" title="${this._escapeHtml(refreshLabel)}" aria-label="${this._escapeHtml(refreshLabel)}">
+                                <i class="ri-refresh-line"></i><span>${this._escapeHtml(refreshLabel)}</span>
+                            </button>
+                            <button type="button" class="btn-v2 small secondary sight-package-detail-delete" data-sight-package-action ${actionLoading} onclick="app.runSightPackageDetailAction('delete')">
+                                <i class="ri-delete-bin-line"></i><span>${this._escapeHtml(this.t('resource.action_delete'))}</span>
+                            </button>
+                        </span>
+                    </div>
+                    <div class="sight-package-detail-meta-line">
+                        <span><i class="ri-user-3-line"></i><strong>${this._escapeHtml(author)}</strong></span>
+                        <span><i class="ri-crosshair-2-line"></i>${this._escapeHtml(blkCount)} BLK</span>
+                        ${updatedAt ? `<span><i class="ri-time-line"></i>${this._escapeHtml(this.t('resource.sight_detail_updated_at', { date: updatedAt }, `更新于 ${updatedAt}`))}</span>` : ''}
+                        ${metaBadge}
+                    </div>
+                    <p>${this._escapeHtml(description)}</p>
+                    ${metaFacts}
+                    ${tags.length ? `<div class="sight-package-detail-tags">
+                        ${tags.map(tag => `<span>${this._escapeHtml(tag)}</span>`).join('')}
+                    </div>` : ''}
+                </div>
+            </header>
+            </div>
+            ${warningText ? `<div class="sight-package-detail-warning">${this._escapeHtml(warningText)}</div>` : ''}
+            <div class="sight-package-detail-body sight-package-detail-layout">
+                <aside class="sight-package-detail-groups">${groupHtml}</aside>
+                <section class="sight-package-detail-files">
+                    <div class="sight-package-detail-files-head">
+                        <div class="sight-package-detail-files-head-info">
+                            <h3 data-sight-detail-group-title>${this._escapeHtml(selectedGroupName || this.t('resource.sight_detail_file_list', {}, '文件列表'))}</h3>
+                            <span data-sight-detail-loaded-progress>${this._escapeHtml(this.t('resource.sight_detail_loaded_progress', { loaded: rows.length, total: groupTotal }, `已显示 ${rows.length} / ${groupTotal}`))}</span>
+                        </div>
+                        <div class="sight-blk-batch-toolbar">
+                            <label class="sight-blk-select-all">
+                                <input type="checkbox" data-sight-detail-select-all onchange="app.toggle_sight_package_detail_select_all(this.checked)">
+                                <span>${this._escapeHtml(this.t('resource.sight_action_select_all_loaded', {}, '全选已加载'))}</span>
+                            </label>
+                            <span class="sight-blk-selected-count" data-sight-detail-selected-count>${this._escapeHtml(this.t('resource.sight_action_selected_count', { count: 0 }, '已选择 0 项'))}</span>
+                            <div class="sight-blk-batch-actions">
+                                <button class="sight-blk-batch-btn" type="button" data-sight-detail-batch-action="enable" disabled onclick="app.run_selected_sight_blk_features('${encodeURIComponent(this._sightDetailActiveName)}', true)">
+                                    <i class="ri-play-list-2-line"></i><span>${this._escapeHtml(this.t('resource.sight_action_enable_selected', {}, '启用所选'))}</span>
+                                </button>
+                                <button class="sight-blk-batch-btn" type="button" data-sight-detail-batch-action="disable" disabled onclick="app.run_selected_sight_blk_features('${encodeURIComponent(this._sightDetailActiveName)}', false)">
+                                    <i class="ri-pause-circle-line"></i><span>${this._escapeHtml(this.t('resource.sight_action_disable_selected', {}, '停用所选'))}</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sight-package-detail-file-list" data-sight-package-detail-file-list>
+                        ${file_list_html}
+                    </div>
+                </section>
+            </div>
+        </div>
+    `;
+    this.update_sight_package_detail_selection();
+    this.applyResourceReveal(detailView, {
+        item_selector: [
+            '.sight-package-detail-hero',
+            '.sight-package-detail-groups > *',
+            '.sight-package-detail-file-list > *',
+        ].join(', '),
+        max_animated: 32,
+        stagger_ms: 62.5,
+        reveal_window_ms: 2000,
+        duration_ms: 180,
+        defer_remaining: true,
+    });
+};
+
+app._sync_sight_detail_group_dom = function ({ loading = false, animate = false } = {}) {
+    const detail_view = document.getElementById('sight-package-detail-view');
+    const files_panel = detail_view?.querySelector('.sight-package-detail-files');
+    const file_list = detail_view?.querySelector('[data-sight-package-detail-file-list]');
+    if (!detail_view || !files_panel || !file_list) return false;
+
+    const detail = this._sightDetailData || {};
+    const groups = Array.isArray(detail.groups) ? detail.groups : [];
+    const selected_group_id = String(this._sightDetailSelectedGroupId || '__all__');
+    const selected_group = groups.find(group => String(group.group_id) === selected_group_id) || groups[0] || null;
+    const selected_group_name = this._getSightDetailGroupDisplayName(selected_group || {});
+    const list_state = this._sightDetailListState || {};
+    const rows = Array.isArray(list_state.rows) ? list_state.rows : [];
+    const group_total = Number(list_state.total ?? selected_group?.file_count ?? 0);
+    const is_loading = !!loading;
+
+    detail_view.querySelectorAll('[data-sight-detail-group-id]').forEach(button => {
+        const is_active = String(button.dataset.sightDetailGroupId || '') === selected_group_id;
+        button.classList.toggle('is-active', is_active);
+        button.setAttribute('aria-current', is_active ? 'true' : 'false');
+        button.setAttribute('aria-disabled', String(is_loading));
+    });
+    const breadcrumb_group = detail_view.querySelector('[data-sight-detail-breadcrumb-group]');
+    const group_title = detail_view.querySelector('[data-sight-detail-group-title]');
+    const progress = detail_view.querySelector('[data-sight-detail-loaded-progress]');
+    if (breadcrumb_group) breadcrumb_group.textContent = selected_group_name;
+    if (group_title) group_title.textContent = selected_group_name;
+
+    files_panel.classList.toggle('is-switching', is_loading);
+    files_panel.setAttribute('aria-busy', String(is_loading));
+    if (is_loading) {
+        if (progress) progress.textContent = this.t('common.loading', {}, '加载中...');
+        return true;
+    }
+
+    if (progress) {
+        progress.textContent = this.t(
+            'resource.sight_detail_loaded_progress',
+            { loaded: rows.length, total: group_total },
+            `已显示 ${rows.length} / ${group_total}`
+        );
+    }
+    file_list.innerHTML = this._render_sight_detail_file_list_content(rows, group_total);
+    file_list.classList.remove('is-group-entering');
+    if (animate) {
+        void file_list.offsetWidth;
+        file_list.classList.add('is-group-entering');
+    }
+    file_list.scrollTop = 0;
+    this.update_sight_package_detail_selection();
+    return true;
+};
+
+app.renderSightDetailGroups = function (groups) {
+    const list = Array.isArray(groups) && groups.length ? groups : [{
+        group_id: '__all__',
+        name: this.t('resource.sight_detail_group_all', {}, '全部炮镜'),
+        file_count: 0,
+        description: '',
+    }];
+    const activeId = String(this._sightDetailSelectedGroupId || '');
+    return list.map(group => {
+        const groupId = String(group.group_id || '__all__');
+        const isActive = groupId === activeId;
+        const groupName = this._getSightDetailGroupDisplayName(group);
+        const desc = String(group.description || '').trim();
+        const ammo = Array.isArray(group.ammo_types)
+            ? group.ammo_types.filter(Boolean).map(value => this._formatSightAmmoTypeLabel(value)).join('、')
+            : '';
+        const platforms = Array.isArray(group.platforms) ? group.platforms.filter(Boolean).join('、') : '';
+        const vehicles = this._formatSightDetailList(group.recommended_vehicles);
+        const resolutions = this._formatSightDetailList(group.target_resolutions);
+        return `
+            <button class="sight-package-detail-group${isActive ? ' is-active' : ''}" type="button" data-sight-detail-group-action data-sight-detail-group-id="${this._escapeHtml(groupId)}" aria-current="${isActive ? 'true' : 'false'}" onclick="app.selectSightDetailGroup('${this._escapeHtml(groupId)}')">
+                <span class="sight-package-detail-group-title">
+                    <i class="${groupId === '__all__' ? 'ri-stack-line' : groupId === '__ungrouped__' ? 'ri-inbox-line' : 'ri-focus-3-line'}"></i>
+                    <strong>${this._escapeHtml(groupName)}</strong>
+                    ${group.featured ? '<em>推荐</em>' : ''}
+                </span>
+                ${desc ? `<span class="sight-package-detail-group-desc">${this._escapeHtml(desc)}</span>` : ''}
+                <span class="sight-package-detail-group-meta">
+                    <b class="sight-package-detail-group-count">${this._escapeHtml(String(group.file_count || 0))} 个文件</b>
+                    ${ammo ? `<small>${this._escapeHtml(ammo)}</small>` : ''}
+                    ${vehicles ? `<small>${this._escapeHtml(vehicles)}</small>` : ''}
+                    ${resolutions ? `<small>${this._escapeHtml(resolutions)}</small>` : ''}
+                    ${platforms ? `<small>${this._escapeHtml(platforms)}</small>` : ''}
+                </span>
+            </button>
+        `;
+    }).join('');
+};
+
+app.renderSightDetailFeatureTable = function (features) {
+    if (!Array.isArray(features) || !features.length) {
+        return `<div class="sight-package-detail-empty">${this._escapeHtml(this.t('resource.sight_detail_no_group_files', {}, '此分组暂无炮镜文件'))}</div>`;
+    }
+    return features.map(feature => this._renderSightFeatureRow(feature, this._sightDetailActiveName, { show_detail_action: true })).join('');
+};
+
+app.toggle_sight_package_detail_row_selection = function (event, row) {
+    if (this._sight_detail_batch_loading || !row?.closest('#sight-package-detail-view')) return;
+    const interactive_target = event?.target?.closest('button, input, label, a, [role="button"]');
+    if (interactive_target) return;
+    const input = row.querySelector('[data-sight-blk-select]');
+    if (!input || input.disabled) return;
+    input.checked = !input.checked;
+    this.update_sight_package_detail_selection();
+};
+
+app.update_sight_package_detail_selection = function () {
+    const detail_view = document.getElementById('sight-package-detail-view');
+    if (!detail_view || !this._sightDetailActiveName) return;
+    const inputs = Array.from(detail_view.querySelectorAll('[data-sight-blk-select]'));
+    const checked_inputs = inputs.filter(input => input.checked);
+    const selected_count = checked_inputs.length;
+    const is_busy = !!this._sight_detail_batch_loading;
+
+    inputs.forEach(input => {
+        const row = input.closest('.sight-blk-row');
+        if (!row) return;
+        row.classList.toggle('is-selected', input.checked);
+        row.setAttribute('aria-selected', String(input.checked));
+    });
+
+    const select_all = detail_view.querySelector('[data-sight-detail-select-all]');
+    if (select_all) {
+        select_all.checked = inputs.length > 0 && selected_count === inputs.length;
+        select_all.indeterminate = selected_count > 0 && selected_count < inputs.length;
+        select_all.disabled = inputs.length === 0 || is_busy;
+    }
+
+    const count_label = detail_view.querySelector('[data-sight-detail-selected-count]');
+    if (count_label) {
+        count_label.textContent = this.t('resource.sight_action_selected_count', { count: selected_count }, `已选择 ${selected_count} 项`);
+    }
+
+    detail_view.querySelectorAll('[data-sight-detail-batch-action]').forEach(button => {
+        const action_name = String(button.dataset.sightDetailBatchAction || '');
+        const icon = button.querySelector('i');
+        button.disabled = is_busy || selected_count === 0;
+        button.classList.toggle('is-loading', is_busy);
+        button.setAttribute('aria-busy', String(is_busy));
+        if (icon) {
+            icon.className = is_busy
+                ? 'ri-loader-4-line'
+                : action_name === 'enable'
+                    ? 'ri-play-list-2-line'
+                    : 'ri-pause-circle-line';
+        }
+    });
+
+    detail_view.querySelectorAll('[data-sight-package-action]').forEach(button => {
+        button.disabled = is_busy || !!this._sightDetailActionLoading;
+    });
+    detail_view.querySelectorAll('[data-sight-row-action]').forEach(button => {
+        const state_disabled = button.dataset.sightRowStateDisabled === 'true';
+        button.disabled = is_busy || state_disabled;
+    });
+    detail_view.querySelectorAll('[data-sight-detail-group-action]').forEach(button => {
+        button.disabled = is_busy;
+    });
+    const load_action = detail_view.querySelector('[data-sight-detail-load-action]');
+    if (load_action) {
+        load_action.disabled = is_busy || !!this._sightDetailListState?.loading;
+    }
+};
+
+app.toggle_sight_package_detail_select_all = function (checked) {
+    if (this._sight_detail_batch_loading) return;
+    const detail_view = document.getElementById('sight-package-detail-view');
+    if (!detail_view) return;
+    detail_view.querySelectorAll('[data-sight-blk-select]').forEach(input => {
+        input.checked = !!checked;
+    });
+    this.update_sight_package_detail_selection();
+};
+
+app.run_selected_sight_blk_features = async function (sight_name, enabled) {
+    if (this._sight_detail_batch_loading) return;
+    const paths = this._getSelectedSightBlkPaths(sight_name);
+    if (!paths.length) {
+        this.showAlert(
+            this.t('common.warn'),
+            this.t('resource.sight_action_select_first', {}, '请先选择要处理的炮镜文件'),
+            'warn'
+        );
+        this.update_sight_package_detail_selection();
+        return;
+    }
+    this._sight_detail_batch_loading = true;
+    this.update_sight_package_detail_selection();
+    try {
+        return await this._setSightBlkFeaturesEnabled(sight_name, paths, !!enabled);
+    } finally {
+        this._sight_detail_batch_loading = false;
+        this.update_sight_package_detail_selection();
+    }
+};
+
+app._restore_sight_package_detail_list_state = function (selected_paths, previous_scroll_top) {
+    const detail_view = document.getElementById('sight-package-detail-view');
+    if (!detail_view) return;
+    const selected_path_set = new Set(Array.isArray(selected_paths) ? selected_paths : []);
+    detail_view.querySelectorAll('[data-sight-blk-select]').forEach(input => {
+        input.checked = selected_path_set.has(String(input.value || ''));
+    });
+    this.update_sight_package_detail_selection();
+    const restored_list = detail_view.querySelector('[data-sight-package-detail-file-list]');
+    if (restored_list && Number.isFinite(previous_scroll_top)) {
+        requestAnimationFrame(() => {
+            restored_list.scrollTop = previous_scroll_top;
+        });
+    }
+};
+
+app.selectSightDetailGroup = async function (group_id) {
+    if (this._sight_detail_batch_loading || this._sightDetailListState?.loading) return;
+    const nextGroupId = String(group_id || '__all__');
+    if (!nextGroupId || nextGroupId === this._sightDetailSelectedGroupId) return;
+    const previous_group_id = String(this._sightDetailSelectedGroupId || '__all__');
+    this._sightDetailSelectedGroupId = nextGroupId;
+    await this.loadSightDetailGroupPage({ reset: true, previous_group_id });
+};
+
+app.refreshSightPackageDetail = async function () {
+    if (!this._sightDetailActiveName) return;
+    await this.loadSightDetailGroupPage({ reset: true });
+};
+
+app._set_sight_detail_load_action_state = function (loading) {
+    const detail_view = document.getElementById('sight-package-detail-view');
+    const load_action = detail_view?.querySelector('[data-sight-detail-load-action]');
+    if (!load_action) return;
+    const is_loading = !!loading;
+    const list_state = this._sightDetailListState || {};
+    const loaded_count = Array.isArray(list_state.rows) ? list_state.rows.length : 0;
+    const remaining_count = Math.max(0, Number(list_state.total || 0) - loaded_count);
+    const icon = load_action.querySelector('i');
+    const label = load_action.querySelector('[data-sight-detail-load-label]');
+    load_action.disabled = is_loading || !!this._sight_detail_batch_loading;
+    load_action.classList.toggle('is-loading', is_loading);
+    load_action.setAttribute('aria-busy', String(is_loading));
+    if (icon) {
+        icon.className = is_loading ? 'ri-loader-4-line' : 'ri-more-line';
+    }
+    if (label) {
+        label.textContent = is_loading
+            ? this.t('common.loading', {}, '加载中...')
+            : this.t('resource.sight_detail_load_remaining', { count: remaining_count }, `加载剩余 ${remaining_count} 个文件`);
+    }
+};
+
+app._append_sight_detail_group_rows = function (features) {
+    const detail_view = document.getElementById('sight-package-detail-view');
+    const list = detail_view?.querySelector('[data-sight-package-detail-file-list]');
+    if (!list || !Array.isArray(features) || !features.length) return;
+    const load_action = list.querySelector('[data-sight-detail-load-action]');
+    const rows_html = features.map((feature, entry_index) => this._renderSightFeatureRow(
+        feature,
+        this._sightDetailActiveName,
+        { show_detail_action: true, animate_entry: true, entry_index }
+    )).join('');
+    if (load_action) {
+        load_action.insertAdjacentHTML('beforebegin', rows_html);
+    } else {
+        list.insertAdjacentHTML('beforeend', rows_html);
+    }
+};
+
+app._sync_sight_detail_list_dom = function () {
+    const detail_view = document.getElementById('sight-package-detail-view');
+    if (!detail_view) return;
+    const list_state = this._sightDetailListState || {};
+    const loaded_count = Array.isArray(list_state.rows) ? list_state.rows.length : 0;
+    const total_count = Number(list_state.total || 0);
+    const progress = detail_view.querySelector('[data-sight-detail-loaded-progress]');
+    if (progress) {
+        progress.textContent = this.t(
+            'resource.sight_detail_loaded_progress',
+            { loaded: loaded_count, total: total_count },
+            `已显示 ${loaded_count} / ${total_count}`
+        );
+    }
+    const load_action = detail_view.querySelector('[data-sight-detail-load-action]');
+    if (load_action && !list_state.has_more) {
+        load_action.remove();
+    } else {
+        this._set_sight_detail_load_action_state(false);
+    }
+    this.update_sight_package_detail_selection();
+};
+
+app._finish_sight_detail_page_load = function ({ append = false, animate = false } = {}) {
+    if (append) {
+        this._sync_sight_detail_list_dom();
+        return;
+    }
+    if (!this._sync_sight_detail_group_dom({ loading: false, animate })) {
+        this.renderSightPackageDetail();
+    }
+};
+
+app.load_more_sight_detail_group = async function () {
+    const list_state = this._sightDetailListState || {};
+    if (this._sight_detail_batch_loading || list_state.loading || !list_state.has_more || !list_state.cursor) return;
+    await this.loadSightDetailGroupPage({ append: true });
+};
+
+app.loadSightDetailGroupPage = async function (options = {}) {
+    const activeName = String(this._sightDetailActiveName || '').trim();
+    if (!activeName || !window.pywebview?.api?.get_sight_blk_features_page) return;
+    const reset = !!options.reset;
+    if (!reset && options.append !== true) return;
+    if (reset && this._sightDetailListState?.loading) return;
+    const append = options.append === true;
+    const cursor = reset ? null : (this._sightDetailListState?.cursor || null);
+    if (append && (!cursor || this._sightDetailListState?.loading)) return;
+    const groupId = this._sightDetailSelectedGroupId || '__all__';
+    const previous_group_id = String(options.previous_group_id || groupId);
+    const previous_state = {
+        ...(this._sightDetailListState || {}),
+        rows: Array.isArray(this._sightDetailListState?.rows) ? [...this._sightDetailListState.rows] : [],
+    };
+    const restore_previous_state = () => {
+        this._sightDetailSelectedGroupId = previous_group_id;
+        this._sightDetailListState = { ...previous_state, loading: false };
+    };
+    const detail_view = document.getElementById('sight-package-detail-view');
+    const current_list = detail_view?.querySelector('[data-sight-package-detail-file-list]');
+    const previous_scroll_top = Number(current_list?.scrollTop || 0);
+    const previous_selected_paths = Array.from(detail_view?.querySelectorAll('[data-sight-blk-select]:checked') || [])
+        .map(input => String(input.value || ''))
+        .filter(Boolean);
+    this._sightDetailListState = {
+        ...(this._sightDetailListState || {}),
+        loading: true,
+    };
+    if (append) {
+        this._set_sight_detail_load_action_state(true);
+    } else {
+        if (!this._sync_sight_detail_group_dom({ loading: true })) {
+            this.renderSightPackageDetail();
+        }
+    }
+    try {
+        const page = await pywebview.api.get_sight_blk_features_page(activeName, cursor, 50, groupId);
+        if (!page || page.success === false) {
+            if (page?.error_code === 'group_not_found' && groupId !== '__all__') {
+                restore_previous_state();
+                this._sightDetailSelectedGroupId = '__all__';
+                if (typeof this.showWarnToast === 'function') {
+                    this.showWarnToast(this.t('common.warn'), page.error || '分组不存在，已切回全部炮镜');
+                }
+                await this.loadSightDetailGroupPage({ reset: true, previous_group_id });
+                return;
+            }
+            restore_previous_state();
+            this.showAlert(this.t('common.error'), page?.error || '加载 BLK 特征失败', 'error');
+            this._finish_sight_detail_page_load({ append });
+            this._restore_sight_package_detail_list_state(previous_selected_paths, previous_scroll_top);
+            return;
+        }
+        const nextRows = reset
+            ? (page.blk_features || [])
+            : [...(this._sightDetailListState?.rows || []), ...(page.blk_features || [])];
+        this._sightDetailListState = {
+            cursor: page.blk_feature_cursor || null,
+            loading: false,
+            has_more: !!page.blk_feature_cursor,
+            total: Number(page.blk_feature_total || 0),
+            rows: nextRows,
+        };
+        if (append) {
+            this._append_sight_detail_group_rows(page.blk_features || []);
+        }
+        this._finish_sight_detail_page_load({ append, animate: !append });
+        if (append) {
+            this._restore_sight_package_detail_list_state(previous_selected_paths, previous_scroll_top);
+        }
+    } catch (e) {
+        restore_previous_state();
+        this.showAlert(this.t('common.error'), e?.message || String(e), 'error');
+        this._finish_sight_detail_page_load({ append });
+        this._restore_sight_package_detail_list_state(previous_selected_paths, previous_scroll_top);
+    }
+};
+
+app._getSelectedSightBlkPaths = function (sight_name) {
+    const decodedName = decodeURIComponent(String(sight_name || ''));
+    if (this._sightDetailActiveName && this._sightDetailActiveName === decodedName) {
+        const detailView = document.getElementById('sight-package-detail-view');
+        return Array.from(detailView?.querySelectorAll('[data-sight-blk-select]:checked') || [])
+            .map(input => String(input.value || '').trim())
+            .map(path => encodeURIComponent(path))
+            .filter(Boolean);
+    }
+    const host = this._findSightDetailHost(decodedName);
+    if (!host) return [];
+    return Array.from(host.querySelectorAll('[data-sight-blk-select]:checked'))
+        .map(input => String(input.value || '').trim())
+        .map(path => encodeURIComponent(path))
+        .filter(Boolean);
+};
+
+app._formatSightConflictReason = function (reason, action = '') {
+    const reasonCode = String(reason || '').trim();
+    const actionCode = String(action || '').trim();
+    const reasonMap = {
+        target_conflict: '目标位置已有不同内容的炮镜文件',
+        disabled_target_conflict: '停用文件与当前记录不一致',
+        enabled_and_disabled_both_exist: '启用文件和停用文件同时存在',
+        fingerprint_mismatch: '文件已被用户或第三方修改',
+        resource_missing: '资源库源文件缺失',
+        manifest_corrupt: '安装清单损坏',
+        file_locked: '文件正在被占用',
+        operation_busy: '已有炮镜任务正在处理',
+        target_already_managed: '目标文件已有管理记录',
+        ambiguous_target_group: '需要先明确选择炮镜资源',
+        unsafe_path: '路径不安全，已拒绝操作',
+        cleanup_skipped: '空目录清理已跳过',
+        source_missing: '资源库源文件缺失',
+        target_not_in_manifest: '该文件不在当前安装清单中',
+        target_not_in_resource: '资源库中没有对应文件',
+        task_timeout: '任务等待超时',
+        missing_task_id: '任务 ID 缺失',
+        modified: '文件已被用户或第三方修改',
+        missing: '目标文件缺失',
+    };
+    const actionMap = {
+        uninstall_skipped_modified: '已保留文件，未执行删除',
+    };
+    const reasonText = reasonMap[reasonCode] || reasonCode || '需要处理';
+    const actionText = actionMap[actionCode] || '';
+    return actionText ? `${reasonText}（${actionText}）` : reasonText;
+};
+
+app._formatSightBlkOperationResult = function (result, enabled, requestedCount = 0) {
+    const readCount = (key) => {
+        const value = Number(result?.[key] || 0);
+        return Number.isFinite(value) ? value : 0;
+    };
+    const selectedCount = readCount('selected_count') || Number(requestedCount || 0);
+    const processedCount = readCount('processed_count');
+    const changedCount = readCount('renamed_count') + readCount('copied_count') + readCount('reused_count');
+    const skippedCount = readCount('skipped_count');
+    const missingCount = readCount('missing_count');
+    const conflictCount = readCount('conflict_count');
+    const modifiedCount = readCount('modified_count');
+    const keptSharedCount = readCount('kept_shared_count');
+    const alreadyDisabledCount = readCount('already_disabled_count');
+    const attentionCount = missingCount + conflictCount + modifiedCount + keptSharedCount;
+    const verb = enabled ? '启用' : '停用';
+    const parts = [];
+
+    if (selectedCount) parts.push(`选择 ${selectedCount}`);
+    if (processedCount) parts.push(`处理 ${processedCount}`);
+    if (changedCount) parts.push(`${verb} ${changedCount}`);
+    if (alreadyDisabledCount) parts.push(`已停用 ${alreadyDisabledCount}`);
+    if (missingCount) parts.push(`缺失 ${missingCount}`);
+    if (conflictCount) parts.push(`冲突 ${conflictCount}`);
+    if (modifiedCount) parts.push(`被修改 ${modifiedCount}`);
+    if (keptSharedCount) parts.push(`共享保留 ${keptSharedCount}`);
+    if (skippedCount) parts.push(`跳过 ${skippedCount}`);
+
+    const conflicts = Array.isArray(result?.conflicts) ? result.conflicts : [];
+    const conflictHints = conflicts.slice(0, 3).map(item => {
+        const target = String(item?.target_relative_path || item?.target || '').trim();
+        const reason = this._formatSightConflictReason(item?.conflict_reason || item?.reason, item?.action);
+        return [target, reason].filter(Boolean).join('：');
+    }).filter(Boolean);
+    const detail = conflictHints.length ? `；${conflictHints.join('；')}` : '';
+    const hasCounters = parts.length > 0 || conflicts.length > 0;
+    return {
+        title: attentionCount || result?.success === false ? '炮镜文件需要处理' : '炮镜文件操作完成',
+        message: (parts.length ? parts.join('，') : `${verb}操作已完成`) + detail,
+        level: attentionCount || result?.success === false ? 'warn' : 'success',
+        hasCounters,
+    };
+};
+
+app._showSightBlkOperationResult = function (result, enabled, requestedCount = 0) {
+    const summary = this._formatSightBlkOperationResult(result || {}, enabled, requestedCount);
+    if (summary.level === 'success' && typeof this.showSuccessToast === 'function') {
+        this.showSuccessToast(summary.title, summary.message);
+        return;
+    }
+    this.showAlert(summary.title, summary.message, summary.level);
+};
+
+app._restoreSightDetailAfterListRefresh = async function () {
+    const pendingName = String(this._pendingSightDetailRestore || '').trim();
+    if (!pendingName) return;
+    const host = this._findSightDetailHost(pendingName);
+    if (!host) return;
+    this._pendingSightDetailRestore = "";
+    host.dataset.loaded = '0';
+    host.hidden = true;
+    await this.toggleSightDetail(pendingName);
+};
+
+app._refreshSightsAfterDetailFileOperation = async function (sight_name) {
+    const decodedName = decodeURIComponent(String(sight_name || '')).trim();
+    if (!decodedName) return;
+    const detailWasOpen = this._sightDetailActiveName === decodedName;
+    this._pendingSightDetailRestore = decodedName;
+    const usesAsyncRefresh = typeof window.pywebview?.api?.refresh_sights_async === 'function';
+    if (typeof this.refreshSights === 'function') {
+        await this.refreshSights({ manual: true, restore_detail: decodedName });
+        if (detailWasOpen) {
+            this._pendingSightDetailRestore = "";
+            await this.loadSightDetailGroupPage({ reset: true });
+            return;
+        }
+        if (!usesAsyncRefresh) {
+            await this._restoreSightDetailAfterListRefresh();
+        }
+        return;
+    }
+    if (detailWasOpen) {
+        this._pendingSightDetailRestore = "";
+        await this.loadSightDetailGroupPage({ reset: true });
+        return;
+    }
+    await this._restoreSightDetailAfterListRefresh();
+};
+
+app._setSightBlkFeaturesEnabled = async function (sight_name, relative_paths, enabled) {
+    const decodedName = decodeURIComponent(String(sight_name || ''));
+    const paths = (Array.isArray(relative_paths) ? relative_paths : [relative_paths])
+        .map(path => decodeURIComponent(String(path || '')).trim())
+        .filter(Boolean);
+    const uniquePaths = Array.from(new Set(paths));
+    if (!decodedName) return;
+    if (!uniquePaths.length) {
+        this.showAlert('炮镜库', '请先选择要处理的炮镜文件', 'warn');
+        return;
+    }
+    const apiName = enabled ? 'enable_sight_files' : 'disable_sight_files';
+    if (!window.pywebview?.api?.[apiName]) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return;
+    }
+    const apiCall = enabled ? pywebview.api.enable_sight_files : pywebview.api.disable_sight_files;
+    try {
+        const result = await apiCall(decodedName, uniquePaths);
+        const summary = this._formatSightBlkOperationResult(result || {}, enabled, uniquePaths.length);
+        if (!result || (result.success === false && !summary.hasCounters)) {
+            this.showAlert(this.t('common.error'), result?.error || '炮镜文件操作失败', 'error');
+            return;
+        }
+        this._showSightBlkOperationResult(result, enabled, uniquePaths.length);
+        this._rememberSightBlkOperationIssues(decodedName, result, enabled, uniquePaths.length);
+        await this._refreshSightsAfterDetailFileOperation(decodedName);
+    } catch (e) {
+        this.showAlert(this.t('common.error'), e?.message || String(e), 'error');
+    }
+};
+
+app._setSightBlkFeatureEnabled = async function (sight_name, relative_path, enabled) {
+    return this._setSightBlkFeaturesEnabled(sight_name, [relative_path], enabled);
+};
+
+app.enableSightBlkFeature = async function (sight_name, relative_path) {
+    if (this._sight_detail_batch_loading) return;
+    return this._setSightBlkFeatureEnabled(sight_name, relative_path, true);
+};
+
+app.disableSightBlkFeature = async function (sight_name, relative_path) {
+    if (this._sight_detail_batch_loading) return;
+    return this._setSightBlkFeatureEnabled(sight_name, relative_path, false);
+};
+
+app.enableSelectedSightBlkFeatures = async function (sight_name) {
+    const paths = this._getSelectedSightBlkPaths(sight_name);
+    return this._setSightBlkFeaturesEnabled(sight_name, paths, true);
+};
+
+app.disableSelectedSightBlkFeatures = async function (sight_name) {
+    const paths = this._getSelectedSightBlkPaths(sight_name);
+    return this._setSightBlkFeaturesEnabled(sight_name, paths, false);
+};
+
+app.toggleSightDetail = async function (sight_name) {
+    return this.openSightPackageDetail(sight_name);
+};
+
+app.toggleSightDetailPanel = async function (sight_name) {
+    const host = this._findSightDetailHost(sight_name);
+    if (!host) return;
+    const openedHosts = Array.from(document.querySelectorAll('#sights-list [data-sight-detail-host]:not([hidden])'));
+    openedHosts.forEach(item => {
+        if (item !== host) item.hidden = true;
+    });
+    if (!host.hidden && host.dataset.loaded === '1') {
+        host.hidden = true;
+        return;
+    }
+    host.hidden = false;
+    if (host.dataset.loaded === '1') return;
+    if (!window.pywebview?.api?.get_sight_detail) {
+        host.innerHTML = `<div class="sight-detail-warning">${this._escapeHtml(this.t('common.feature_not_ready'))}</div>`;
+        return;
+    }
+    host.innerHTML = '<div class="sight-detail-loading"><i class="ri-loader-4-line"></i> 正在读取炮镜详情...</div>';
+    try {
+        const detail = await pywebview.api.get_sight_detail(sight_name);
+        if (!detail || detail.success === false) {
+            host.innerHTML = `<div class="sight-detail-warning">${this._escapeHtml(detail?.error || '读取炮镜详情失败')}</div>`;
+            return;
+        }
+        host.dataset.loaded = '1';
+        this._renderSightDetailPanel(host, detail);
+    } catch (e) {
+        host.innerHTML = `<div class="sight-detail-warning">${this._escapeHtml(e?.message || e || '读取炮镜详情失败')}</div>`;
+    }
+};
+
+app.loadMoreSightBlkFeatures = async function (sight_name, cursor) {
+    const decodedName = decodeURIComponent(String(sight_name || ''));
+    const host = this._findSightDetailHost(decodedName);
+    const btn = host?.querySelector('.sight-load-more-btn');
+    if (!host || !cursor) return;
+    if (!window.pywebview?.api?.get_sight_blk_features_page) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return;
+    }
+    if (btn) btn.disabled = true;
+    try {
+        const page = await pywebview.api.get_sight_blk_features_page(decodedName, cursor, 50);
+        if (!page || page.success === false) {
+            this.showAlert(this.t('common.error'), page?.error || '加载 BLK 特征失败', 'error');
+            return;
+        }
+        this._appendSightBlkFeatureRows(host, page.blk_features || []);
+        host.dataset.nextCursor = page.blk_feature_cursor || '';
+        if (btn) {
+            if (page.blk_feature_cursor) {
+                btn.disabled = false;
+                btn.setAttribute('onclick', `event.stopPropagation(); app.loadMoreSightBlkFeatures('${encodeURIComponent(decodedName)}', '${this._escapeHtml(String(page.blk_feature_cursor))}')`);
+            } else {
+                btn.remove();
+            }
+        }
+    } catch (e) {
+        this.showAlert(this.t('common.error'), e?.message || String(e), 'error');
+        if (btn) btn.disabled = false;
+    }
+};
+
+// --- AimerWT 资源库路径管理 ---
 app.loadLibraryPathInfo = async function () {
     const pendingInput = document.getElementById('pending-dir-input');
     const libraryInput = document.getElementById('library-dir-input');
+    const subdirInputs = {
+        voice_library_dir: document.getElementById('resource-voice-dir-input'),
+        sights_library_dir: document.getElementById('resource-sights-dir-input'),
+        task_library_dir: document.getElementById('resource-task-dir-input'),
+        model_library_dir: document.getElementById('resource-model-dir-input'),
+        hangar_library_dir: document.getElementById('resource-hangar-dir-input'),
+        backup_root_dir: document.getElementById('resource-backup-dir-input')
+    };
 
     // 检查 API 是否可用
     if (!window.pywebview || !window.pywebview.api || typeof window.pywebview.api.get_library_path_info !== 'function') {
@@ -6254,17 +10223,27 @@ app.loadLibraryPathInfo = async function () {
             }
         }
         if (libraryInput && info) {
-            if (info.custom_library_dir) {
-                libraryInput.value = info.custom_library_dir;
-                libraryInput.title = info.custom_library_dir;
+            if (info.custom_resource_root_dir || info.custom_library_dir) {
+                const customRoot = info.custom_resource_root_dir || info.custom_library_dir;
+                libraryInput.value = customRoot;
+                libraryInput.title = customRoot;
             } else {
                 libraryInput.value = '';
-                libraryInput.placeholder = info.default_library_dir || this.t('settings.use_default_path');
-                libraryInput.title = info.default_library_dir || '';
+                libraryInput.placeholder = info.default_resource_root_dir || info.default_library_dir || this.t('settings.use_default_path');
+                libraryInput.title = info.default_resource_root_dir || info.default_library_dir || '';
             }
         }
+        Object.entries(subdirInputs).forEach(([key, input]) => {
+            if (!input) return;
+            const path = info?.[key] || '';
+            input.value = path;
+            input.title = path;
+        });
+        if (Array.isArray(info?.resource_marker_errors) && info.resource_marker_errors.length > 0) {
+            console.warn('AimerWT resource marker check warnings:', info.resource_marker_errors);
+        }
     } catch (e) {
-        console.error('加载语音包库路径信息失败:', e);
+        console.error('加载 AimerWT 资源库路径信息失败:', e);
         if (pendingInput) pendingInput.placeholder = this.t('settings.load_failed');
         if (libraryInput) libraryInput.placeholder = this.t('settings.load_failed');
     }
@@ -6293,14 +10272,27 @@ app.browsePendingDir = async function () {
 };
 
 app.browseLibraryDir = async function () {
-    if (!window.pywebview?.api?.select_library_dir) {
+    const selectApi = window.pywebview?.api?.select_resource_root_dir || window.pywebview?.api?.select_library_dir;
+    if (!selectApi) {
         this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
         return;
     }
 
     try {
-        const result = await pywebview.api.select_library_dir();
+        const result = await selectApi();
         if (result && result.success && result.path) {
+            const currentInfo = await pywebview.api.get_library_path_info?.();
+            const currentRoot = currentInfo?.resource_root_dir || currentInfo?.library_dir || '';
+            if (currentRoot && currentRoot !== result.path) {
+                const confirmed = await this.showConfirmDialog(
+                    this.t('settings.resource_root_change_title'),
+                    this.t('settings.resource_root_change_message', {
+                        current: currentRoot,
+                        next: result.path
+                    })
+                );
+                if (!confirmed) return;
+            }
             const input = document.getElementById('library-dir-input');
             if (input) {
                 input.value = result.path;
@@ -6329,21 +10321,61 @@ app.openPendingFolder = async function () {
 };
 
 app.openLibraryFolder = async function () {
-    if (!window.pywebview?.api?.open_library_folder) {
+    const openApi = window.pywebview?.api?.open_resource_root_folder || window.pywebview?.api?.open_library_folder;
+    if (!openApi) {
         this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
         return;
     }
 
     try {
-        await pywebview.api.open_library_folder();
+        await openApi();
     } catch (e) {
         console.error(e);
         this.showAlert(this.t('common.error'), this.t('common.open_folder_failed', { message: e.message }), 'error');
     }
 };
 
+app.openResourceSubdir = async function (resourceType) {
+    if (!window.pywebview?.api?.open_resource_subdir) {
+        this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
+        return;
+    }
+    try {
+        await pywebview.api.open_resource_subdir(resourceType);
+    } catch (e) {
+        console.error(e);
+        this.showAlert(this.t('common.error'), this.t('common.open_folder_failed', { message: e.message }), 'error');
+    }
+};
+
+app.saveResourceRootWithFeedback = async function (saveApi, resourceRootDir) {
+    let loadingShown = false;
+    try {
+        const info = await window.pywebview?.api?.get_library_path_info?.();
+        const currentRoot = String(info?.resource_root_dir || info?.library_dir || '').trim();
+        const nextRoot = String(
+            resourceRootDir
+            || info?.default_resource_root_dir
+            || info?.default_library_dir
+            || ''
+        ).trim();
+        if (currentRoot && nextRoot && currentRoot !== nextRoot && window.MinimalistLoading) {
+            loadingShown = true;
+            MinimalistLoading.show(false, this.t('settings.sound_backup_migration_start'));
+            MinimalistLoading.update(2, this.t('settings.sound_backup_migration_start'));
+        }
+
+        return await saveApi(resourceRootDir);
+    } finally {
+        if (loadingShown && window.MinimalistLoading) {
+            MinimalistLoading.hide();
+        }
+    }
+};
+
 app.saveLibraryPaths = async function () {
-    if (!window.pywebview?.api?.save_pending_dir || !window.pywebview?.api?.save_library_dir) {
+    const saveResourceRootApi = window.pywebview?.api?.save_resource_root_dir || window.pywebview?.api?.save_library_dir;
+    if (!window.pywebview?.api?.save_pending_dir || !saveResourceRootApi) {
         this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
         return;
     }
@@ -6360,13 +10392,17 @@ app.saveLibraryPaths = async function () {
             return;
         }
 
-        const libraryRes = await pywebview.api.save_library_dir(libraryDir);
+        const libraryRes = await this.saveResourceRootWithFeedback(saveResourceRootApi, libraryDir);
         if (!libraryRes || !libraryRes.success) {
             this.showErrorToast(this.t('common.save_failed'), libraryRes?.msg || this.t('common.save_failed'));
             return;
         }
 
-        this.showInfoToast(this.t('settings.saved'), this.t('settings.path_saved'));
+        const migration = libraryRes.sound_backup_migration;
+        const savedMessage = migration?.migrated
+            ? this.t('settings.sound_backup_migration_complete', { path: migration.source_root || '' })
+            : this.t('settings.path_saved');
+        this.showInfoToast(this.t('settings.saved'), savedMessage);
         // 重新加载路径信息以更新 placeholder
         await this.loadLibraryPathInfo();
         // 刷新语音包库列表
@@ -6380,7 +10416,8 @@ app.saveLibraryPaths = async function () {
 };
 
 app.resetLibraryPaths = async function () {
-    if (!window.pywebview?.api?.save_pending_dir || !window.pywebview?.api?.save_library_dir) {
+    const saveResourceRootApi = window.pywebview?.api?.save_resource_root_dir || window.pywebview?.api?.save_library_dir;
+    if (!window.pywebview?.api?.save_pending_dir || !saveResourceRootApi) {
         this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
         return;
     }
@@ -6399,7 +10436,7 @@ app.resetLibraryPaths = async function () {
             return;
         }
 
-        const libraryRes = await pywebview.api.save_library_dir('');
+        const libraryRes = await this.saveResourceRootWithFeedback(saveResourceRootApi, '');
         if (!libraryRes || !libraryRes.success) {
             this.showErrorToast(this.t('common.reset_failed'), libraryRes?.msg || this.t('common.reset_failed'));
             return;
@@ -6411,7 +10448,11 @@ app.resetLibraryPaths = async function () {
         if (pendingInput) pendingInput.value = '';
         if (libraryInput) libraryInput.value = '';
 
-        this.showInfoToast(this.t('settings.reset_done'), this.t('settings.path_reset'));
+        const migration = libraryRes.sound_backup_migration;
+        const resetMessage = migration?.migrated
+            ? this.t('settings.sound_backup_migration_complete', { path: migration.source_root || '' })
+            : this.t('settings.path_reset');
+        this.showInfoToast(this.t('settings.reset_done'), resetMessage);
         // 重新加载以更新 placeholder
         await this.loadLibraryPathInfo();
         // 刷新语音包库列表
@@ -6481,22 +10522,26 @@ app.resetPendingDir = async function () {
     }
 };
 
-// 单独重置语音包库路径
+// 单独重置 AimerWT 资源库路径
 app.resetLibraryDir = async function () {
-    if (!window.pywebview?.api?.save_library_dir) {
+    const saveResourceRootApi = window.pywebview?.api?.save_resource_root_dir || window.pywebview?.api?.save_library_dir;
+    if (!saveResourceRootApi) {
         this.showAlert(this.t('common.error'), this.t('common.feature_not_ready'), 'error');
         return;
     }
 
     try {
-        // 将语音包库路径设为空（重置为预设）
-        const result = await pywebview.api.save_library_dir('');
+        const result = await this.saveResourceRootWithFeedback(saveResourceRootApi, '');
         if (result && result.success) {
             const libraryInput = document.getElementById('library-dir-input');
             if (libraryInput) {
                 libraryInput.value = '';
             }
-            this.showInfoToast(this.t('settings.reset_done'), this.t('settings.library_path_reset'));
+            const migration = result.sound_backup_migration;
+            const resetMessage = migration?.migrated
+                ? this.t('settings.sound_backup_migration_complete', { path: migration.source_root || '' })
+                : this.t('settings.library_path_reset');
+            this.showInfoToast(this.t('settings.reset_done'), resetMessage);
             await this.loadLibraryPathInfo();
             if (typeof this.refreshLibrary === 'function') {
                 this.refreshLibrary();
@@ -6706,6 +10751,17 @@ app.setupGlobalDragDrop = function () {
             if (typeof window.UI_CONFIG !== 'undefined' && window.UI_CONFIG?.langMap?.[lang]) {
                 cls = window.UI_CONFIG.langMap[lang];
             }
+            if (!cls) {
+                cls = {
+                    '中': 'lang-cn',
+                    '美': 'lang-us',
+                    '英': 'lang-us',
+                    '俄': 'lang-ru',
+                    '德': 'lang-de',
+                    '日': 'lang-jp',
+                    '法': 'lang-fr',
+                }[lang] || '';
+            }
             return `<span class="lang-text ${cls}">${escapeHtml(localizeLanguageLabel(lang))}</span>`;
         }).join('<span class="mod-preview-lang-sep">/</span>');
     }
@@ -6843,10 +10899,11 @@ app.setupGlobalDragDrop = function () {
                 name: String(item?.name || '').trim(),
                 description: String(item?.description || '').trim(),
                 link: String(item?.link || '').trim(),
+                avatar_file: String(item?.avatar_file || '').trim(),
                 avatar_url: String(item?.avatar_url || '').trim(),
                 preview_audio_files: Array.isArray(item?.preview_audio_files) ? item.preview_audio_files : []
             }))
-            .filter((item) => item.name || item.description || item.link || item.avatar_url);
+            .filter((item) => item.name || item.description || item.link || item.avatar_url || item.avatar_file);
     }
 
     function normalizePreviewAudioItems(raw) {

@@ -27,10 +27,10 @@ func applyDefaultUserFeatureFlags(cfg *SystemConfig, raw map[string]json.RawMess
 		cfg.AvatarUploadEnabled = true
 	}
 	if raw == nil || raw[userFeatureNoticeCommentKey] == nil {
-		cfg.NoticeCommentEnabled = true
+		cfg.NoticeCommentEnabled = false
 	}
 	if raw == nil || raw[userFeatureNoticeReactionKey] == nil {
-		cfg.NoticeReactionEnabled = true
+		cfg.NoticeReactionEnabled = false
 	}
 	if raw == nil || raw[userFeatureRedeemCodeKey] == nil {
 		cfg.RedeemCodeEnabled = true

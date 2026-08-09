@@ -50,7 +50,7 @@ class AppDropdownMenu {
     }
 
     /**
-     * 渲染组件HTML
+     * 渲染下拉菜单结构。
      */
     render() {
         const container = document.getElementById(this.containerId);
@@ -63,22 +63,28 @@ class AppDropdownMenu {
         container.className = 'app-dropdown-wrapper';
         container.style.width = this.width;
 
-        const heightClass = this.getHeightClass();
-        const selectedLabel = this.getSelectedLabel();
+        const trigger = document.createElement('div');
+        trigger.className = `app-dropdown-trigger ${this.getHeightClass()}`;
+        trigger.dataset.dropdownId = String(this.id);
 
-        container.innerHTML = `
-            <div class="app-dropdown-trigger ${heightClass}" data-dropdown-id="${this.id}">
-                <span class="app-dropdown-text">${selectedLabel}</span>
-                <i class="ri-arrow-down-s-line app-dropdown-arrow"></i>
-            </div>
-            <div class="app-dropdown-menu" id="${this.id}-menu">
-                ${this.renderOptions()}
-            </div>
-        `;
+        const text = document.createElement('span');
+        text.className = 'app-dropdown-text';
+        text.textContent = String(this.getSelectedLabel() || '');
 
-        this.triggerEl = container.querySelector('.app-dropdown-trigger');
-        this.dropdownEl = container.querySelector('.app-dropdown-menu');
-        this.textEl = container.querySelector('.app-dropdown-text');
+        const arrow = document.createElement('i');
+        arrow.className = 'ri-arrow-down-s-line app-dropdown-arrow';
+
+        const menu = document.createElement('div');
+        menu.className = 'app-dropdown-menu';
+        menu.id = `${this.id}-menu`;
+
+        trigger.append(text, arrow);
+        container.replaceChildren(trigger, menu);
+
+        this.triggerEl = trigger;
+        this.dropdownEl = menu;
+        this.textEl = text;
+        this.renderOptions();
     }
 
     /**
@@ -94,21 +100,39 @@ class AppDropdownMenu {
     }
 
     /**
-     * 渲染选项列表
+     * 使用 DOM 文本 API 渲染选项，避免外部数据进入 HTML。
      */
     renderOptions() {
+        if (!this.dropdownEl) return;
+        this.dropdownEl.replaceChildren();
+
         if (this.options.length === 0) {
-            return '<div class="app-dropdown-empty">暂无选项</div>';
+            const empty = document.createElement('div');
+            empty.className = 'app-dropdown-empty';
+            empty.textContent = '暂无选项';
+            this.dropdownEl.appendChild(empty);
+            return;
         }
 
-        return this.options.map(opt => `
-            <div class="app-dropdown-option ${opt.value === this.currentValue ? 'selected' : ''}"
-                 data-value="${opt.value}"
-                 data-dropdown-id="${this.id}">
-                ${opt.icon ? `<i class="${opt.icon}"></i>` : ''}
-                <span>${opt.label}</span>
-            </div>
-        `).join('');
+        this.options.forEach(option => {
+            const item = document.createElement('div');
+            item.className = 'app-dropdown-option';
+            item.classList.toggle('selected', option.value === this.currentValue);
+            item.dataset.value = String(option.value ?? '');
+            item.dataset.dropdownId = String(this.id);
+
+            const iconClass = String(option.icon || '').trim();
+            if (iconClass && /^[a-z0-9_-]+(?:\s+[a-z0-9_-]+)*$/i.test(iconClass)) {
+                const icon = document.createElement('i');
+                icon.className = iconClass;
+                item.appendChild(icon);
+            }
+
+            const label = document.createElement('span');
+            label.textContent = String(option.label ?? '');
+            item.appendChild(label);
+            this.dropdownEl.appendChild(item);
+        });
     }
 
     /**
@@ -243,14 +267,12 @@ class AppDropdownMenu {
     setOptions(options, keepSelection = true) {
         this.options = options;
 
-        if (this.dropdownEl) {
-            this.dropdownEl.innerHTML = this.renderOptions();
-        }
-
         // 如果当前值不在新选项中，重置选择
         if (!keepSelection || !options.find(opt => opt.value === this.currentValue)) {
             this.currentValue = options.length > 0 ? options[0].value : null;
         }
+
+        this.renderOptions();
 
         // 更新显示
         if (this.textEl) {
@@ -263,9 +285,7 @@ class AppDropdownMenu {
      */
     addOption(option) {
         this.options.push(option);
-        if (this.dropdownEl) {
-            this.dropdownEl.innerHTML = this.renderOptions();
-        }
+        this.renderOptions();
     }
 
     /**
@@ -273,15 +293,13 @@ class AppDropdownMenu {
      */
     removeOption(value) {
         this.options = this.options.filter(opt => opt.value !== value);
-        if (this.dropdownEl) {
-            this.dropdownEl.innerHTML = this.renderOptions();
-        }
         if (this.currentValue === value) {
             this.currentValue = this.options.length > 0 ? this.options[0].value : null;
             if (this.textEl) {
                 this.textEl.textContent = this.getSelectedLabel();
             }
         }
+        this.renderOptions();
     }
 
     /**
@@ -290,9 +308,7 @@ class AppDropdownMenu {
     clear() {
         this.options = [];
         this.currentValue = null;
-        if (this.dropdownEl) {
-            this.dropdownEl.innerHTML = this.renderOptions();
-        }
+        this.renderOptions();
         if (this.textEl) {
             this.textEl.textContent = this.placeholder;
         }
@@ -307,7 +323,7 @@ class AppDropdownMenu {
             this.triggerEl.removeEventListener('click', this.toggle);
         }
         if (this.container) {
-            this.container.innerHTML = '';
+            this.container.replaceChildren();
         }
     }
 }

@@ -436,7 +436,7 @@ const redeemModule = {
             const rewardHtml = rewards.map(r =>
                 `<div class="preset-reward-item">
                     <div class="reward-icon ${r.type}">${r.icon}</div>
-                    <span>${r.text}</span>
+                    <span>${this._escapeHtml(r.text)}</span>
                 </div>`
             ).join('');
             const dataIdx = isCustom ? `cp_${idx}` : idx;
@@ -1132,6 +1132,7 @@ const redeemModule = {
 
         container.innerHTML = codes.map((code, idx) => {
             const typeLabel = typeLabels[code.type] || code.type;
+            const safeCode = this._escapeHtml(code.code || '');
             const usageText = code.max_uses > 0 ? `${code.used_count}/${code.max_uses}` : `${code.used_count}/∞`;
             const usagePct = code.max_uses > 0 ? Math.min(100, (code.used_count / code.max_uses) * 100) : 0;
             const isFull = code.max_uses > 0 && code.used_count >= code.max_uses;
@@ -1147,7 +1148,7 @@ const redeemModule = {
             return `<div class="rs-code-card status-${code.status}" onclick="redeemModule.showCodeDetailPage(${code.id})" style="animation-delay: ${idx * 0.03}s">
                 <input type="checkbox" class="rs-code-checkbox" data-id="${code.id}" ${this._selectedCodeIds.has(code.id) ? 'checked' : ''} onclick="event.stopPropagation(); redeemModule.toggleSelectCode(${code.id}, event)">
                 <div class="rs-code-main">
-                    <span class="rs-code-text">${code.code}</span>
+                    <span class="rs-code-text">${safeCode}</span>
                     <div class="rs-code-meta">
                         <span class="rs-type-badge">${this._escapeHtml(typeLabel)}</span>
                         <span class="rs-reward-summary" title="${this._escapeHtml(rewardSummary)}">${this._escapeHtml(rewardSummary)}</span>
@@ -1357,6 +1358,9 @@ const redeemModule = {
         const statusLabel = statusMap[code.status] || code.status;
         const statusDotClass = { active: 'rd-dot-active', disabled: 'rd-dot-disabled', expired: 'rd-dot-expired', used: 'rd-dot-used' }[code.status] || '';
 
+        const safeCode = this._escapeHtml(code.code || '');
+        const safeTypeLabel = this._escapeHtml(typeLabel);
+        const safeStatusLabel = this._escapeHtml(statusLabel);
         const safeNote = this._escapeHtml(code.note || '');
         const safePopupTitle = this._escapeHtml(code.popup_title || '');
         const safePopupMessage = this._escapeHtml(code.popup_message || '');
@@ -1391,7 +1395,7 @@ const redeemModule = {
             const iconBg = { theme: 'rd-reward-theme', bonus: 'rd-reward-bonus', tag: 'rd-reward-tag' }[r.type] || 'rd-reward-bonus';
             return `<div class="rd-reward-chip">
                 <span class="rd-reward-icon ${iconBg}">${r.icon}</span>
-                <span class="rd-reward-text">${r.text}</span>
+                <span class="rd-reward-text">${this._escapeHtml(r.text)}</span>
             </div>`;
         }).join('');
 
@@ -1411,15 +1415,15 @@ const redeemModule = {
                         <div class="rd-info-grid">
                             <div class="rd-info-row">
                                 <span class="rd-info-label">兑换码</span>
-                                <span class="rd-info-value rd-mono">${code.code}</span>
+                                <span class="rd-info-value rd-mono">${safeCode}</span>
                             </div>
                             <div class="rd-info-row">
                                 <span class="rd-info-label">预设类型</span>
-                                <span class="rd-info-value"><span class="rd-type-tag">${typeLabel}</span></span>
+                                <span class="rd-info-value"><span class="rd-type-tag">${safeTypeLabel}</span></span>
                             </div>
                             <div class="rd-info-row">
                                 <span class="rd-info-label">当前状态</span>
-                                <span class="rd-info-value"><span class="rd-status-pill ${statusDotClass}">${statusLabel}</span></span>
+                                <span class="rd-info-value"><span class="rd-status-pill ${statusDotClass}">${safeStatusLabel}</span></span>
                             </div>
                             <div class="rd-info-row">
                                 <span class="rd-info-label">创建时间</span>

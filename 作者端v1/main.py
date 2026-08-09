@@ -10,7 +10,7 @@ PROJECT_ROOT = SOURCE_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend_pages import AuthorVoicepackService, ToolboxService, build_app_info
+from backend_pages import AuthorSightService, AuthorVoicepackService, ToolboxService, build_app_info
 
 try:
     import webview
@@ -29,17 +29,29 @@ else:
 WEB_DIR = BASE_DIR / "web"
 
 
+def resolve_app_base_dir(app_base_dir: str | Path | None = None) -> Path:
+    if app_base_dir is None:
+        return CURRENT_DIR
+    return Path(app_base_dir).resolve()
+
+
 class AppApi:
-    def __init__(self):
+    def __init__(self, app_base_dir: str | Path | None = None):
+        service_base_dir = resolve_app_base_dir(app_base_dir)
         self._window = None
         self._topmost_lock = threading.Lock()
-        self._voicepack = AuthorVoicepackService(app_base_dir=CURRENT_DIR, web_dir=WEB_DIR)
-        self._toolbox = ToolboxService(app_base_dir=CURRENT_DIR)
+        self._voicepack = AuthorVoicepackService(app_base_dir=service_base_dir, web_dir=WEB_DIR)
+        self._sightinfo = AuthorSightService(app_base_dir=service_base_dir, web_dir=WEB_DIR)
+        self._toolbox = ToolboxService(app_base_dir=service_base_dir)
 
     def set_window(self, window):
         self._window = window
         try:
             self._voicepack.set_window(window)
+        except Exception:
+            pass
+        try:
+            self._sightinfo.set_window(window)
         except Exception:
             pass
 
@@ -192,6 +204,208 @@ class AppApi:
         except Exception as e:
             return {"success": False, "msg": str(e)}
 
+    # ===== 炮镜作者工作台 API =====
+
+    def _call_sight_service(self, method_name, *args):
+        try:
+            method = getattr(self._sightinfo, method_name)
+            return method(*args)
+        except Exception as e:
+            return {
+                "success": False,
+                "msg": str(e),
+                "data": {},
+                "errors": [{"code": "author_sight_operation_failed", "message": str(e)}],
+                "warnings": [],
+            }
+
+    def get_sight_workspace(self):
+        return self._call_sight_service("get_workspace_info")
+
+    def list_sight_projects(self, query=""):
+        return self._call_sight_service("list_projects", query or "")
+
+    def create_sight_project(self, project_name, defaults=None):
+        return self._call_sight_service("create_project", project_name, defaults or {})
+
+    def rename_sight_project(self, old_name, new_name):
+        return self._call_sight_service("rename_project", old_name, new_name)
+
+    def delete_sight_project(self, project_name):
+        return self._call_sight_service("delete_project", project_name)
+
+    def open_sight_project_folder(self, project_name):
+        return self._call_sight_service("open_project_folder", project_name)
+
+    def open_sight_export_folder(self):
+        return self._call_sight_service("open_export_folder")
+
+    def load_sight_project(self, project_name):
+        return self._call_sight_service("load_project", project_name)
+
+    def save_sight_project(self, project_name, payload):
+        return self._call_sight_service("save_project", project_name, payload or {})
+
+    def rescan_sight_project(self, project_name, payload=None):
+        return self._call_sight_service("rescan_project", project_name, payload or {})
+
+    def analyze_sight_files(self, project_name, output_paths=None, payload=None):
+        return self._call_sight_service(
+            "analyze_files",
+            project_name,
+            output_paths or [],
+            payload or {},
+        )
+
+    def validate_sight_project(self, project_name, payload):
+        return self._call_sight_service("validate_project", project_name, payload or {})
+
+    def export_sight_project_zip(self, project_name, payload):
+        return self._call_sight_service("export_project_zip", project_name, payload or {})
+
+    def import_sight_project(self, source_type="folder", project_name="", defaults=None):
+        if not self._window:
+            return {
+                "success": False,
+                "msg": "窗口尚未准备完成",
+                "data": {},
+                "errors": [{"code": "window_not_ready", "message": "窗口尚未准备完成"}],
+                "warnings": [],
+            }
+        source_kind = str(source_type or "folder").strip().lower()
+        try:
+            if source_kind == "zip":
+                result = self._window.create_file_dialog(
+                    dialog_type=10,
+                    allow_multiple=False,
+                    file_types=("ZIP Files (*.zip)",),
+                )
+            elif source_kind == "blk":
+                result = self._window.create_file_dialog(
+                    dialog_type=10,
+                    allow_multiple=False,
+                    file_types=("BLK Files (*.blk)",),
+                )
+            else:
+                result = self._window.create_file_dialog(
+                    dialog_type=20,
+                    allow_multiple=False,
+                )
+        except Exception as e:
+            return {
+                "success": False,
+                "msg": str(e),
+                "data": {},
+                "errors": [{"code": "file_dialog_failed", "message": str(e)}],
+                "warnings": [],
+            }
+        if not result:
+            return {
+                "success": False,
+                "msg": "已取消选择",
+                "data": {"cancelled": True},
+                "errors": [],
+                "warnings": [],
+            }
+        return self._call_sight_service(
+            "import_project",
+            str(result[0]),
+            project_name or "",
+            defaults or {},
+        )
+
+    def write_sight_project_blk(self, project_name, payload, file_id, mode):
+        write_mode = str(mode or "").strip().lower()
+        destination_path = ""
+        if write_mode == "save_as":
+            if not self._window:
+                return {
+                    "success": False,
+                    "msg": "窗口尚未准备完成",
+                    "data": {},
+                    "errors": [{"code": "window_not_ready", "message": "窗口尚未准备完成"}],
+                    "warnings": [],
+                }
+            file_rows = payload.get("files") if isinstance(payload, dict) else []
+            row = next(
+                (
+                    item for item in (file_rows or [])
+                    if isinstance(item, dict) and str(item.get("file_id") or "") == str(file_id or "")
+                ),
+                {},
+            )
+            default_name = Path(str(row.get("output_path") or row.get("source_path") or "sight.blk")).name
+            if not default_name.lower().endswith(".blk"):
+                default_name = f"{default_name}.blk"
+            try:
+                result = self._window.create_file_dialog(
+                    dialog_type=30,
+                    allow_multiple=False,
+                    save_filename=default_name,
+                    file_types=("BLK Files (*.blk)",),
+                )
+            except Exception as e:
+                return {
+                    "success": False,
+                    "msg": str(e),
+                    "data": {},
+                    "errors": [{"code": "file_dialog_failed", "message": str(e)}],
+                    "warnings": [],
+                }
+            if not result:
+                return {
+                    "success": False,
+                    "msg": "已取消选择",
+                    "data": {"cancelled": True},
+                    "errors": [],
+                    "warnings": [],
+                }
+            selected = result[0] if isinstance(result, (list, tuple)) else result
+            destination = Path(str(selected))
+            if destination.suffix.lower() != ".blk":
+                destination = destination.with_suffix(".blk")
+            destination_path = str(destination)
+        return self._call_sight_service(
+            "write_project_blk",
+            project_name,
+            payload or {},
+            file_id or "",
+            write_mode,
+            destination_path,
+        )
+    def select_sight_cover(self, project_name):
+        if not self._window:
+            return {
+                "success": False,
+                "msg": "窗口尚未准备完成",
+                "data": {},
+                "errors": [{"code": "window_not_ready", "message": "窗口尚未准备完成"}],
+                "warnings": [],
+            }
+        try:
+            result = self._window.create_file_dialog(
+                dialog_type=10,
+                allow_multiple=False,
+                file_types=("Image Files (*.png;*.jpg;*.jpeg;*.webp)",),
+            )
+        except Exception as e:
+            return {
+                "success": False,
+                "msg": str(e),
+                "data": {},
+                "errors": [{"code": "file_dialog_failed", "message": str(e)}],
+                "warnings": [],
+            }
+        if not result:
+            return {
+                "success": False,
+                "msg": "已取消选择",
+                "data": {"cancelled": True},
+                "errors": [],
+                "warnings": [],
+            }
+        return self._call_sight_service("import_cover", project_name, str(result[0]))
+
     # ===== 工具箱 API =====
 
     def toolbox_convert_webp(self, payload):
@@ -248,7 +462,11 @@ class AppApi:
             return {"success": False, "files": [], "error": str(e)}
 
 
-def main() -> int:
+def run_author_app(
+    app_base_dir: str | Path | None = None,
+    window_title: str = APP_NAME,
+    webview_storage_path: str | Path | None = None,
+) -> int:
     if webview is None:
         err = globals().get("_WEBVIEW_IMPORT_ERROR")
         print(f"pywebview 载入失败: {err}")
@@ -259,14 +477,14 @@ def main() -> int:
         print(f"找不到前端入口文件: {index_html}")
         return 3
 
-    api = AppApi()
+    api = AppApi(app_base_dir=app_base_dir)
 
     window = webview.create_window(
-        title=APP_NAME,
+        title=window_title,
         url=str(index_html),
         js_api=api,
-        width=1200,
-        height=800,
+        width=1400,
+        height=1000,
         min_size=(1060, 740),
         background_color="#F5F7FA",
         resizable=True,
@@ -277,8 +495,22 @@ def main() -> int:
 
     api.set_window(window)
 
-    webview.start(debug=False, http_server=False, gui="edgechromium")
+    storage_path = None
+    if webview_storage_path is not None:
+        storage_dir = Path(webview_storage_path).resolve()
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        storage_path = str(storage_dir)
+    webview.start(
+        debug=False,
+        http_server=False,
+        gui="edgechromium",
+        storage_path=storage_path,
+    )
     return 0
+
+
+def main() -> int:
+    return run_author_app()
 
 
 if __name__ == "__main__":
