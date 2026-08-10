@@ -77,10 +77,7 @@ jobs:
           - os: windows-latest
             arch: amd64
             python-arch: x64
-          # Windows arm64
-          - os: windows-11-arm
-            arch: arm64
-            python-arch: arm64
+          # 暂不发布 Windows arm64：pythonnet/clr-loader 仅提供 x86/x64 NetFX 加载器
           # Linux amd64
           - os: ubuntu-latest
             arch: amd64
@@ -219,13 +216,11 @@ jobs:
           TAG="${{ needs.prepare.outputs.tag_name }}"
           EXPECTED=(
             "AimerWT_V3.1_Beta_Windows_amd64.exe"
-            "AimerWT_V3.1_Beta_Windows_arm64.exe"
             "AimerWT_V3.1_Beta_Linux_amd64"
             "AimerWT_V3.1_Beta_Linux_arm64"
             "AimerWT_V3.1_Beta_macOS_amd64.zip"
             "AimerWT_V3.1_Beta_macOS_arm64.zip"
             "checksum_Windows_amd64.txt"
-            "checksum_Windows_arm64.txt"
             "checksum_Linux_amd64.txt"
             "checksum_Linux_arm64.txt"
             "checksum_macOS_amd64.txt"

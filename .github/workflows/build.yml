@@ -21,10 +21,7 @@ jobs:
           - os: windows-latest
             arch: amd64
             python-arch: x64
-          # Windows arm64
-          - os: windows-11-arm
-            arch: arm64
-            python-arch: arm64
+          # 暂不发布 Windows arm64：pythonnet/clr-loader 仅提供 x86/x64 NetFX 加载器
           # Linux amd64
           - os: ubuntu-latest
             arch: amd64
