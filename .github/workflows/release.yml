@@ -151,9 +151,18 @@ jobs:
           if ($executables.Count -ne 1) {
             throw "Expected exactly one Windows executable, found $($executables.Count)."
           }
-          & $executables[0].FullName --self-test *> $null
-          if ($LASTEXITCODE -ne 0) {
-            throw "Windows executable self-test failed with exit code $LASTEXITCODE."
+          $process = Start-Process `
+            -FilePath $executables[0].FullName `
+            -ArgumentList @('--self-test') `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+          $exitCode = $process.ExitCode
+          if ($null -eq $exitCode) {
+            throw "Windows executable self-test did not return an exit code."
+          }
+          if ($exitCode -ne 0) {
+            throw "Windows executable self-test failed with exit code $exitCode."
           }
 
       - name: Upload Artifact
