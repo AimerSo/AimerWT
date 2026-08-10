@@ -242,8 +242,8 @@ jobs:
           fi
 
           for checksum_file in release-assets/checksum_*.txt; do
-            asset_name="$(sed -n 's/^File: //p' "$checksum_file")"
-            expected_hash="$(sed -n 's/^SHA256: //p' "$checksum_file")"
+            asset_name="$(sed -n 's/^File: //p' "$checksum_file" | tr -d '\r')"
+            expected_hash="$(sed -n 's/^SHA256: //p' "$checksum_file" | tr -d '\r')"
             actual_hash="$(sha256sum "release-assets/$asset_name" | awk '{print $1}')"
             if [ -z "$asset_name" ] || [ "$expected_hash" != "$actual_hash" ]; then
               echo "Checksum validation failed: $checksum_file"

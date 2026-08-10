@@ -24,6 +24,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("AimerWT_V3.1_Beta_Linux_arm64", workflow)
         self.assertIn("AimerWT_V3.1_Beta_macOS_arm64.zip", workflow)
 
+    def test_release_checksum_parser_accepts_crlf(self):
+        workflow = (PROJECT_ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(workflow.count("tr -d '\\r'"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

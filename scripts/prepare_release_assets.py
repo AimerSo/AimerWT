@@ -73,6 +73,7 @@ def _write_checksum(target: Path, output_dir: Path, platform: str, arch: str) ->
             )
         ),
         encoding="utf-8",
+        newline="\n",
     )
     return checksum_path
 

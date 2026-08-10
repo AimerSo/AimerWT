@@ -32,6 +32,7 @@ class PrepareReleaseAssetsTests(unittest.TestCase):
             checksum_text = checksum.read_text(encoding="utf-8")
             self.assertIn(f"File: {target.name}", checksum_text)
             self.assertIn(f"SHA256: {expected_hash}", checksum_text)
+            self.assertNotIn(b"\r", checksum.read_bytes())
 
     def test_linux_asset_keeps_executable_without_extension(self):
         with tempfile.TemporaryDirectory() as temp_dir:
