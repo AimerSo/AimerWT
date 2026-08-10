@@ -254,6 +254,7 @@ def build_exe():
             "--name", EXE_DISPLAY_NAME,
             "--clean",
             # hidden imports：确保 pywebview 各后端、pystray、pythonnet 均被打包
+            "--hidden-import", "webview.platforms.edgechromium",
             "--hidden-import", "webview.platforms.winforms",
             "--hidden-import", "webview.platforms.cef",
             "--hidden-import", "webview.platforms.gtk",

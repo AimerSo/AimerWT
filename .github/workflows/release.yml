@@ -151,13 +151,29 @@ jobs:
           if ($executables.Count -ne 1) {
             throw "Expected exactly one Windows executable, found $($executables.Count)."
           }
+          $stdoutPath = Join-Path $env:RUNNER_TEMP "aimerwt-self-test.stdout.log"
+          $stderrPath = Join-Path $env:RUNNER_TEMP "aimerwt-self-test.stderr.log"
           $process = Start-Process `
             -FilePath $executables[0].FullName `
             -ArgumentList @('--self-test') `
             -WindowStyle Hidden `
             -Wait `
-            -PassThru
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
           $exitCode = $process.ExitCode
+          $logPaths = @(
+            $stdoutPath,
+            $stderrPath,
+            (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Aimer_WT\logs\app.log'),
+            (Join-Path $env:TEMP 'WT_Voice_Manager_logs\app.log')
+          ) | Select-Object -Unique
+          foreach ($logPath in $logPaths) {
+            if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+              Write-Host "===== $logPath ====="
+              Get-Content -LiteralPath $logPath
+            }
+          }
           if ($null -eq $exitCode) {
             throw "Windows executable self-test did not return an exit code."
           }
