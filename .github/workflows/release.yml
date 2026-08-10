@@ -136,39 +136,32 @@ jobs:
         run: |
           python scripts/build.py
 
-      - name: Rename Checksum
-        shell: bash
-        run: |
-          if [ -f dist/checksum.txt ]; then
-            mv dist/checksum.txt dist/checksum_${{ runner.os }}_${{ matrix.arch }}.txt
-          fi
+      - name: Prepare release assets
+        run: >-
+          python scripts/prepare_release_assets.py
+          --platform "${{ runner.os }}"
+          --arch "${{ matrix.arch }}"
+          --output-dir release-assets
 
-      - name: Rename file
-        shell: bash
+      - name: Smoke test Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          ARCH="${{ matrix.arch }}"
-          APP_NAME="AimerWT V3 Beta"
-          ASSET_PREFIX="AimerWT_V3_Beta_${{ runner.os }}_${ARCH}"
-
-          if [ -f "dist/${APP_NAME}.exe" ]; then
-            mv "dist/${APP_NAME}.exe" "dist/${ASSET_PREFIX}.exe"
-          elif [ -f dist/WT_Aimer_Voice.exe ]; then
-            mv dist/WT_Aimer_Voice.exe "dist/${ASSET_PREFIX}.exe"
-          elif [ -d "dist/${APP_NAME}.app" ]; then
-            (cd dist && zip -r "${ASSET_PREFIX}.zip" "${APP_NAME}.app" && rm -rf "${APP_NAME}.app")
-          elif [ -d dist/WT_Aimer_Voice.app ]; then
-            (cd dist && zip -r "${ASSET_PREFIX}.zip" WT_Aimer_Voice.app && rm -rf WT_Aimer_Voice.app)
-          elif [ -f "dist/${APP_NAME}" ]; then
-            mv "dist/${APP_NAME}" "dist/${ASSET_PREFIX}"
-          elif [ -f dist/WT_Aimer_Voice ]; then
-            mv dist/WT_Aimer_Voice "dist/${ASSET_PREFIX}"
-          fi
+          $executables = @(Get-ChildItem -LiteralPath release-assets -Filter '*.exe' -File)
+          if ($executables.Count -ne 1) {
+            throw "Expected exactly one Windows executable, found $($executables.Count)."
+          }
+          & $executables[0].FullName --self-test *> $null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows executable self-test failed with exit code $LASTEXITCODE."
+          }
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist/*
+          path: release-assets/*
+          if-no-files-found: error
 
   release:
     name: Attach Release Assets
@@ -185,12 +178,12 @@ jobs:
         with:
           pattern: build-*
           merge-multiple: true
-          path: dist
+          path: release-assets
 
       - name: List downloaded artifacts
         run: |
           echo "Downloaded artifacts:"
-          ls -la dist/ || echo "No artifacts found"
+          ls -la release-assets/ || echo "No artifacts found"
 
       - name: Upload assets to release
         shell: bash
@@ -199,9 +192,43 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ needs.prepare.outputs.tag_name }}"
-          mapfile -d '' ASSETS < <(find dist -maxdepth 1 -type f -print0)
-          if [ "${#ASSETS[@]}" -eq 0 ]; then
-            echo "No release asset files found in dist/"
+          EXPECTED=(
+            "AimerWT_V3.1_Beta_Windows_amd64.exe"
+            "AimerWT_V3.1_Beta_Windows_arm64.exe"
+            "AimerWT_V3.1_Beta_Linux_amd64"
+            "AimerWT_V3.1_Beta_Linux_arm64"
+            "AimerWT_V3.1_Beta_macOS_amd64.zip"
+            "AimerWT_V3.1_Beta_macOS_arm64.zip"
+            "checksum_Windows_amd64.txt"
+            "checksum_Windows_arm64.txt"
+            "checksum_Linux_amd64.txt"
+            "checksum_Linux_arm64.txt"
+            "checksum_macOS_amd64.txt"
+            "checksum_macOS_arm64.txt"
+          )
+
+          for asset in "${EXPECTED[@]}"; do
+            if [ ! -s "release-assets/$asset" ]; then
+              echo "Missing or empty release asset: $asset"
+              exit 1
+            fi
+          done
+
+          actual_count="$(find release-assets -maxdepth 1 -type f | wc -l)"
+          if [ "$actual_count" -ne "${#EXPECTED[@]}" ]; then
+            echo "Expected ${#EXPECTED[@]} release files, found $actual_count"
+            find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
             exit 1
           fi
-          gh release upload "$TAG" "${ASSETS[@]}" --repo "${{ github.repository }}" --clobber
+
+          for checksum_file in release-assets/checksum_*.txt; do
+            asset_name="$(sed -n 's/^File: //p' "$checksum_file")"
+            expected_hash="$(sed -n 's/^SHA256: //p' "$checksum_file")"
+            actual_hash="$(sha256sum "release-assets/$asset_name" | awk '{print $1}')"
+            if [ -z "$asset_name" ] || [ "$expected_hash" != "$actual_hash" ]; then
+              echo "Checksum validation failed: $checksum_file"
+              exit 1
+            fi
+          done
+
+          gh release upload "$TAG" release-assets/* --repo "${{ github.repository }}" --clobber

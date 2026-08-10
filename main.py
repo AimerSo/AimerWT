@@ -621,6 +621,36 @@ def _windows_has_webview2_runtime() -> bool:
     return False
 
 
+def _run_startup_self_test() -> int:
+    """验证打包文件能加载关键依赖和前端资源，不创建窗口。"""
+    if webview is None:
+        log.error("[SELF-TEST] pywebview 载入失败: %s", globals().get("_WEBVIEW_IMPORT_ERROR"))
+        return 2
+
+    required_paths = (
+        WEB_DIR / "index.html",
+        WEB_DIR / "assets" / "logo.ico",
+        WEB_DIR / "assets" / "app_icon.ico",
+    )
+    missing = [str(path) for path in required_paths if not path.is_file()]
+    if missing:
+        log.error("[SELF-TEST] 缺少打包资源: %s", ", ".join(missing))
+        return 3
+
+    if sys.platform == "win32":
+        try:
+            from webview.platforms import edgechromium  # noqa: F401
+        except Exception:
+            log.exception("[SELF-TEST] EdgeChromium 后端不可用")
+            return 4
+        if not _windows_has_webview2_runtime():
+            log.error("[SELF-TEST] Windows 未安装 WebView2 Runtime")
+            return 6
+
+    log.info("[SELF-TEST] 通过：pywebview、前端资源和平台运行时检查正常")
+    return 0
+
+
 def _open_url(url: str) -> bool:
     try:
         if sys.platform == "win32":
@@ -664,12 +694,19 @@ def _parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--perf", action="store_true")
     parser.add_argument("--silent", action="store_true", help="静默启动，只显示托盘")
     parser.add_argument("--tray-only", action="store_true", help="仅启动托盘，不显示主窗口")
+    parser.add_argument("--self-test", action="store_true", help=argparse.SUPPRESS)
 
     try:
         args, _unknown = parser.parse_known_args(argv)
         return args
     except Exception:
-        return argparse.Namespace(allow_fallback=False, perf=False, silent=False, tray_only=False)
+        return argparse.Namespace(
+            allow_fallback=False,
+            perf=False,
+            silent=False,
+            tray_only=False,
+            self_test=False,
+        )
 
 
 class AppApi:
@@ -8208,6 +8245,9 @@ def main() -> int:
     _install_global_exception_handlers()
 
     cli = _parse_cli_args()
+
+    if getattr(cli, "self_test", False):
+        return _run_startup_self_test()
 
     if not _acquire_single_instance_lock():
         _show_fatal_error("Aimer WT 已在运行", "Aimer WT 已经在运行，请勿重复启动。")

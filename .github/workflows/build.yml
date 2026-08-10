@@ -78,29 +78,29 @@ jobs:
       run: |
         python scripts/build.py
 
-    - name: Rename Checksum
-      shell: bash
-      run: |
-        if [ -f dist/checksum.txt ]; then
-          mv dist/checksum.txt dist/checksum_${{ runner.os }}_${{ matrix.arch }}.txt
-        fi
+    - name: Prepare release assets
+      run: >-
+        python scripts/prepare_release_assets.py
+        --platform "${{ runner.os }}"
+        --arch "${{ matrix.arch }}"
+        --output-dir release-assets
 
-    - name: Rename file
-      shell: bash
+    - name: Smoke test Windows executable
+      if: runner.os == 'Windows'
+      shell: pwsh
       run: |
-        ARCH="${{ matrix.arch }}"
-
-        if [ -f dist/WT_Aimer_Voice.exe ]; then
-          mv dist/WT_Aimer_Voice.exe dist/WT_Aimer_Voice_${{ runner.os }}_${ARCH}.exe
-        elif [ -f dist/WT_Aimer_Voice ]; then
-          mv dist/WT_Aimer_Voice dist/WT_Aimer_Voice_${{ runner.os }}_${ARCH}
-        elif [ -f dist/WT_Aimer_Voice.app ]; then
-          # macOS app bundle - 壓縮為 zip
-          cd dist && zip -r WT_Aimer_Voice_${{ runner.os }}_${ARCH}.zip WT_Aimer_Voice.app && rm -rf WT_Aimer_Voice.app
-        fi
+        $executables = @(Get-ChildItem -LiteralPath release-assets -Filter '*.exe' -File)
+        if ($executables.Count -ne 1) {
+          throw "Expected exactly one Windows executable, found $($executables.Count)."
+        }
+        & $executables[0].FullName --self-test *> $null
+        if ($LASTEXITCODE -ne 0) {
+          throw "Windows executable self-test failed with exit code $LASTEXITCODE."
+        }
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: build-${{ matrix.os }}-${{ matrix.arch }}
-        path: dist/*
+        path: release-assets/*
+        if-no-files-found: error
