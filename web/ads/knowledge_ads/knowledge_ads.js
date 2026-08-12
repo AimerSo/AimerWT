@@ -58,6 +58,18 @@
         return div.innerHTML;
     }
 
+    function sanitize_image_url(value) {
+        var raw = String(value || '').trim();
+        if (/^data:image\/(?:webp|png|jpe?g|gif|bmp);base64,/i.test(raw)) {
+            return raw;
+        }
+        if (!window.MarkdownRenderer || typeof window.MarkdownRenderer.sanitizeUrl !== 'function') {
+            return '';
+        }
+        var sanitized = window.MarkdownRenderer.sanitizeUrl(raw);
+        return /^https:\/\//i.test(sanitized) ? sanitized : '';
+    }
+
     function renderKnowledgeAds() {
         var grid = document.getElementById('knowledge-ads-grid');
         if (!grid) return;
@@ -72,32 +84,55 @@
 
             var card = document.createElement('div');
             card.className = 'link-card-ad';
-            if (item.background) card.classList.add('has-bg');
-
-            var inner = '';
-
-            if (item.background) {
-                inner += '<div class="link-card-bg-img" style="background-image:url(\'' + item.background + '\')"></div>';
+            var background_url = sanitize_image_url(item.background);
+            if (background_url) {
+                card.classList.add('has-bg');
+                var background = document.createElement('div');
+                background.className = 'link-card-bg-img';
+                background.style.backgroundImage = 'url(' + JSON.stringify(background_url) + ')';
+                card.appendChild(background);
             }
 
-            inner += '<div class="link-card-content">';
-            inner += '<div class="link-icon">';
-            if (item.avatar) {
-                inner += '<img src="' + item.avatar + '" alt="' + escapeHtml(item.title || '') + '">';
+            var content = document.createElement('div');
+            content.className = 'link-card-content';
+
+            var icon = document.createElement('div');
+            icon.className = 'link-icon';
+            var avatar_url = sanitize_image_url(item.avatar);
+            if (avatar_url) {
+                var avatar = document.createElement('img');
+                avatar.src = avatar_url;
+                avatar.alt = String(item.title || '');
+                icon.appendChild(avatar);
             } else {
-                inner += '<i class="ri-megaphone-line"></i>';
+                var fallback_icon = document.createElement('i');
+                fallback_icon.className = 'ri-megaphone-line';
+                icon.appendChild(fallback_icon);
             }
-            inner += '</div>';
-            inner += '<div class="link-info">';
-            inner += '<div class="link-title">' + escapeHtml(item.title || '广告位') + '</div>';
-            if (item.subtitle) {
-                inner += '<div class="link-desc">' + escapeHtml(item.subtitle) + '</div>';
-            }
-            inner += '</div>';
-            inner += '<div class="link-arrow"><i class="ri-arrow-right-line"></i></div>';
-            inner += '</div>';
+            content.appendChild(icon);
 
-            card.innerHTML = inner;
+            var info = document.createElement('div');
+            info.className = 'link-info';
+            var title = document.createElement('div');
+            title.className = 'link-title';
+            title.textContent = item.title || '广告位';
+            info.appendChild(title);
+            if (item.subtitle) {
+                var subtitle = document.createElement('div');
+                subtitle.className = 'link-desc';
+                subtitle.textContent = item.subtitle;
+                info.appendChild(subtitle);
+            }
+            content.appendChild(info);
+
+            var arrow = document.createElement('div');
+            arrow.className = 'link-arrow';
+            var arrow_icon = document.createElement('i');
+            arrow_icon.className = 'ri-arrow-right-line';
+            arrow.appendChild(arrow_icon);
+            content.appendChild(arrow);
+            card.appendChild(content);
+
             card.addEventListener('click', function () {
                 if (item.action === 'popup') {
                     showAdPopup(item);

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -1147,7 +1148,9 @@ func initCommunityClientRoutes(r *gin.Engine) {
 				"notice_title": noticeTitle,
 			}
 			go SendInteractionNotification(replyTarget.MachineID, "reply", notifData)
-			go enqueueInteractionCommand(replyTarget.MachineID, "reply", notifData)
+			if err := enqueueInteractionCommand(replyTarget.MachineID, "reply", notifData); err != nil {
+				log.Printf("[Interaction] 回复通知入队失败 machine_id=%s: %v", replyTarget.MachineID, err)
+			}
 		}
 
 		c.JSON(200, gin.H{
@@ -1268,7 +1271,9 @@ func initCommunityClientRoutes(r *gin.Engine) {
 				"notice_title": noticeTitle,
 			}
 			go SendInteractionNotification(comment.MachineID, "like", notifData)
-			go enqueueInteractionCommand(comment.MachineID, "like", notifData)
+			if err := enqueueInteractionCommand(comment.MachineID, "like", notifData); err != nil {
+				log.Printf("[Interaction] 点赞通知入队失败 machine_id=%s: %v", comment.MachineID, err)
+			}
 		}
 
 		status := "unliked"
@@ -1976,9 +1981,9 @@ func initCommunityAdminRoutes(admin *gin.RouterGroup) {
 
 // enqueueInteractionCommand 将互动通知写入目标用户的 pending_command
 // 作为 WebSocket 推送的 HTTP 轮询回退通道，确保无 WS 连接时通知仍可送达
-func enqueueInteractionCommand(targetMachineID string, action string, data map[string]interface{}) {
+func enqueueInteractionCommand(targetMachineID string, action string, data map[string]interface{}) error {
 	if targetMachineID == "" {
-		return
+		return gorm.ErrRecordNotFound
 	}
 	cmd := map[string]interface{}{
 		"type":   "interaction_notification",
@@ -1987,10 +1992,19 @@ func enqueueInteractionCommand(targetMachineID string, action string, data map[s
 	}
 	cmdJSON, err := json.Marshal(cmd)
 	if err != nil {
-		return
+		return err
 	}
-	_ = db.Transaction(func(tx *gorm.DB) error {
-		if _, err := enqueueClientCommandTx(tx, targetMachineID, string(cmdJSON), "interaction", 0, 0); err != nil {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var target TelemetryRecord
+		if err := tx.Select("machine_id").Where("machine_id = ?", targetMachineID).First(&target).Error; err != nil {
+			return err
+		}
+		command, err := enqueueClientCommandTx(tx, targetMachineID, string(cmdJSON), "interaction", 0, 0)
+		if err != nil {
+			return err
+		}
+		expiresAt := time.Now().Add(userNotificationTTL)
+		if err := tx.Model(command).Update("expires_at", expiresAt).Error; err != nil {
 			return err
 		}
 		return tx.Model(&TelemetryRecord{}).

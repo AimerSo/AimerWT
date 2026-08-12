@@ -4,6 +4,10 @@
         const data = helpers.parseMarkdown(item.content || '');
         const title = item.title || data.title || '';
         const version = data.version || 'Latest';
+        const updateDate = item.date || data.date || '';
+        const updateMeta = updateDate
+            ? ('更新时间: ' + [updateDate, version].filter(Boolean).join(' '))
+            : version;
         const intro = item.summary || 'V3 版本聚焦于交互优化、稳定性提升与功能扩展，带来更顺滑的使用体验与更完整的内容管理能力。';
         const commentEnabled = helpers.isFeatureEnabled ? helpers.isFeatureEnabled('notice_comment_enabled') : true;
         const modalClass = commentEnabled
@@ -50,7 +54,7 @@
             titleHtml +
             '      <div class="notice-react-subline">' +
             '        <span class="notice-react-pulse"></span>' +
-            '        <span>更新时间: 2026年2月28日 ' + helpers.escapeHtml(version) + '</span>' +
+            '        <span>' + helpers.escapeHtml(updateMeta) + '</span>' +
             '      </div>' +
             '      <p class="notice-react-intro">' + helpers.escapeHtml(intro) + '</p>' +
             '    </div>' +

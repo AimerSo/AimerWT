@@ -245,6 +245,38 @@
         this.closeModal('modal-redeem-result');
     };
 
+    app.showThemedMessage = function (message) {
+        const template = redeemStyleTemplates.style_sponsor_1;
+        const title = String(message?.title || '系统消息').trim() || '系统消息';
+        const body = String(message?.message || '').trim();
+        const bodyHtml = body
+            ? `<div style="font-size:13px;line-height:1.65;white-space:pre-line;color:inherit;">${escapeHtml(body)}</div>`
+            : '<div style="font-size:13px;line-height:1.65;color:inherit;">暂无详情</div>';
+        const html = template
+            .replace('{{TITLE}}', escapeHtml(title))
+            .replace('{{SUBTITLE}}', '· Aimer WT ·')
+            .replace('{{BUTTON}}', '我知道了')
+            .replace('{{ICON_COLOR}}', '#64748b')
+            .replace('{{BADGE_TEXT}}', 'SYSTEM MESSAGE')
+            .replace('{{REWARDS}}', bodyHtml);
+        const { modal, host } = ensureRedeemResultModal();
+        if (!host) {
+            this.showAlert(title, body, 'info');
+            return;
+        }
+        if (modal) modal.classList.remove('show');
+        host.innerHTML = html;
+        const iconBox = host.querySelector('div[style*="border-radius"][style*="align-items:center"][style*="justify-content:center"]');
+        if (iconBox) iconBox.classList.add('redeem-popup-icon');
+        const actionBtn = host.querySelector('button');
+        if (actionBtn) {
+            actionBtn.type = 'button';
+            actionBtn.classList.add('redeem-popup-action-btn');
+            actionBtn.addEventListener('click', () => this.closeRedeemResultModal());
+        }
+        requestAnimationFrame(() => this.openModal('modal-redeem-result'));
+    };
+
     app.showRedeemResult = function (command) {
         if (!command || command.success === false) {
             this.showAlert(command?.title || '兑换结果', command?.message || '兑换失败，请稍后重试', command?.success === false ? 'error' : 'info');

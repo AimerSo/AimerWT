@@ -113,14 +113,15 @@ func maskMachineID(machineID string) string {
 	return normalized[:12] + "..." + normalized[len(normalized)-8:]
 }
 
-func lookupClientDeviceTokenByToken(token string) (ClientDeviceToken, error) {
+func lookupClientDeviceTokenByToken(token string) (ClientDeviceToken, *ClientDeviceSession, error) {
+	now := time.Now()
 	var session ClientDeviceSession
-	if err := db.Where("token_hash = ? AND expires_at > ?", hashClientDeviceToken(token), time.Now()).First(&session).Error; err == nil {
-		return ClientDeviceToken{MachineID: session.MachineID, TokenHash: session.TokenHash}, nil
+	if err := db.Where("token_hash = ? AND expires_at > ?", hashClientDeviceToken(token), now).First(&session).Error; err == nil {
+		return ClientDeviceToken{MachineID: session.MachineID, TokenHash: session.TokenHash}, &session, nil
 	}
 	var record ClientDeviceToken
 	err := db.Where("token_hash = ?", hashClientDeviceToken(token)).First(&record).Error
-	return record, err
+	return record, nil, err
 }
 
 func generateClientDeviceToken() (string, error) {
@@ -188,10 +189,16 @@ func verifyClientDeviceToken(machineID, token string) bool {
 	}
 
 	provided := hashClientDeviceToken(token)
+	now := time.Now()
 	var session ClientDeviceSession
-	if err := db.Where("machine_id = ? AND token_hash = ? AND expires_at > ?", strings.TrimSpace(machineID), provided, time.Now()).First(&session).Error; err == nil {
-		if time.Since(session.LastSeenAt) >= clientSessionTouchMinimum {
-			db.Model(&session).Update("last_seen_at", time.Now())
+	if err := db.Where("machine_id = ? AND token_hash = ? AND expires_at > ?", strings.TrimSpace(machineID), provided, now).First(&session).Error; err == nil {
+		if now.Sub(session.LastSeenAt) >= clientSessionTouchMinimum {
+			if err := db.Model(&session).Updates(map[string]any{
+				"last_seen_at": now,
+				"expires_at":   now.Add(clientDeviceSessionTTL),
+			}).Error; err != nil {
+				return false
+			}
 		}
 		return true
 	}
@@ -229,6 +236,63 @@ func migrateLegacyClientDeviceTokens() error {
 	})
 }
 
+var errIdentityProofRequired = errors.New("identity proof required")
+var errIdentityCollision = errors.New("identity collision")
+
+func machineIDIdentityExistsTx(tx *gorm.DB, machineID string) (bool, error) {
+	normalized := strings.TrimSpace(machineID)
+	for _, query := range []struct {
+		model any
+		field string
+	}{
+		{model: &TelemetryRecord{}, field: "machine_id"},
+		{model: &ClientDeviceSession{}, field: "machine_id"},
+		{model: &ClientDeviceToken{}, field: "machine_id"},
+		{model: &MachineIDAlias{}, field: "alias_machine_id"},
+	} {
+		var count int64
+		if err := tx.Model(query.model).Where(query.field+" = ?", normalized).Count(&count).Error; err != nil {
+			return false, err
+		}
+		if count > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func reportedMachineIDAvailableForCanonicalTx(tx *gorm.DB, reported, canonical string) (bool, error) {
+	reported = strings.TrimSpace(reported)
+	canonical = strings.TrimSpace(canonical)
+	if reported == canonical {
+		return true, nil
+	}
+	var alias MachineIDAlias
+	if err := tx.Where("alias_machine_id = ?", reported).First(&alias).Error; err == nil {
+		return strings.TrimSpace(alias.CanonicalMachineID) == canonical, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, err
+	}
+	for _, model := range []any{&TelemetryRecord{}, &ClientDeviceSession{}, &ClientDeviceToken{}} {
+		var count int64
+		if err := tx.Model(model).Where("machine_id = ?", reported).Count(&count).Error; err != nil {
+			return false, err
+		}
+		if count > 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func abortIdentityProofRequired(c *gin.Context) {
+	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "需要设备身份凭证", "code": "identity_proof_required"})
+}
+
+func abortIdentityCollision(c *gin.Context) {
+	c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "设备身份冲突", "code": "identity_collision"})
+}
+
 func ensureClientDeviceToken(c *gin.Context, machineID string, allowBootstrap bool) bool {
 	normalizedMachineID := strings.TrimSpace(machineID)
 	if normalizedMachineID == "" {
@@ -243,37 +307,47 @@ func ensureClientDeviceToken(c *gin.Context, machineID string, allowBootstrap bo
 			return true
 		}
 		if allowBootstrap {
-			if record, err := lookupClientDeviceTokenByToken(token); err == nil {
+			if record, historicalSession, err := lookupClientDeviceTokenByToken(token); err == nil {
 				canonicalMachineID := strings.TrimSpace(record.MachineID)
 				if canonicalMachineID != "" && canonicalMachineID != normalizedMachineID {
+					available, err := reportedMachineIDAvailableForCanonicalTx(db, normalizedMachineID, canonicalMachineID)
+					if err != nil {
+						c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "设备身份检查失败"})
+						return false
+					}
+					if !available {
+						abortIdentityCollision(c)
+						return false
+					}
 					c.Set("_canonicalMachineID", canonicalMachineID)
+					c.Set("_identityAliasAuthorized", true)
+					if historicalSession != nil {
+						c.Set("_historicalDeviceSessionID", historicalSession.ID)
+					}
 					log.Printf("[Auth] 设备令牌匹配历史机器码，沿用既有 UID: %s -> %s", maskMachineID(normalizedMachineID), maskMachineID(canonicalMachineID))
 					return true
 				}
 			}
 		}
-		// token 验证失败：对于 /telemetry（allowBootstrap=true），自动重签
-		// 而非直接 403，以防止客户端进入死循环。
-		if allowBootstrap {
-			log.Printf("[Auth] 设备令牌验证失败，将自动重签: %s", maskMachineID(normalizedMachineID))
-			c.Set("_deviceTokenRenew", true)
-			return true
-		}
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "设备令牌无效", "should_reauth": true})
+		abortIdentityProofRequired(c)
 		return false
 	}
 
-	// 无 token：首次引导（allowBootstrap 且服务端无记录）或自动重签（allowBootstrap 且服务端有旧记录）
 	if allowBootstrap {
-		if hasClientDeviceToken(normalizedMachineID) {
-			// 客户端丢失了 token 但服务端有记录 → 标记需要重签
-			log.Printf("[Auth] 客户端未携带设备令牌但服务端存在记录，将自动重签: %s", maskMachineID(normalizedMachineID))
-			c.Set("_deviceTokenRenew", true)
+		exists, err := machineIDIdentityExistsTx(db, normalizedMachineID)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "设备身份检查失败"})
+			return false
 		}
+		if exists {
+			abortIdentityProofRequired(c)
+			return false
+		}
+		c.Set("_deviceTokenBootstrap", true)
 		return true
 	}
 
-	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "缺少设备令牌", "should_reauth": true})
+	abortIdentityProofRequired(c)
 	return false
 }
 

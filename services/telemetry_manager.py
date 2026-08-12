@@ -345,10 +345,12 @@ class TelemetryManager:
         except Exception:
             return False
 
-    def complete_user_command(self, command_id: str, success: bool, error_message: str = "") -> bool:
+    def complete_user_command(self, command_id: str, success: bool, error_message: str = "",
+                              status: str = "") -> bool:
         if success:
             _remember_processed_command_id(command_id)
-        return self._acknowledge_command(command_id, "success" if success else "error", error_message)
+        ack_status = status or ("success" if success else "retryable_error")
+        return self._acknowledge_command(command_id, ack_status, error_message)
 
     def _handle_user_command(self, user_command: str, command_id: str) -> None:
         command_id = str(command_id or "").strip()
@@ -361,11 +363,13 @@ class TelemetryManager:
             result = self._cmd_callback(user_command)
             if result is False or (isinstance(result, dict) and result.get("success") is False):
                 message = result.get("message", "命令执行失败") if isinstance(result, dict) else "命令执行失败"
-                self.complete_user_command(command_id, False, message)
+                result_code = result.get("code", "") if isinstance(result, dict) else ""
+                ack_status = "unsupported" if result_code == "unsupported" else "retryable_error"
+                self.complete_user_command(command_id, False, message, status=ack_status)
                 return
             self.complete_user_command(command_id, True)
         except Exception as exc:
-            self.complete_user_command(command_id, False, f"{type(exc).__name__}: {exc}")
+            self.complete_user_command(command_id, False, f"{type(exc).__name__}: {exc}", status="retryable_error")
 
     def set_log_callback(self, callback):
         """设置日志回调 (msg: str, level: str) -> None"""

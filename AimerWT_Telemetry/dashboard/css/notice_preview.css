@@ -248,6 +248,9 @@
 }
 
 .np-client-wrap .notice-detail-modal {
+    height: auto;
+    min-height: 0;
+    max-height: min(620px, 70vh);
     border-radius: 14px;
     overflow: hidden;
     border: 1px solid var(--border, rgba(0,0,0,0.06));

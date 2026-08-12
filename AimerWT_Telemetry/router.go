@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -9,10 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,10 +26,381 @@ import (
 )
 
 const clientCommandProtocolHeader = "X-AimerWT-Command-Protocol"
+const (
+	userNotificationTTL          = 15 * 24 * time.Hour
+	userNotificationTitleLimit   = 80
+	userNotificationSummaryLimit = 200
+	userNotificationBodyLimit    = 4000
+)
+
+var errInvalidUserNotification = errors.New("通知字段无效")
+var errClientCommandNotPending = errors.New("命令不是待领取状态")
+var errUserNotificationCannotRevoke = errors.New("系统消息无法撤回")
+var userNotificationRestrictedContent = regexp.MustCompile(`(?i)(https?://|ftp://|mailto:|data:|javascript:|www\.|!?\[[^\]]*\]\s*\(|<[a-z!/][^>]*>)`)
+var adClickIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
+var allowedAdClickMedia = map[string]struct{}{
+	"carousel": {}, "knowledge_link": {}, "notice": {},
+	"header_banner": {}, "header_banner_ad": {}, "header_banner_activity": {},
+}
+
+var userNotificationIcons = map[string]struct{}{
+	"ri-notification-3-line": {},
+	"ri-information-line":    {},
+	"ri-megaphone-line":      {},
+	"ri-gift-line":           {},
+	"ri-error-warning-line":  {},
+}
+
+type userNotificationRequest struct {
+	MachineID    string `json:"machine_id"`
+	Title        string `json:"title"`
+	Summary      string `json:"summary"`
+	Icon         string `json:"icon"`
+	Renderer     string `json:"renderer"`
+	Variant      string `json:"variant"`
+	PopupTitle   string `json:"popup_title"`
+	Body         string `json:"body"`
+	ReplaceLogID uint   `json:"replace_log_id"`
+}
+
+func invalidUserNotification(message string) error {
+	return fmt.Errorf("%w: %s", errInvalidUserNotification, message)
+}
+
+func createUserNotification(req userNotificationRequest, createdAt time.Time) (*ClientCommand, error) {
+	req.MachineID = strings.TrimSpace(req.MachineID)
+	req.Title = strings.TrimSpace(req.Title)
+	req.Summary = strings.TrimSpace(req.Summary)
+	req.Icon = strings.TrimSpace(req.Icon)
+	req.Renderer = strings.TrimSpace(req.Renderer)
+	req.Variant = strings.TrimSpace(req.Variant)
+	req.PopupTitle = strings.TrimSpace(req.PopupTitle)
+	req.Body = strings.TrimSpace(req.Body)
+
+	if req.MachineID == "" {
+		return nil, invalidUserNotification("machine_id 为必填")
+	}
+	if req.Title == "" || len([]rune(req.Title)) > userNotificationTitleLimit {
+		return nil, invalidUserNotification("标题不能为空且不能超过 80 字")
+	}
+	if req.Summary == "" || len([]rune(req.Summary)) > userNotificationSummaryLimit {
+		return nil, invalidUserNotification("摘要不能为空且不能超过 200 字")
+	}
+	if req.Icon == "" {
+		req.Icon = "ri-notification-3-line"
+	}
+	if _, ok := userNotificationIcons[req.Icon]; !ok {
+		return nil, invalidUserNotification("图标不在白名单内")
+	}
+	if req.Renderer == "" {
+		req.Renderer = "none"
+	}
+	switch req.Renderer {
+	case "none":
+		req.Variant = ""
+		req.PopupTitle = ""
+		req.Body = ""
+	case "alert":
+		if req.Variant == "" {
+			req.Variant = "default"
+		}
+		if req.Variant != "default" {
+			return nil, invalidUserNotification("普通弹窗只支持 default 样式")
+		}
+	case "notice":
+		if req.Variant == "" {
+			req.Variant = "general"
+		}
+		if req.Variant != "general" && req.Variant != "update" {
+			return nil, invalidUserNotification("公告只支持 general 或 update 样式")
+		}
+	case "themed":
+		if req.Variant == "" {
+			req.Variant = "sponsor_1"
+		}
+		if req.Variant != "sponsor_1" {
+			return nil, invalidUserNotification("主题卡片只支持 sponsor_1 样式")
+		}
+	default:
+		return nil, invalidUserNotification("渲染器不在白名单内")
+	}
+	if req.Renderer != "none" {
+		if req.PopupTitle == "" {
+			req.PopupTitle = req.Title
+		}
+		if req.Body == "" {
+			req.Body = req.Summary
+		}
+	}
+	if req.Renderer == "notice" && userNotificationRestrictedContent.MatchString(req.Body) {
+		return nil, invalidUserNotification("公告正文不支持链接、图片或原始 HTML")
+	}
+	if len([]rune(req.PopupTitle)) > userNotificationTitleLimit {
+		return nil, invalidUserNotification("弹窗标题不能超过 80 字")
+	}
+	if len([]rune(req.Body)) > userNotificationBodyLimit {
+		return nil, invalidUserNotification("弹窗正文不能超过 4000 字")
+	}
+
+	notificationID, err := newClientCommandID()
+	if err != nil {
+		return nil, err
+	}
+	expiresAt := createdAt.Add(userNotificationTTL)
+	payload, err := json.Marshal(gin.H{
+		"type": "system_notification",
+		"notification": gin.H{
+			"notification_id": notificationID,
+			"title":           req.Title,
+			"summary":         req.Summary,
+			"icon":            req.Icon,
+			"created_at":      createdAt.UnixMilli(),
+			"expires_at":      expiresAt.UnixMilli(),
+			"presentation": gin.H{
+				"renderer": req.Renderer,
+				"variant":  req.Variant,
+				"title":    req.PopupTitle,
+				"body":     req.Body,
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var command *ClientCommand
+	err = db.Transaction(func(tx *gorm.DB) error {
+		var target TelemetryRecord
+		if err := tx.Select("machine_id").Where("machine_id = ?", req.MachineID).First(&target).Error; err != nil {
+			return err
+		}
+		if req.ReplaceLogID > 0 {
+			if err := cancelNeverDeliveredUserNotificationTx(tx, req.ReplaceLogID, req.MachineID); err != nil {
+				return err
+			}
+		}
+		logEntry := UserCommandLog{
+			MachineID:   req.MachineID,
+			CommandType: "system_notification",
+			Content:     req.Summary,
+			Status:      "pending",
+			CreatedAt:   createdAt,
+		}
+		if err := tx.Create(&logEntry).Error; err != nil {
+			return err
+		}
+		queuedCommand, err := enqueueClientCommandTx(tx, req.MachineID, string(payload), "admin", 0, logEntry.ID)
+		if err != nil {
+			return err
+		}
+		queuedCommand.ExpiresAt = &expiresAt
+		if err := tx.Model(queuedCommand).Update("expires_at", expiresAt).Error; err != nil {
+			return err
+		}
+		command = queuedCommand
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return command, nil
+}
+
+type userNotificationCancelResult struct {
+	Action    string
+	CommandID string
+	LogID     uint
+}
+
+func userCommandLogOriginalLogID(logEntry UserCommandLog, command ClientCommand) (uint, bool) {
+	if logEntry.CommandType != "system_notification_revoke" || command.SourceType != "system_notification_revoke" || command.SourceID == 0 {
+		return 0, false
+	}
+	return command.SourceID, true
+}
+
+func originalUserNotificationID(payload string) (string, error) {
+	var message struct {
+		Type         string `json:"type"`
+		Notification struct {
+			NotificationID string `json:"notification_id"`
+		} `json:"notification"`
+	}
+	if err := json.Unmarshal([]byte(payload), &message); err != nil || message.Type != "system_notification" {
+		return "", errUserNotificationCannotRevoke
+	}
+	notificationID := strings.TrimSpace(message.Notification.NotificationID)
+	if notificationID == "" {
+		return "", errUserNotificationCannotRevoke
+	}
+	return notificationID, nil
+}
+
+func loadOriginalUserNotificationTx(tx *gorm.DB, logID uint, machineID string) (UserCommandLog, ClientCommand, error) {
+	query := tx.Where("id = ? AND command_type = ?", logID, "system_notification")
+	if strings.TrimSpace(machineID) != "" {
+		query = query.Where("machine_id = ?", strings.TrimSpace(machineID))
+	}
+	var logEntry UserCommandLog
+	if err := query.First(&logEntry).Error; err != nil {
+		return UserCommandLog{}, ClientCommand{}, err
+	}
+	var command ClientCommand
+	if err := tx.Where("user_command_log_id = ?", logEntry.ID).Order("id desc").First(&command).Error; err != nil {
+		return UserCommandLog{}, ClientCommand{}, err
+	}
+	return logEntry, command, nil
+}
+
+func cancelNeverDeliveredUserNotificationTx(tx *gorm.DB, logID uint, machineID string) error {
+	_, command, err := loadOriginalUserNotificationTx(tx, logID, machineID)
+	if err != nil {
+		return err
+	}
+	if command.Status != "pending" || command.Attempts > 0 || command.LastDeliveredAt != nil {
+		return errClientCommandNotPending
+	}
+	return cancelUserCommandLogTx(tx, logID, machineID)
+}
+
+func cancelOrRevokeUserNotification(logID uint, createdAt time.Time) (userNotificationCancelResult, error) {
+	result := userNotificationCancelResult{}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		logEntry, originalCommand, err := loadOriginalUserNotificationTx(tx, logID, "")
+		if err != nil {
+			return err
+		}
+		if logEntry.Status == "cancelled" && originalCommand.Status == "cancelled" && originalCommand.Attempts == 0 && originalCommand.LastDeliveredAt == nil {
+			result = userNotificationCancelResult{Action: "cancelled", LogID: logEntry.ID}
+			return nil
+		}
+		if originalCommand.Status == "pending" && originalCommand.Attempts == 0 && originalCommand.LastDeliveredAt == nil {
+			if err := cancelUserCommandLogTx(tx, logEntry.ID, logEntry.MachineID); err != nil {
+				return err
+			}
+			result = userNotificationCancelResult{Action: "cancelled", LogID: logEntry.ID}
+			return nil
+		}
+
+		notificationID, err := originalUserNotificationID(originalCommand.Payload)
+		if err != nil {
+			return err
+		}
+		var existing ClientCommand
+		err = tx.Where("source_type = ? AND source_id = ?", "system_notification_revoke", logEntry.ID).
+			Order("id desc").First(&existing).Error
+		if err == nil {
+			switch existing.Status {
+			case "pending":
+				if existing.ExpiresAt == nil || existing.ExpiresAt.After(createdAt) {
+					result = userNotificationCancelResult{Action: "revoke_queued", CommandID: existing.CommandID, LogID: existing.UserCommandLogID}
+					return nil
+				}
+				if err := tx.Model(&existing).Updates(map[string]interface{}{
+					"status": "failed", "last_error": "命令已过期",
+				}).Error; err != nil {
+					return err
+				}
+				if existing.UserCommandLogID > 0 {
+					if err := tx.Model(&UserCommandLog{}).Where("id = ?", existing.UserCommandLogID).Update("status", "failed").Error; err != nil {
+						return err
+					}
+				}
+			case "acknowledged":
+				result = userNotificationCancelResult{Action: "already_revoked", CommandID: existing.CommandID, LogID: existing.UserCommandLogID}
+				return nil
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		if originalCommand.Status == "pending" {
+			if err := cancelUserCommandLogTx(tx, logEntry.ID, logEntry.MachineID); err != nil {
+				return err
+			}
+		}
+		payload, err := json.Marshal(gin.H{
+			"type":            "system_notification_revoke",
+			"notification_id": notificationID,
+		})
+		if err != nil {
+			return err
+		}
+		revokeLog := UserCommandLog{
+			MachineID:   logEntry.MachineID,
+			CommandType: "system_notification_revoke",
+			Content:     notificationID,
+			Status:      "pending",
+			CreatedAt:   createdAt,
+		}
+		if err := tx.Create(&revokeLog).Error; err != nil {
+			return err
+		}
+		revokeCommand, err := enqueueClientCommandTx(tx, logEntry.MachineID, string(payload), "system_notification_revoke", logEntry.ID, revokeLog.ID)
+		if err != nil {
+			return err
+		}
+		expiresAt := createdAt.Add(userNotificationTTL)
+		if err := tx.Model(revokeCommand).Update("expires_at", expiresAt).Error; err != nil {
+			return err
+		}
+		result = userNotificationCancelResult{Action: "revoke_queued", CommandID: revokeCommand.CommandID, LogID: revokeLog.ID}
+		return nil
+	})
+	return result, err
+}
+
+func cancelUserCommandLogTx(tx *gorm.DB, logID uint, machineID string) error {
+	if logID == 0 {
+		return errClientCommandNotPending
+	}
+	query := tx.Where("id = ?", logID)
+	if strings.TrimSpace(machineID) != "" {
+		query = query.Where("machine_id = ?", strings.TrimSpace(machineID))
+	}
+	var logEntry UserCommandLog
+	if err := query.First(&logEntry).Error; err != nil {
+		return err
+	}
+	if logEntry.Status != "pending" {
+		return errClientCommandNotPending
+	}
+	if err := tx.Model(&ClientCommand{}).
+		Where("user_command_log_id = ? AND status = ?", logEntry.ID, "pending").
+		Update("status", "cancelled").Error; err != nil {
+		return err
+	}
+	if result := tx.Model(&UserCommandLog{}).
+		Where("id = ? AND status = ?", logEntry.ID, "pending").
+		Update("status", "cancelled"); result.Error != nil {
+		return result.Error
+	} else if result.RowsAffected == 0 {
+		return errClientCommandNotPending
+	}
+	return tx.Model(&TelemetryRecord{}).
+		Where("machine_id = ? AND pending_command_log_id = ?", logEntry.MachineID, logEntry.ID).
+		Updates(map[string]interface{}{"pending_command": "", "pending_command_log_id": 0}).Error
+}
+
+func cancelUserCommandLog(logID uint, machineID string) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		return cancelUserCommandLogTx(tx, logID, machineID)
+	})
+}
 
 func supportsClientCommandAcknowledgement(c *gin.Context) bool {
 	protocol, err := strconv.Atoi(strings.TrimSpace(c.GetHeader(clientCommandProtocolHeader)))
 	return err == nil && protocol >= 1
+}
+
+func supportsReliableClientCommands(c *gin.Context, fallbackProtocol int) bool {
+	header := strings.TrimSpace(c.GetHeader(clientCommandProtocolHeader))
+	if header != "" {
+		if protocol, err := strconv.Atoi(header); err == nil {
+			return protocol >= 1
+		}
+	}
+	return fallbackProtocol >= 1
 }
 
 func newClientCommandID() (string, error) {
@@ -66,6 +440,7 @@ func enqueueClientCommandTx(tx *gorm.DB, machineID, payload, sourceType string, 
 		SourceID:         sourceID,
 		UserCommandLogID: userCommandLogID,
 		Status:           "pending",
+		MaxAttempts:      5,
 	}
 	if err := tx.Create(&command).Error; err != nil {
 		return nil, err
@@ -74,23 +449,58 @@ func enqueueClientCommandTx(tx *gorm.DB, machineID, payload, sourceType string, 
 }
 
 func loadPendingClientCommand(machineID string) (*ClientCommand, error) {
+	machineID = strings.TrimSpace(machineID)
 	var command ClientCommand
-	err := db.Where("machine_id = ? AND status = ?", strings.TrimSpace(machineID), "pending").Order("id asc").First(&command).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var exhausted []ClientCommand
+		if err := tx.Select("id", "user_command_log_id").
+			Where("machine_id = ? AND status = ? AND max_attempts > 0 AND attempts >= max_attempts", machineID, "pending").
+			Find(&exhausted).Error; err != nil {
+			return err
+		}
+		for _, exhaustedCommand := range exhausted {
+			result := tx.Model(&ClientCommand{}).
+				Where("id = ? AND status = ?", exhaustedCommand.ID, "pending").
+				Update("status", "failed")
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected > 0 && exhaustedCommand.UserCommandLogID > 0 {
+				if err := tx.Model(&UserCommandLog{}).
+					Where("id = ? AND status = ?", exhaustedCommand.UserCommandLogID, "pending").
+					Update("status", "failed").Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		now := time.Now()
+		err := tx.Where(
+			"machine_id = ? AND status = ? AND attempts < max_attempts AND (expires_at IS NULL OR expires_at > ?)",
+			machineID, "pending", now,
+		).Order("id asc").First(&command).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&ClientCommand{}).Where("id = ? AND status = ?", command.ID, "pending").Updates(map[string]interface{}{
+			"attempts":          gorm.Expr("attempts + 1"),
+			"last_delivered_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		command.Attempts++
+		command.LastDeliveredAt = &now
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	if err := db.Model(&ClientCommand{}).Where("id = ? AND status = ?", command.ID, "pending").Updates(map[string]interface{}{
-		"attempts":          gorm.Expr("attempts + 1"),
-		"last_delivered_at": now,
-	}).Error; err != nil {
-		return nil, err
+	if command.ID == 0 {
+		return nil, nil
 	}
-	command.Attempts++
-	command.LastDeliveredAt = &now
 	return &command, nil
 }
 
@@ -121,13 +531,53 @@ func acknowledgeClientCommand(machineID, commandID, status, errorMessage string,
 		if err := tx.Where("machine_id = ? AND command_id = ?", machineID, commandID).First(&command).Error; err != nil {
 			return err
 		}
-		if command.Status == "acknowledged" {
+		if command.Status == "acknowledged" || command.Status == "unsupported" || command.Status == "failed" || command.Status == "cancelled" {
 			return nil
 		}
+		if status == "error" {
+			status = "retryable_error"
+		}
+		errorMessage = strings.TrimSpace(errorMessage)
+
+		if status == "unsupported" {
+			if err := tx.Model(&command).Updates(map[string]interface{}{
+				"status":          "unsupported",
+				"acknowledged_at": acknowledgedAt,
+				"last_error":      errorMessage,
+			}).Error; err != nil {
+				return err
+			}
+			if command.UserCommandLogID > 0 {
+				return tx.Model(&UserCommandLog{}).Where("id = ?", command.UserCommandLogID).
+					Update("status", "unsupported").Error
+			}
+			return nil
+		}
+
+		if status == "retryable_error" {
+			commandStatus := "pending"
+			if command.MaxAttempts > 0 && command.Attempts >= command.MaxAttempts {
+				commandStatus = "failed"
+			}
+			updates := map[string]interface{}{
+				"status":     commandStatus,
+				"last_error": errorMessage,
+			}
+			if commandStatus == "failed" {
+				updates["acknowledged_at"] = acknowledgedAt
+			}
+			if err := tx.Model(&command).Updates(updates).Error; err != nil {
+				return err
+			}
+			if commandStatus == "failed" && command.UserCommandLogID > 0 {
+				return tx.Model(&UserCommandLog{}).Where("id = ?", command.UserCommandLogID).
+					Update("status", "failed").Error
+			}
+			return nil
+		}
+
 		if status != "success" {
-			return tx.Model(&command).Updates(map[string]interface{}{
-				"last_error": strings.TrimSpace(errorMessage),
-			}).Error
+			return errors.New("无效的命令确认状态")
 		}
 		if err := tx.Model(&command).Updates(map[string]interface{}{
 			"status": "acknowledged", "acknowledged_at": acknowledgedAt, "last_error": "",
@@ -366,6 +816,119 @@ func matchScope(scope string, record TelemetryRecord) bool {
 	return scope == record.Version
 }
 
+type telemetryClientRequest struct {
+	MachineID           string            `json:"machine_id"`
+	MachineIDCandidates []string          `json:"machine_id_candidates"`
+	ContentCacheKeys    map[string]string `json:"content_cache_keys"`
+	Version             string            `json:"version"`
+	OS                  string            `json:"os"`
+	OSRelease           string            `json:"os_release"`
+	OSVersion           string            `json:"os_version"`
+	Arch                string            `json:"arch"`
+	CPUCount            int               `json:"cpu_count"`
+	ScreenRes           string            `json:"screen_res"`
+	PythonVersion       string            `json:"python_version"`
+	Locale              string            `json:"locale"`
+	SessionID           int               `json:"session_id"`
+	CommandProtocol     int               `json:"command_protocol"`
+}
+
+type feedbackClientRequest struct {
+	MachineID string `json:"machine_id"`
+	Version   string `json:"version"`
+	Contact   string `json:"contact"`
+	Content   string `json:"content"`
+	Category  string `json:"category"`
+	OS        string `json:"os"`
+	OSVersion string `json:"os_version"`
+	ScreenRes string `json:"screen_res"`
+	Locale    string `json:"locale"`
+}
+
+func decodeStrictJSONObject(c *gin.Context, target any) error {
+	decoder := json.NewDecoder(c.Request.Body)
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		return err
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
+		return errors.New("JSON value is not an object")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	objectDecoder := json.NewDecoder(bytes.NewReader(raw))
+	objectDecoder.DisallowUnknownFields()
+	return objectDecoder.Decode(target)
+}
+
+func isValidMachineIDInput(machineID string) bool {
+	return machineID != "" && normalizeMachineIDCandidate(machineID) == machineID
+}
+
+func withinRuneLimit(value string, limit int) bool {
+	return len([]rune(value)) <= limit
+}
+
+func validateTelemetryClientRequest(request telemetryClientRequest) bool {
+	if !isValidMachineIDInput(request.MachineID) || len(request.MachineIDCandidates) > 64 || request.CPUCount < 0 || request.CPUCount > 1024 {
+		return false
+	}
+	for _, candidate := range request.MachineIDCandidates {
+		if !isValidMachineIDInput(candidate) {
+			return false
+		}
+	}
+	for _, field := range []struct {
+		value string
+		limit int
+	}{
+		{value: request.Version, limit: 32},
+		{value: request.OS, limit: 32},
+		{value: request.Arch, limit: 32},
+		{value: request.PythonVersion, limit: 32},
+		{value: request.Locale, limit: 32},
+		{value: request.ScreenRes, limit: 32},
+		{value: request.OSRelease, limit: 128},
+		{value: request.OSVersion, limit: 256},
+	} {
+		if !withinRuneLimit(field.value, field.limit) {
+			return false
+		}
+	}
+	if len(request.ContentCacheKeys) > 32 {
+		return false
+	}
+	for key, value := range request.ContentCacheKeys {
+		if !withinRuneLimit(key, 64) || !withinRuneLimit(value, 128) {
+			return false
+		}
+	}
+	return true
+}
+
+func (request telemetryClientRequest) telemetryRecord() TelemetryRecord {
+	return TelemetryRecord{
+		MachineID: request.MachineID, MachineIDCandidates: request.MachineIDCandidates,
+		ContentCacheKeys: request.ContentCacheKeys, Version: request.Version, OS: request.OS,
+		OSRelease: request.OSRelease, OSVersion: request.OSVersion, Arch: request.Arch,
+		CPUCount: request.CPUCount, ScreenRes: request.ScreenRes, PythonVersion: request.PythonVersion,
+		Locale: request.Locale, SessionID: request.SessionID, CommandProtocol: request.CommandProtocol,
+	}
+}
+
+func (request feedbackClientRequest) feedbackRecord() FeedbackRecord {
+	return FeedbackRecord{
+		MachineID: request.MachineID, Version: request.Version, Contact: request.Contact,
+		Content: request.Content, Category: request.Category, OS: request.OS,
+		OSVersion: request.OSVersion, ScreenRes: request.ScreenRes, Locale: request.Locale,
+	}
+}
+
 func normalizeMachineIDCandidate(machineID string) string {
 	normalized := strings.ToLower(strings.TrimSpace(machineID))
 	if len(normalized) != 64 {
@@ -530,13 +1093,19 @@ func intValue(raw any) (int, bool) {
 
 func serializeTelemetryUser(record TelemetryRecord) map[string]any {
 	seqID := lookupUserUIDWithFallback(record.MachineID, record.ID)
-	row := serializeTelemetryUserBase(record, seqID)
+	row := serializeTelemetryUserBase(record, seqID, time.Now(), sysConfig.OnlineThresholdMin)
 	profiles := loadUserProfilesMap([]string{record.MachineID})
 	attachTelemetryUserProfile(row, profiles[record.MachineID])
 	return row
 }
 
-func serializeTelemetryUserBase(record TelemetryRecord, publicUID uint) map[string]any {
+func serializeTelemetryUserBase(record TelemetryRecord, publicUID uint, now time.Time, thresholdMinutes int) map[string]any {
+	if thresholdMinutes <= 0 {
+		thresholdMinutes = 5
+	}
+	minutesAgo := int(now.Sub(record.LastSeenAt).Minutes())
+	online := !record.LastSeenAt.Before(now.Add(-time.Duration(thresholdMinutes) * time.Minute))
+
 	return map[string]any{
 		"id":                publicUID,
 		"uid":               record.MachineID,
@@ -555,9 +1124,10 @@ func serializeTelemetryUserBase(record TelemetryRecord, publicUID uint) map[stri
 		"is_admin":          record.IsAdmin,
 		"tags":              record.Tags,
 		"comment_perms":     record.CommentPerms,
+		"online":            online,
 		"updated_at":        record.LastSeenAt.Format("2006-01-02 15:04:05"),
 		"created_at":        record.CreatedAt.Format("2006-01-02 15:04:05"),
-		"minutes_ago":       int(time.Since(record.LastSeenAt).Minutes()),
+		"minutes_ago":       minutesAgo,
 	}
 }
 
@@ -582,6 +1152,10 @@ func attachTelemetryUserProfile(row map[string]any, profile UserProfile) {
 }
 
 func serializeTelemetryUsers(records []TelemetryRecord) []map[string]any {
+	return serializeTelemetryUsersAt(records, time.Now(), sysConfig.OnlineThresholdMin)
+}
+
+func serializeTelemetryUsersAt(records []TelemetryRecord, now time.Time, thresholdMinutes int) []map[string]any {
 	if len(records) == 0 {
 		return []map[string]any{}
 	}
@@ -595,11 +1169,150 @@ func serializeTelemetryUsers(records []TelemetryRecord) []map[string]any {
 
 	result := make([]map[string]any, len(records))
 	for i, record := range records {
-		row := serializeTelemetryUserBase(record, uidMap[record.MachineID])
+		row := serializeTelemetryUserBase(record, uidMap[record.MachineID], now, thresholdMinutes)
 		attachTelemetryUserProfile(row, profiles[record.MachineID])
 		result[i] = row
 	}
 	return result
+}
+
+type adminUserListOptions struct {
+	Page                   int
+	Limit                  int
+	Offset                 int
+	UseOffset              bool
+	Search                 string
+	Status                 string
+	Tag                    string
+	Sort                   string
+	Order                  string
+	OnlineThresholdMinutes int
+}
+
+type adminUserListResult struct {
+	Users      []TelemetryRecord
+	Total      int64
+	Page       int
+	TotalPages int
+	Limit      int
+	Offset     int
+}
+
+func adminUserListQuery(options adminUserListOptions, now time.Time) *gorm.DB {
+	query := db.Table("telemetry_records AS tr").
+		Joins("LEFT JOIN user_profiles AS up ON up.machine_id = tr.machine_id").
+		Joins("LEFT JOIN user_uid_mappings AS uum ON uum.machine_id = tr.machine_id")
+
+	if search := strings.ToLower(strings.TrimSpace(options.Search)); search != "" {
+		like := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(search) + "%"
+		condition := "(LOWER(tr.machine_id) LIKE ? ESCAPE '\\' OR LOWER(tr.alias) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(up.nickname, '')) LIKE ? ESCAPE '\\'"
+		args := []interface{}{like, like, like}
+		uidSearch := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(search, "用户#"), "#"))
+		if uid, err := strconv.Atoi(uidSearch); err == nil && uid > 0 {
+			condition += " OR uum.seq_id = ?"
+			args = append(args, uid)
+		}
+		condition += " OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tr.tags) THEN tr.tags ELSE '[]' END) WHERE LOWER(CAST(value AS TEXT)) = ?))"
+		args = append(args, search)
+		query = query.Where(condition, args...)
+	}
+
+	thresholdMinutes := options.OnlineThresholdMinutes
+	if thresholdMinutes <= 0 {
+		thresholdMinutes = 5
+	}
+	onlineCutoff := now.Add(-time.Duration(thresholdMinutes) * time.Minute)
+	switch options.Status {
+	case "online":
+		query = query.Where("tr.last_seen_at >= ?", onlineCutoff)
+	case "offline":
+		query = query.Where("tr.last_seen_at < ?", onlineCutoff)
+	}
+
+	switch tag := strings.TrimSpace(options.Tag); tag {
+	case "", "all":
+	case "_starred":
+		query = query.Where("tr.is_starred = ?", true)
+	case "_admin":
+		query = query.Where("tr.is_admin = ?", true)
+	default:
+		query = query.Where("EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tr.tags) THEN tr.tags ELSE '[]' END) WHERE CAST(value AS TEXT) = ?)", tag)
+	}
+	return query
+}
+
+func queryAdminUsers(options adminUserListOptions, now time.Time) (adminUserListResult, error) {
+	if options.Page <= 0 {
+		options.Page = 1
+	}
+	if options.Limit <= 0 {
+		options.Limit = 15
+	}
+	if options.Limit > 1000 {
+		options.Limit = 1000
+	}
+	if options.Offset < 0 {
+		options.Offset = 0
+	}
+
+	var total int64
+	if err := adminUserListQuery(options, now).Distinct("tr.id").Count(&total).Error; err != nil {
+		return adminUserListResult{}, err
+	}
+
+	offset := (options.Page - 1) * options.Limit
+	if options.UseOffset {
+		offset = options.Offset
+		options.Page = offset/options.Limit + 1
+	}
+
+	order := strings.ToLower(strings.TrimSpace(options.Order))
+	if order != "asc" {
+		order = "desc"
+	}
+	sortExpressions := map[string]string{
+		"id":      "COALESCE(uum.seq_id, tr.id)",
+		"version": "LOWER(tr.version)",
+		"os":      "LOWER(tr.os)",
+		"locale":  "LOWER(tr.locale)",
+		"status":  "tr.last_seen_at",
+	}
+	sortExpression := sortExpressions[options.Sort]
+	if options.Sort == "minutes" {
+		sortExpression = "tr.last_seen_at"
+		if order == "asc" {
+			order = "desc"
+		} else {
+			order = "asc"
+		}
+	}
+	if sortExpression == "" {
+		sortExpression = "tr.last_seen_at"
+		order = "desc"
+	}
+
+	var users []TelemetryRecord
+	if err := adminUserListQuery(options, now).
+		Select("tr.*").
+		Order(sortExpression + " " + order + ", tr.id " + order).
+		Offset(offset).
+		Limit(options.Limit).
+		Find(&users).Error; err != nil {
+		return adminUserListResult{}, err
+	}
+
+	totalPages := int((total + int64(options.Limit) - 1) / int64(options.Limit))
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	return adminUserListResult{
+		Users:      users,
+		Total:      total,
+		Page:       options.Page,
+		TotalPages: totalPages,
+		Limit:      options.Limit,
+		Offset:     offset,
+	}, nil
 }
 
 func updateTelemetryUserFields(machineID string, updates map[string]any) (TelemetryRecord, error) {
@@ -673,9 +1386,69 @@ func initRouter(r *gin.Engine) {
 			subtle.ConstantTimeCompare([]byte(user), []byte(adminUser)) == 1 &&
 			subtle.ConstantTimeCompare([]byte(pass), []byte(adminPass)) == 1
 	}
+	adminRequestSourceAllowed := func(req *http.Request) bool {
+		switch req.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			return true
+		}
+
+		source := strings.TrimSpace(req.Header.Get("Origin"))
+		if source == "" {
+			source = strings.TrimSpace(req.Header.Get("Referer"))
+		}
+		parsedSource, err := url.Parse(source)
+		if err != nil || parsedSource.Host == "" || parsedSource.User != nil {
+			return false
+		}
+
+		scheme := strings.ToLower(parsedSource.Scheme)
+		if scheme != "https" && (scheme != "http" || os.Getenv("TELEMETRY_ADMIN_ALLOW_HTTP") != "1") {
+			return false
+		}
+
+		parsedRequestHost, err := url.Parse("//" + strings.TrimSpace(req.Host))
+		if err != nil || parsedRequestHost.Host == "" || parsedRequestHost.User != nil || parsedRequestHost.Path != "" {
+			return false
+		}
+
+		sourceHost := parsedSource.Hostname()
+		requestHost := parsedRequestHost.Hostname()
+		if sourceHost == "" || requestHost == "" || !strings.EqualFold(sourceHost, requestHost) {
+			return false
+		}
+
+		sourcePort := parsedSource.Port()
+		requestPort := parsedRequestHost.Port()
+		if sourcePort == "" {
+			if scheme == "https" {
+				sourcePort = "443"
+			} else {
+				sourcePort = "80"
+			}
+		}
+		if requestPort == "" {
+			if scheme == "https" {
+				requestPort = "443"
+			} else {
+				requestPort = "80"
+			}
+		}
+		return sourcePort == requestPort
+	}
+
+	requireAdminRequestSource := func(c *gin.Context) bool {
+		if adminRequestSourceAllowed(c.Request) {
+			return true
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "请求来源不被允许"})
+		return false
+	}
 
 	authMiddleware := func(c *gin.Context) {
 		if isValidAdminBasicAuth(c.Request) {
+			if !requireAdminRequestSource(c) {
+				return
+			}
 			c.Next()
 			return
 		}
@@ -711,6 +1484,9 @@ func initRouter(r *gin.Engine) {
 			strings.HasPrefix(path, "/api/themes/")
 		if protectedClientPaths[path] || protectedByPrefix {
 			if isValidAdminBasicAuth(c.Request) {
+				if !requireAdminRequestSource(c) {
+					return
+				}
 				c.Next()
 				return
 			}
@@ -937,40 +1713,47 @@ func initRouter(r *gin.Engine) {
 			})
 
 			admin.GET("/users", func(c *gin.Context) {
+				_, hasPage := c.GetQuery("page")
+				defaultLimit := "500"
+				if hasPage {
+					defaultLimit = "15"
+				}
+				page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 				offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-				limit, _ := strconv.Atoi(c.DefaultQuery("limit", "500"))
-				if offset < 0 {
-					offset = 0
+				limit, _ := strconv.Atoi(c.DefaultQuery("limit", defaultLimit))
+				thresholdMinutes := sysConfig.OnlineThresholdMin
+				if thresholdMinutes <= 0 {
+					thresholdMinutes = 5
 				}
-				if limit <= 0 {
-					limit = 500
-				}
-				if limit > 1000 {
-					limit = 1000
-				}
+				now := time.Now()
 
-				baseQuery := db.Model(&TelemetryRecord{})
-
-				var total int64
-				if err := baseQuery.Count(&total).Error; err != nil {
-					c.JSON(500, gin.H{"error": "统计用户数量失败"})
+				result, err := queryAdminUsers(adminUserListOptions{
+					Page:                   page,
+					Limit:                  limit,
+					Offset:                 offset,
+					UseOffset:              !hasPage,
+					Search:                 c.Query("search"),
+					Status:                 c.Query("status"),
+					Tag:                    c.Query("tag"),
+					Sort:                   c.Query("sort"),
+					Order:                  c.Query("order"),
+					OnlineThresholdMinutes: thresholdMinutes,
+				}, now)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "加载用户列表失败"})
 					return
 				}
 
-				var users []TelemetryRecord
-				if err := baseQuery.Order("last_seen_at desc, id desc").Offset(offset).Limit(limit).Find(&users).Error; err != nil {
-					c.JSON(500, gin.H{"error": "加载用户列表失败"})
-					return
-				}
-
-				nextOffset := offset + len(users)
-				c.JSON(200, gin.H{
-					"users":       serializeTelemetryUsers(users),
-					"total":       total,
-					"offset":      offset,
-					"limit":       limit,
+				nextOffset := result.Offset + len(result.Users)
+				c.JSON(http.StatusOK, gin.H{
+					"users":       serializeTelemetryUsersAt(result.Users, now, thresholdMinutes),
+					"total":       result.Total,
+					"page":        result.Page,
+					"total_pages": result.TotalPages,
+					"offset":      result.Offset,
+					"limit":       result.Limit,
 					"next_offset": nextOffset,
-					"has_more":    int64(nextOffset) < total,
+					"has_more":    int64(nextOffset) < result.Total,
 				})
 			})
 
@@ -1024,6 +1807,7 @@ func initRouter(r *gin.Engine) {
 
 				action, _ := req["action"].(string)
 				shouldPersist := true
+				previousConfig := sysConfig
 
 				switch action {
 				case "maintenance":
@@ -1176,6 +1960,16 @@ func initRouter(r *gin.Engine) {
 					}
 
 				case "user_features":
+					if rawTargeting, exists := req["notification_center_targeting"]; exists {
+						targeting, err := parseAudienceTargeting(rawTargeting)
+						if err != nil {
+							c.JSON(400, gin.H{"error": "通知中心受众规则格式无效: " + err.Error()})
+							return
+						}
+						sysConfig.NotificationCenterTargeting = targeting
+					} else if _, scopeExists := req["notification_center_scope"]; scopeExists {
+						sysConfig.NotificationCenterTargeting = AudienceTargeting{}
+					}
 					if val, ok := req["badge_system_enabled"].(bool); ok {
 						sysConfig.BadgeSystemEnabled = val
 					}
@@ -1196,6 +1990,12 @@ func initRouter(r *gin.Engine) {
 					}
 					if val, ok := req["feedback_enabled"].(bool); ok {
 						sysConfig.FeedbackEnabled = val
+					}
+					if val, ok := req["notification_center_enabled"].(bool); ok {
+						sysConfig.NotificationCenterEnabled = val
+					}
+					if val, ok := req["notification_center_scope"].(string); ok {
+						sysConfig.NotificationCenterScope = val
 					}
 					if val, ok := req["avatar_upload_allow_all"].(bool); ok {
 						sysConfig.AvatarUploadAllowAll = val
@@ -1225,6 +2025,13 @@ func initRouter(r *gin.Engine) {
 					return
 				}
 
+				if shouldPersist {
+					if err := persistSysConfigOrRestore(previousConfig); err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "配置保存失败"})
+						return
+					}
+				}
+
 				// WebSocket 实时推送
 				if wsHub != nil {
 					switch action {
@@ -1243,11 +2050,6 @@ func initRouter(r *gin.Engine) {
 							BroadcastUpdateToAudience(sysConfig.UpdateContent, sysConfig.UpdateUrl, sysConfig.UpdateScope, sysConfig.UpdateTargeting)
 						}
 					}
-				}
-
-				if shouldPersist {
-					// 持久化 sysConfig 到数据库
-					PersistSysConfig()
 				}
 
 				c.JSON(200, gin.H{"status": "success", "config": sysConfig})
@@ -1309,8 +2111,7 @@ func initRouter(r *gin.Engine) {
 					}
 
 					if existing.PendingCommand != "" && existing.PendingCommandLogID > 0 {
-						if err := tx.Model(&UserCommandLog{}).Where("id = ? AND status = ?", existing.PendingCommandLogID, "pending").
-							Update("status", "overwritten").Error; err != nil {
+						if err := cancelUserCommandLogTx(tx, existing.PendingCommandLogID, machineID); err != nil {
 							return err
 						}
 					}
@@ -1350,6 +2151,36 @@ func initRouter(r *gin.Engine) {
 					return
 				}
 				c.JSON(200, gin.H{"status": "success"})
+			})
+
+			admin.POST("/user-notification", func(c *gin.Context) {
+				c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32*1024)
+				var req userNotificationRequest
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "请求数据格式错误"})
+					return
+				}
+
+				command, err := createUserNotification(req, time.Now())
+				if err != nil {
+					switch {
+					case errors.Is(err, errInvalidUserNotification):
+						c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					case errors.Is(err, errClientCommandNotPending):
+						c.JSON(http.StatusConflict, gin.H{"error": "被替换消息已不再等待领取"})
+					case errors.Is(err, gorm.ErrRecordNotFound):
+						c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+					default:
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "消息入队失败"})
+					}
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"status":     "queued",
+					"command_id": command.CommandID,
+					"log_id":     command.UserCommandLogID,
+					"expires_at": command.ExpiresAt,
+				})
 			})
 
 			admin.POST("/delete-user", func(c *gin.Context) {
@@ -1857,22 +2688,96 @@ func initRouter(r *gin.Engine) {
 				}
 
 				var total int64
-				db.Model(&UserCommandLog{}).Where("machine_id = ?", machineID).Count(&total)
+				if err := db.Model(&UserCommandLog{}).Where("machine_id = ?", machineID).Count(&total).Error; err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "加载推送日志失败"})
+					return
+				}
 
 				var logs []UserCommandLog
-				db.Where("machine_id = ?", machineID).
+				if err := db.Where("machine_id = ?", machineID).
 					Order("id desc").
 					Offset((page - 1) * pageSize).
 					Limit(pageSize).
-					Find(&logs)
+					Find(&logs).Error; err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "加载推送日志失败"})
+					return
+				}
+
+				logIDs := make([]uint, 0, len(logs))
+				for _, item := range logs {
+					logIDs = append(logIDs, item.ID)
+				}
+				commands := make(map[uint]ClientCommand, len(logIDs))
+				if len(logIDs) > 0 {
+					var commandRows []ClientCommand
+					if err := db.Where("user_command_log_id IN ?", logIDs).Find(&commandRows).Error; err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "加载推送状态失败"})
+						return
+					}
+					for _, command := range commandRows {
+						commands[command.UserCommandLogID] = command
+					}
+				}
+				now := time.Now()
+				items := make([]gin.H, 0, len(logs))
+				for _, logEntry := range logs {
+					status := logEntry.Status
+					command := commands[logEntry.ID]
+					if command.ID > 0 {
+						switch command.Status {
+						case "acknowledged":
+							status = "delivered"
+						case "unsupported", "failed", "cancelled":
+							status = command.Status
+						case "pending":
+							if command.ExpiresAt != nil && !command.ExpiresAt.After(now) {
+								status = "expired"
+							}
+						}
+					}
+					item := gin.H{
+						"id": logEntry.ID, "machine_id": logEntry.MachineID, "command_type": logEntry.CommandType,
+						"content": logEntry.Content, "status": status, "created_at": logEntry.CreatedAt,
+						"delivered_at": logEntry.DeliveredAt, "command_id": command.CommandID,
+						"expires_at": command.ExpiresAt, "attempts": command.Attempts,
+						"max_attempts": command.MaxAttempts, "last_error": command.LastError,
+					}
+					if originalLogID, ok := userCommandLogOriginalLogID(logEntry, command); ok {
+						item["original_log_id"] = originalLogID
+					}
+					items = append(items, item)
+				}
 
 				totalPages := (total + int64(pageSize) - 1) / int64(pageSize)
 				c.JSON(200, gin.H{
-					"items":       logs,
+					"items":       items,
 					"total":       total,
 					"page":        page,
 					"page_size":   pageSize,
 					"total_pages": totalPages,
+				})
+			})
+
+			admin.POST("/user-command-log/:id/cancel", func(c *gin.Context) {
+				logIDValue, err := strconv.ParseUint(c.Param("id"), 10, 64)
+				if err != nil || logIDValue == 0 {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "无效的日志 ID"})
+					return
+				}
+				result, err := cancelOrRevokeUserNotification(uint(logIDValue), time.Now())
+				if err != nil {
+					switch {
+					case errors.Is(err, gorm.ErrRecordNotFound):
+						c.JSON(http.StatusNotFound, gin.H{"error": "推送记录不存在"})
+					case errors.Is(err, errClientCommandNotPending), errors.Is(err, errUserNotificationCannotRevoke):
+						c.JSON(http.StatusConflict, gin.H{"error": "该消息当前无法撤销或撤回"})
+					default:
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "撤销失败"})
+					}
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"action": result.Action, "command_id": result.CommandID, "log_id": result.LogID,
 				})
 			})
 
@@ -2495,7 +3400,8 @@ func initRouter(r *gin.Engine) {
 		req.MachineID = strings.TrimSpace(req.MachineID)
 		req.CommandID = strings.TrimSpace(req.CommandID)
 		req.Status = strings.TrimSpace(req.Status)
-		if req.MachineID == "" || req.CommandID == "" || (req.Status != "success" && req.Status != "error") {
+		validStatus := req.Status == "success" || req.Status == "unsupported" || req.Status == "retryable_error" || req.Status == "error"
+		if req.MachineID == "" || req.CommandID == "" || !validStatus {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "machine_id、command_id 和有效 status 为必填"})
 			return
 		}
@@ -2708,25 +3614,13 @@ func initRouter(r *gin.Engine) {
 		req.AdMedium = strings.TrimSpace(req.AdMedium)
 		req.AdID = strings.TrimSpace(req.AdID)
 		req.TargetURL = strings.TrimSpace(req.TargetURL)
-		if req.AdMedium == "" || req.AdID == "" {
-			c.JSON(400, gin.H{"error": "ad_medium 和 ad_id 为必填"})
+		_, mediumAllowed := allowedAdClickMedia[req.AdMedium]
+		if !mediumAllowed || !adClickIDPattern.MatchString(req.AdID) || !withinRuneLimit(req.TargetURL, 2048) {
+			c.JSON(400, gin.H{"error": "请求数据格式错误"})
 			return
 		}
 		if !ensureClientMachineBinding(c, req.MachineID) {
 			return
-		}
-		// 字段长度限制
-		if len(req.MachineID) > 64 {
-			req.MachineID = req.MachineID[:64]
-		}
-		if len(req.AdMedium) > 32 {
-			req.AdMedium = req.AdMedium[:32]
-		}
-		if len(req.AdID) > 64 {
-			req.AdID = req.AdID[:64]
-		}
-		if len(req.TargetURL) > 2048 {
-			req.TargetURL = req.TargetURL[:2048]
 		}
 
 		// 去重：同一用户 + 同一广告位 + 同一广告 2 分钟内只记录 1 次
@@ -2762,16 +3656,16 @@ func initRouter(r *gin.Engine) {
 		}
 
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
-		var record TelemetryRecord
-		if err := c.ShouldBindJSON(&record); err != nil {
+		var request telemetryClientRequest
+		if err := decodeStrictJSONObject(c, &request); err != nil || !validateTelemetryClientRequest(request) {
 			c.JSON(400, gin.H{"error": "请求数据格式错误"})
 			return
 		}
+		record := request.telemetryRecord()
 		if !ensureClientMachineBinding(c, record.MachineID) {
 			return
 		}
 
-		record.MachineID = strings.TrimSpace(record.MachineID)
 		reportedMachineID := record.MachineID
 		canonicalMachineID := ""
 		if value, ok := c.Get("_canonicalMachineID"); ok {
@@ -2781,54 +3675,74 @@ func initRouter(r *gin.Engine) {
 				record.MachineID = candidate
 			}
 		}
-		if canonicalMachineID == "" {
-			if _, tokenValid := c.Get("_clientDeviceTokenValid"); !tokenValid {
-				if candidate := resolveMachineIDAlias(record.MachineID); candidate != "" {
-					canonicalMachineID = candidate
-					record.MachineID = candidate
-					if strings.TrimSpace(c.GetHeader(clientDeviceTokenHeader)) == "" {
-						c.Set("_deviceTokenRenew", true)
-					}
-				} else if candidate := resolveKnownMachineIDCandidate(record.MachineID, record.MachineIDCandidates); candidate != "" {
-					canonicalMachineID = candidate
-					record.MachineID = candidate
-					if strings.TrimSpace(c.GetHeader(clientDeviceTokenHeader)) == "" {
-						c.Set("_deviceTokenRenew", true)
-					}
-				}
-			}
+		_, bootstrapIdentity := c.Get("_deviceTokenBootstrap")
+		_, aliasAuthorized := c.Get("_identityAliasAuthorized")
+		var historicalDeviceSessionID uint
+		if value, ok := c.Get("_historicalDeviceSessionID"); ok {
+			historicalDeviceSessionID, _ = value.(uint)
 		}
 		record.LastSeenAt = time.Now()
 
 		var dbRecord TelemetryRecord
 		var userSeqID uint
+		createdTelemetry := false
 		err := db.Transaction(func(tx *gorm.DB) error {
-			// update-first：已有用户仅更新字段，不触发 autoincrement
-			updates := map[string]interface{}{
-				"version":        record.Version,
-				"os":             record.OS,
-				"os_release":     record.OSRelease,
-				"os_version":     record.OSVersion,
-				"arch":           record.Arch,
-				"cpu_count":      record.CPUCount,
-				"screen_res":     record.ScreenRes,
-				"python_version": record.PythonVersion,
-				"locale":         record.Locale,
-				"session_id":     record.SessionID,
-				"last_seen_at":   record.LastSeenAt,
+			if bootstrapIdentity {
+				exists, err := machineIDIdentityExistsTx(tx, reportedMachineID)
+				if err != nil {
+					return err
+				}
+				if exists {
+					return errIdentityProofRequired
+				}
+			}
+			if aliasAuthorized && reportedMachineID != record.MachineID {
+				available, err := reportedMachineIDAvailableForCanonicalTx(tx, reportedMachineID, record.MachineID)
+				if err != nil {
+					return err
+				}
+				if !available {
+					return errIdentityCollision
+				}
+			}
+			if historicalDeviceSessionID != 0 {
+				var session ClientDeviceSession
+				now := time.Now()
+				if err := tx.Where("id = ? AND machine_id = ? AND expires_at > ?", historicalDeviceSessionID, record.MachineID, now).
+					First(&session).Error; err != nil {
+					return err
+				}
+				if now.Sub(session.LastSeenAt) >= clientSessionTouchMinimum {
+					if err := tx.Model(&session).Updates(map[string]any{
+						"last_seen_at": now,
+						"expires_at":   now.Add(clientDeviceSessionTTL),
+					}).Error; err != nil {
+						return err
+					}
+				}
 			}
 
-			updateTx := tx.Model(&TelemetryRecord{}).
-				Where("machine_id = ?", record.MachineID).
-				Updates(updates)
-			if updateTx.Error != nil {
-				return updateTx.Error
-			}
-
-			// insert-only-when-absent：仅首次注册才插入新行
-			if updateTx.RowsAffected == 0 {
+			if bootstrapIdentity {
 				if err := tx.Create(&record).Error; err != nil {
 					return err
+				}
+				createdTelemetry = true
+			} else {
+				updates := map[string]interface{}{
+					"version": record.Version, "os": record.OS, "os_release": record.OSRelease,
+					"os_version": record.OSVersion, "arch": record.Arch, "cpu_count": record.CPUCount,
+					"screen_res": record.ScreenRes, "python_version": record.PythonVersion,
+					"locale": record.Locale, "session_id": record.SessionID, "last_seen_at": record.LastSeenAt,
+				}
+				updateTx := tx.Model(&TelemetryRecord{}).Where("machine_id = ?", record.MachineID).Updates(updates)
+				if updateTx.Error != nil {
+					return updateTx.Error
+				}
+				if updateTx.RowsAffected == 0 {
+					if err := tx.Create(&record).Error; err != nil {
+						return err
+					}
+					createdTelemetry = true
 				}
 			}
 
@@ -2843,16 +3757,24 @@ func initRouter(r *gin.Engine) {
 			if err != nil {
 				return err
 			}
-			aliasCandidates := append([]string{reportedMachineID}, record.MachineIDCandidates...)
-			if err := recordMachineIDAliasesTx(tx, record.MachineID, aliasCandidates); err != nil {
-				return err
+			if aliasAuthorized && reportedMachineID != record.MachineID {
+				if err := recordMachineIDAliasesTx(tx, record.MachineID, []string{reportedMachineID}); err != nil {
+					return err
+				}
 			}
 			userSeqID = seqID
 			return nil
 		})
 
 		if err != nil {
-			c.JSON(500, gin.H{"status": "error"})
+			switch {
+			case errors.Is(err, errIdentityProofRequired):
+				abortIdentityProofRequired(c)
+			case errors.Is(err, errIdentityCollision):
+				abortIdentityCollision(c)
+			default:
+				c.JSON(500, gin.H{"status": "error"})
+			}
 			return
 		}
 
@@ -2860,7 +3782,7 @@ func initRouter(r *gin.Engine) {
 
 		pendingCmd := ""
 		commandID := ""
-		if record.CommandProtocol >= 1 {
+		if supportsReliableClientCommands(c, record.CommandProtocol) {
 			queuedCommand, err := loadPendingClientCommand(record.MachineID)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"status": "error"})
@@ -2895,13 +3817,7 @@ func initRouter(r *gin.Engine) {
 		if canonicalMachineID != "" {
 			response["canonical_machine_id"] = canonicalMachineID
 		}
-		// 统一 token 签发：首次引导或 token 失效重签均走此路径，
-		// issueClientDeviceToken 内部使用 Upsert 保证幂等。
-		needIssue := !hasClientDeviceToken(record.MachineID)
-		if _, renew := c.Get("_deviceTokenRenew"); renew {
-			needIssue = true
-		}
-		if needIssue {
+		if bootstrapIdentity && createdTelemetry {
 			deviceToken, err := issueClientDeviceToken(record.MachineID)
 			if err != nil {
 				c.JSON(500, gin.H{"status": "error", "error": "设备令牌签发失败"})
@@ -3056,11 +3972,12 @@ func handleFeedback(c *gin.Context) {
 	}
 
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
-	var fb FeedbackRecord
-	if err := c.ShouldBindJSON(&fb); err != nil {
+	var request feedbackClientRequest
+	if err := decodeStrictJSONObject(c, &request); err != nil {
 		c.JSON(400, gin.H{"error": "请求数据格式错误"})
 		return
 	}
+	fb := request.feedbackRecord()
 	if !ensureClientMachineBinding(c, fb.MachineID) {
 		return
 	}

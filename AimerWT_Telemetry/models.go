@@ -72,9 +72,10 @@ type BannerItem struct {
 }
 
 type AudienceRule struct {
-	Versions      []string `json:"versions"`
-	Tags          []string `json:"tags"`
-	SpecialGroups []string `json:"special_groups"`
+	MinimumVersion string   `json:"minimum_version,omitempty"`
+	Versions       []string `json:"versions"`
+	Tags           []string `json:"tags"`
+	SpecialGroups  []string `json:"special_groups"`
 }
 
 type AudienceTargeting struct {
@@ -123,13 +124,16 @@ type SystemConfig struct {
 	ProjectLastUpdate string `json:"project_last_update"` // 如 "2026 年 3 月 14 日"
 
 	// 用户功能总开关（评论和表情默认关闭，其余默认开启）
-	BadgeSystemEnabled    bool `json:"badge_system_enabled"`
-	NicknameChangeEnabled bool `json:"nickname_change_enabled"`
-	AvatarUploadEnabled   bool `json:"avatar_upload_enabled"`
-	NoticeCommentEnabled  bool `json:"notice_comment_enabled"`
-	NoticeReactionEnabled bool `json:"notice_reaction_enabled"`
-	RedeemCodeEnabled     bool `json:"redeem_code_enabled"`
-	FeedbackEnabled       bool `json:"feedback_enabled"`
+	BadgeSystemEnabled          bool              `json:"badge_system_enabled"`
+	NicknameChangeEnabled       bool              `json:"nickname_change_enabled"`
+	AvatarUploadEnabled         bool              `json:"avatar_upload_enabled"`
+	NoticeCommentEnabled        bool              `json:"notice_comment_enabled"`
+	NoticeReactionEnabled       bool              `json:"notice_reaction_enabled"`
+	RedeemCodeEnabled           bool              `json:"redeem_code_enabled"`
+	FeedbackEnabled             bool              `json:"feedback_enabled"`
+	NotificationCenterEnabled   bool              `json:"notification_center_enabled"`
+	NotificationCenterScope     string            `json:"notification_center_scope"`
+	NotificationCenterTargeting AudienceTargeting `json:"notification_center_targeting"`
 
 	// 头像上传分组权限（按标签控制哪些用户组可上传头像）
 	AvatarUploadAllowAll    bool   `json:"avatar_upload_allow_all"`
@@ -449,9 +453,9 @@ type PushDeliveryLog struct {
 type UserCommandLog struct {
 	ID          uint       `gorm:"primaryKey;autoIncrement" json:"id"`
 	MachineID   string     `gorm:"index;type:varchar(64);not null" json:"machine_id"`
-	CommandType string     `gorm:"type:varchar(32);not null" json:"command_type"` // popup / toast / upload_log / gift_theme
+	CommandType string     `gorm:"type:varchar(32);not null" json:"command_type"` // popup / toast / system_notification / upload_log / gift_theme
 	Content     string     `gorm:"type:text" json:"content"`
-	Status      string     `gorm:"type:varchar(16);default:'pending'" json:"status"` // pending / delivered / overwritten
+	Status      string     `gorm:"type:varchar(16);default:'pending'" json:"status"` // pending / delivered / unsupported / failed / cancelled
 	CreatedAt   time.Time  `gorm:"autoCreateTime;index" json:"created_at"`
 	DeliveredAt *time.Time `json:"delivered_at"`
 }
@@ -467,8 +471,10 @@ type ClientCommand struct {
 	UserCommandLogID uint       `gorm:"index;default:0" json:"user_command_log_id"`
 	Status           string     `gorm:"index:idx_client_command_pending,priority:2;type:varchar(16);default:'pending'" json:"status"`
 	Attempts         int        `gorm:"default:0" json:"attempts"`
+	MaxAttempts      int        `gorm:"default:5" json:"max_attempts"`
 	LastError        string     `gorm:"type:varchar(500)" json:"last_error"`
 	LastDeliveredAt  *time.Time `json:"last_delivered_at"`
+	ExpiresAt        *time.Time `json:"expires_at"`
 	AcknowledgedAt   *time.Time `json:"acknowledged_at"`
 	CreatedAt        time.Time  `gorm:"autoCreateTime;index" json:"created_at"`
 }

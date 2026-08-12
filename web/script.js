@@ -321,7 +321,6 @@ const app = {
             avatar_upload_enabled: false,
             user_profile_enabled: false,
             ai_assistant_enabled: false,
-            notification_center_enabled: false,
         };
     },
 
@@ -501,6 +500,9 @@ const app = {
         }
 
         this.applyOnlineFeatureVisibility();
+        if (window.NotificationBellModule && typeof window.NotificationBellModule.init === 'function') {
+            window.NotificationBellModule.init();
+        }
         return features;
     },
 

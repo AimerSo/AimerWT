@@ -20,9 +20,12 @@
 
 import base64
 import hashlib
+import ipaddress
 import logging
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
+from requests.adapters import HTTPAdapter
 
 log = logging.getLogger(__name__)
 
@@ -50,11 +53,93 @@ _DOWNLOAD_TIMEOUT = 10
 _FAILED_RETRY_SECONDS = 10 * 60
 
 
+class _PinnedHTTPSAdapter(HTTPAdapter):
+    """将 HTTPS 连接固定到已验证 IP，同时保留原域名 TLS 身份。"""
+
+    def __init__(self, pinned_ip: str, tls_hostname: str):
+        self._pinned_ip = pinned_ip
+        self._tls_hostname = tls_hostname
+        super().__init__()
+
+    def get_connection_with_tls_context(
+        self, request, verify, proxies=None, cert=None
+    ):
+        host_params, pool_kwargs = self.build_connection_pool_key_attributes(
+            request, verify, cert
+        )
+        host_params["host"] = self._pinned_ip
+        pool_kwargs["server_hostname"] = self._tls_hostname
+        pool_kwargs["assert_hostname"] = self._tls_hostname
+        return self.poolmanager.connection_from_host(
+            **host_params,
+            pool_kwargs=pool_kwargs,
+        )
+
+
 class RemoteAssetCache:
     """远程素材离线缓存管理器"""
 
-    def __init__(self, cache_root: Path):
+    def __init__(self, cache_root: Path, trusted_origin: str = ""):
         self._root = cache_root
+        self._trusted_origin = self._parse_https_origin(trusted_origin)
+
+    def is_allowed_remote_url(self, url: str) -> bool:
+        """判断远程地址是否与可信 HTTPS 来源完全同源。"""
+        if self._trusted_origin is None:
+            return False
+        return self._parse_https_origin(url) == self._trusted_origin
+
+    @staticmethod
+    def _parse_https_origin(url: str) -> tuple[str, str, int] | None:
+        if not isinstance(url, str) or not url:
+            return None
+        try:
+            parsed = urlparse(url)
+            if (
+                parsed.scheme.lower() != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                return None
+            port = parsed.port
+            if port is not None and not 1 <= port <= 65535:
+                return None
+            return (
+                "https",
+                parsed.hostname.lower(),
+                443 if port is None else port,
+            )
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _resolve_public_addresses(url: str) -> tuple[str, ...]:
+        try:
+            parsed = urlparse(url)
+            results = socket.getaddrinfo(
+                parsed.hostname,
+                443 if parsed.port is None else parsed.port,
+                type=socket.SOCK_STREAM,
+            )
+            addresses = tuple(
+                ipaddress.ip_address(result[4][0])
+                for result in results
+            )
+        except (OSError, ValueError):
+            return ()
+        if not addresses or not all(
+            address.is_global
+            and not address.is_private
+            and not address.is_loopback
+            and not address.is_link_local
+            and not address.is_reserved
+            and not address.is_multicast
+            and not address.is_unspecified
+            for address in addresses
+        ):
+            return ()
+        return tuple(str(address) for address in addresses)
 
     def cache_image(self, url: str, category: str, asset_id: str) -> str | None:
         """
@@ -65,11 +150,9 @@ class RemoteAssetCache:
             category: 分类子目录（"ad_carousel" / "knowledge_ads"）
             asset_id: 资产标识符（如 "ad_slide_1"、"kb_ad_2_avatar"）
         输出:
-            data:image/...;base64,... 格式的 Data URI，失败返回 None（调用方保留原始 URL）
+            data:image/...;base64,... 格式的 Data URI，失败返回 None，由调用方拒绝或清空图片值
         """
-        if not url or not isinstance(url, str):
-            return None
-        if not url.startswith(("http://", "https://")):
+        if not self.is_allowed_remote_url(url):
             return None
 
         url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
@@ -91,38 +174,72 @@ class RemoteAssetCache:
         if self._has_recent_failure(local_path) or self._find_recent_failure(category_dir, safe_id, url_hash):
             return None
 
+        resolved_addresses = self._resolve_public_addresses(url)
+        if not resolved_addresses:
+            return None
+
+        tmp: Path | None = None
         # 下载
         try:
             import requests
             category_dir.mkdir(parents=True, exist_ok=True)
 
-            resp = requests.get(url, timeout=_DOWNLOAD_TIMEOUT, stream=True)
-            resp.raise_for_status()
-
-            # 推断实际扩展名（优先使用 Content-Type）
-            content_type = resp.headers.get("Content-Type", "")
-            ct_ext = _ext_from_content_type(content_type)
-            if ct_ext and ct_ext != ext:
-                filename = f"{safe_id}_{url_hash}{ct_ext}"
-                local_path = category_dir / filename
-
-            tmp = local_path.with_suffix(".tmp")
-            written = 0
-            with open(tmp, "wb") as f:
-                for chunk in resp.iter_content(8192):
-                    f.write(chunk)
-                    written += len(chunk)
-                    if written > _MAX_FILE_SIZE:
-                        tmp.unlink(missing_ok=True)
-                        self._mark_failure(local_path, "too_large")
-                        log.warning(f"[素材缓存] 文件过大，跳过: {url}")
+            parsed = urlparse(url)
+            session = requests.Session()
+            try:
+                session.trust_env = False
+                session.mount(
+                    "https://",
+                    _PinnedHTTPSAdapter(
+                        resolved_addresses[0],
+                        parsed.hostname,
+                    ),
+                )
+                resp = session.get(
+                    url,
+                    timeout=_DOWNLOAD_TIMEOUT,
+                    stream=True,
+                    allow_redirects=False,
+                    headers={"Host": parsed.netloc},
+                )
+                try:
+                    if 300 <= resp.status_code < 400:
                         return None
-            tmp.replace(local_path)
-            self._clear_failure(local_path)
-            log.debug(f"[素材缓存] 已缓存: {url} -> {local_path.name}")
-            return self._file_to_data_uri(local_path)
+                    resp.raise_for_status()
+
+                    # 推断实际扩展名（优先使用 Content-Type）
+                    content_type = resp.headers.get("Content-Type", "")
+                    ct_ext = _ext_from_content_type(content_type)
+                    if ct_ext and ct_ext != ext:
+                        filename = f"{safe_id}_{url_hash}{ct_ext}"
+                        local_path = category_dir / filename
+
+                    tmp = local_path.with_suffix(".tmp")
+                    written = 0
+                    with open(tmp, "wb") as f:
+                        for chunk in resp.iter_content(8192):
+                            f.write(chunk)
+                            written += len(chunk)
+                            if written > _MAX_FILE_SIZE:
+                                tmp.unlink(missing_ok=True)
+                                self._mark_failure(local_path, "too_large")
+                                log.warning(f"[素材缓存] 文件过大，跳过: {url}")
+                                return None
+                    tmp.replace(local_path)
+                    self._clear_failure(local_path)
+                    log.debug(f"[素材缓存] 已缓存: {url} -> {local_path.name}")
+                    return self._file_to_data_uri(local_path)
+                finally:
+                    resp.close()
+            finally:
+                session.close()
 
         except Exception as e:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
             try:
                 self._mark_failure(local_path, type(e).__name__)
             except Exception:
@@ -139,9 +256,8 @@ class RemoteAssetCache:
         """
         if not url or not isinstance(url, str):
             return None
-        # Data URI 自身无需再转换
-        if url.startswith("data:"):
-            return url
+        if not self.is_allowed_remote_url(url):
+            return None
         url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
         safe_id = _sanitize_id(asset_id)
         category_dir = self._root / category

@@ -14,9 +14,9 @@
                 </div>
             </div>
             <div class="top-actions" style="margin-left:auto;display:flex;gap:8px;">
-                <button class="btn" onclick="app.initFeatureSettings()">刷新</button>
-                <button class="btn" onclick="app.resetFeatureSettings()">恢复推荐</button>
-                <button class="btn primary" onclick="app.saveFeatureSettings()">保存设置</button>
+                <button class="btn" id="featureSettingsRefreshButton" onclick="app.initFeatureSettings()">刷新</button>
+                <button class="btn" id="featureSettingsResetButton" onclick="app.resetFeatureSettings()" disabled>恢复推荐</button>
+                <button class="btn primary" id="featureSettingsSaveButton" onclick="app.saveFeatureSettings()" disabled>保存设置</button>
             </div>
         </div>
 
@@ -126,6 +126,23 @@
                                 <span class="slider"></span>
                             </label>
                         </div>
+
+                        <div style="display:flex;justify-content:space-between;gap:14px;padding:16px;border:1px solid var(--border);border-radius:14px;background:linear-gradient(180deg, rgba(99,102,241,0.05), rgba(99,102,241,0.01));">
+                            <div>
+                                <div style="font-size:13px;font-weight:700;color:var(--text);">通知中心入口</div>
+                                <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">按下方受众规则开放右下角铃铛；默认关闭，灰度时只选择测试用户组。</div>
+                            </div>
+                            <label class="switch" style="flex-shrink:0;">
+                                <input type="checkbox" id="featureNotificationCenter" onchange="app.updateFeatureSettingsSummary()">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <div style="grid-column:1/-1;padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--bg);">
+                            <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:4px;">通知中心受众</div>
+                            <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">规则组之间为“或”，同组条件为“且”；空规则代表全部用户。</div>
+                            <div id="featureNotificationCenterTargeting" class="audience-rule-editor"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -159,8 +176,9 @@
                     <div class="panel-body" style="padding:18px;display:flex;flex-direction:column;gap:16px;">
                         <div style="padding:16px;border-radius:16px;background:linear-gradient(135deg, rgba(245,158,11,0.16), rgba(59,130,246,0.12));color:#1f2937;">
                             <div style="font-size:12px;font-weight:700;opacity:0.78;">当前启用</div>
-                            <div id="featureSettingsEnabledCount" style="font-size:32px;font-weight:800;line-height:1.1;margin-top:6px;">0 / 7</div>
+                            <div id="featureSettingsEnabledCount" style="font-size:32px;font-weight:800;line-height:1.1;margin-top:6px;">0 / 8</div>
                             <div id="featureSettingsModeLabel" style="font-size:12px;margin-top:8px;opacity:0.82;">正在读取配置...</div>
+                            <div id="featureSettingsLoadStatus" style="font-size:11px;margin-top:6px;opacity:0.72;">服务端配置尚未加载</div>
                         </div>
                         <div>
                             <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px;">模块状态</div>
@@ -169,7 +187,7 @@
                             </div>
                         </div>
                         <div style="padding:14px;border-radius:14px;border:1px dashed var(--border);background:var(--bg);font-size:12px;color:var(--text-muted);line-height:1.8;">
-                            <div>推荐默认：7 项全开，适合完整体验版本。</div>
+                            <div>推荐默认：通知中心关闭，其余 7 项开放。</div>
                             <div>轻社交模式：关闭评论与表情互动，保留公告阅读和个人资料。</div>
                             <div>极简稳定模式：只保留基础资料与资源管理，适合维护窗口或封版阶段。</div>
                         </div>

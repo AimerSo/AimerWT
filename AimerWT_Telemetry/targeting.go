@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +27,7 @@ func normalizeAudienceValues(values []string, lower bool) []string {
 func normalizeAudienceTargeting(targeting AudienceTargeting) (AudienceTargeting, error) {
 	normalized := AudienceTargeting{Rules: make([]AudienceRule, 0, len(targeting.Rules))}
 	for _, rule := range targeting.Rules {
+		rule.MinimumVersion = strings.TrimSpace(rule.MinimumVersion)
 		rule.Versions = normalizeAudienceValues(rule.Versions, false)
 		rule.Tags = normalizeAudienceValues(rule.Tags, false)
 		rule.SpecialGroups = normalizeAudienceValues(rule.SpecialGroups, true)
@@ -65,7 +67,49 @@ func recordTagSet(record TelemetryRecord) map[string]bool {
 	return result
 }
 
+func parseNumericVersion(raw string) ([3]int, bool) {
+	var parsed [3]int
+	value := strings.TrimSpace(raw)
+	value = strings.TrimPrefix(strings.TrimPrefix(value, "v"), "V")
+	if suffix_index := strings.IndexAny(value, "-+ "); suffix_index >= 0 {
+		value = value[:suffix_index]
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) == 0 || len(parts) > len(parsed) {
+		return parsed, false
+	}
+	for index, part := range parts {
+		if part == "" {
+			return parsed, false
+		}
+		number, err := strconv.Atoi(part)
+		if err != nil || number < 0 {
+			return parsed, false
+		}
+		parsed[index] = number
+	}
+	return parsed, true
+}
+
+func versionAtLeast(version, minimum_version string) bool {
+	current, current_ok := parseNumericVersion(version)
+	minimum, minimum_ok := parseNumericVersion(minimum_version)
+	if !current_ok || !minimum_ok {
+		return false
+	}
+	for index := range current {
+		if current[index] != minimum[index] {
+			return current[index] > minimum[index]
+		}
+	}
+	return true
+}
+
 func matchAudienceRule(rule AudienceRule, record TelemetryRecord) bool {
+	if rule.MinimumVersion != "" && !versionAtLeast(record.Version, rule.MinimumVersion) {
+		return false
+	}
+
 	if len(rule.Versions) > 0 {
 		matched := false
 		for _, version := range rule.Versions {
@@ -138,7 +182,7 @@ func audienceTargetsEveryone(targeting AudienceTargeting, legacy_scope string) b
 		return legacy_scope == "" || legacy_scope == "all"
 	}
 	for _, rule := range targeting.Rules {
-		if len(rule.Versions) == 0 && len(rule.Tags) == 0 && len(rule.SpecialGroups) == 0 {
+		if rule.MinimumVersion == "" && len(rule.Versions) == 0 && len(rule.Tags) == 0 && len(rule.SpecialGroups) == 0 {
 			return true
 		}
 	}
@@ -154,7 +198,10 @@ func describeAudienceTargeting(targeting AudienceTargeting, legacy_scope string)
 	}
 	parts := make([]string, 0, len(targeting.Rules))
 	for _, rule := range targeting.Rules {
-		conditions := make([]string, 0, 3)
+		conditions := make([]string, 0, 4)
+		if rule.MinimumVersion != "" {
+			conditions = append(conditions, "版本 "+rule.MinimumVersion+" 及以上")
+		}
 		if len(rule.Versions) > 0 {
 			conditions = append(conditions, "版本 "+strings.Join(rule.Versions, "/"))
 		}
@@ -203,6 +250,9 @@ func filterSystemConfigForAudience(config SystemConfig, record TelemetryRecord) 
 		client_config.UpdateActive = false
 		client_config.UpdateContent = ""
 		client_config.UpdateUrl = ""
+	}
+	if !matchAudienceTargeting(config.NotificationCenterTargeting, config.NotificationCenterScope, record) {
+		client_config.NotificationCenterEnabled = false
 	}
 	if config.HeartbeatScope != "" && !matchScope(config.HeartbeatScope, record) {
 		client_config.HeartbeatInterval = 0

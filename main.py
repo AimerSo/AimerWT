@@ -839,7 +839,10 @@ class AppApi:
         self._server_cache_file = Path(self._cfg_mgr.config_dir) / "server_cache.json"
 
         # 远程素材离线缓存（广告轮播图片、信息库广告素材）
-        self._asset_cache = RemoteAssetCache(get_docs_data_dir() / ".cache" / "remote_assets")
+        self._asset_cache = RemoteAssetCache(
+            get_docs_data_dir() / ".cache" / "remote_assets",
+            trusted_origin=resolve_service_base_url(),
+        )
 
     def _get_sound_replace_backup_root(self) -> Path:
         return self._resource_paths.get_paths().sound_backup_dir
@@ -1406,7 +1409,6 @@ class AppApi:
             "notice_reaction_enabled": False,
             "user_profile_enabled": False,
             "ai_assistant_enabled": False,
-            "notification_center_enabled": False,
         }
         if not isinstance(config, dict):
             return defaults
@@ -1517,8 +1519,7 @@ class AppApi:
                         _data_uri = self._asset_cache.cache_image(
                             _ad["image"], "ad_carousel", _ad.get("id", "slide")
                         )
-                        if _data_uri:
-                            _ad["image"] = _data_uri
+                        _ad["image"] = _data_uri or ""
                 ad_state = json.dumps({
                     "items": _ad_items_for_cache,
                     "interval_ms": ad_interval_ms,
@@ -1548,8 +1549,7 @@ class AppApi:
                             _data_uri = self._asset_cache.cache_image(
                                 _url, "knowledge_ads", f"{_kb_id}_{_field}"
                             )
-                            if _data_uri:
-                                _kb_item[_field] = _data_uri
+                            _kb_item[_field] = _data_uri or ""
                 kb_state = json.dumps(_kb_ads_for_cache, ensure_ascii=False, sort_keys=True)
                 if force or self._last_knowledge_ads_state != kb_state:
                     kb_json = json.dumps(kb_ads, ensure_ascii=False)
@@ -1759,23 +1759,55 @@ class AppApi:
                     self._window.evaluate_js(safe_js_call("showAlert", title, message, "success"))
                 else:
                     self._window.evaluate_js(safe_js_call("showAlert", title, message, "error"))
+            elif cmd_type == "system_notification":
+                notification = cmd.get("notification", {})
+                if not isinstance(notification, dict):
+                    return {"success": False, "code": "invalid", "message": "系统消息字段无效"}
+                notification_json = json.dumps(notification, ensure_ascii=False)
+                result = self._window.evaluate_js(
+                    f"if(window.NotificationBellModule) "
+                    f"window.NotificationBellModule.pushSystemMessage({notification_json})"
+                )
+                if isinstance(result, dict):
+                    return result
+                return {"success": False, "code": "storage_failed", "message": "通知模块未返回保存结果"}
+            elif cmd_type == "system_notification_revoke":
+                notification_id = str(cmd.get("notification_id") or "").strip()
+                if not notification_id:
+                    notification = cmd.get("notification", {})
+                    if isinstance(notification, dict):
+                        notification_id = str(notification.get("notification_id") or "").strip()
+                if not notification_id:
+                    return {"success": False, "code": "invalid", "message": "撤回消息标识无效"}
+                payload_json = json.dumps({"notification_id": notification_id}, ensure_ascii=False)
+                result = self._window.evaluate_js(
+                    f"if(window.NotificationBellModule) "
+                    f"window.NotificationBellModule.revokeSystemNotification({payload_json})"
+                )
+                if isinstance(result, dict):
+                    return result
+                return {"success": False, "code": "storage_failed", "message": "通知模块未返回撤回结果"}
             elif cmd_type == "interaction_notification":
                 action = cmd.get("action", "")
                 data = cmd.get("data", {})
                 if isinstance(data, dict) and action:
                     data["action"] = action
                     data_json = json.dumps(data, ensure_ascii=False)
-                    self._window.evaluate_js(
+                    result = self._window.evaluate_js(
                         f"if(window.NotificationBellModule) "
                         f"window.NotificationBellModule.pushInteractionMessage({data_json})"
                     )
+                    if isinstance(result, dict):
+                        return result
+                    return {"success": False, "code": "storage_failed", "message": "通知模块未返回保存结果"}
+                return {"success": False, "code": "invalid", "message": "互动消息字段无效"}
             else:
-                return {"success": False, "message": "客户端不支持该命令类型"}
+                return {"success": False, "code": "unsupported", "message": "客户端不支持该命令类型"}
             return {"success": True}
 
         except Exception as e:
             print(f"专用指令解析异常: {e}")
-            return {"success": False, "message": f"{type(e).__name__}: {e}"}
+            return {"success": False, "code": "retryable_error", "message": f"{type(e).__name__}: {e}"}
 
     def set_window(self, window):
         # 绑定 PyWebview Window 实例到桥接层，供后续 API 调用使用。
@@ -1891,8 +1923,7 @@ class AppApi:
                                 _data_uri = self._asset_cache.load_cached_data_uri(
                                     _ad["image"], "ad_carousel", _ad.get("id", "slide")
                                 )
-                                if _data_uri:
-                                    _ad["image"] = _data_uri
+                                _ad["image"] = _data_uri or ""
                         self._window.evaluate_js(self._build_ad_carousel_apply_js(ad_items, ad_interval))
                         log.debug(f"[缓存] 已注入 {len(ad_items)} 条缓存广告")
 
@@ -1917,8 +1948,7 @@ class AppApi:
                                 _data_uri = self._asset_cache.load_cached_data_uri(
                                     _url, "knowledge_ads", f"{_kb_id}_{_field}"
                                 )
-                                if _data_uri:
-                                    _kb_item[_field] = _data_uri
+                                _kb_item[_field] = _data_uri or ""
                     kb_json = json.dumps(cached_kb, ensure_ascii=False)
                     self._window.evaluate_js(
                         "(function(){"

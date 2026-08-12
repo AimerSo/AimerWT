@@ -10,6 +10,7 @@ const (
 	userFeatureNoticeReactionKey = "notice_reaction_enabled"
 	userFeatureRedeemCodeKey     = "redeem_code_enabled"
 	userFeatureFeedbackKey       = "feedback_enabled"
+	userFeatureNotificationKey   = "notification_center_enabled"
 )
 
 func applyDefaultUserFeatureFlags(cfg *SystemConfig, raw map[string]json.RawMessage) {
@@ -38,6 +39,9 @@ func applyDefaultUserFeatureFlags(cfg *SystemConfig, raw map[string]json.RawMess
 	if raw == nil || raw[userFeatureFeedbackKey] == nil {
 		cfg.FeedbackEnabled = true
 	}
+	if raw == nil || raw[userFeatureNotificationKey] == nil {
+		cfg.NotificationCenterEnabled = false
+	}
 }
 
 func userFeatureFlagsMap(cfg SystemConfig) map[string]bool {
@@ -49,5 +53,6 @@ func userFeatureFlagsMap(cfg SystemConfig) map[string]bool {
 		userFeatureNoticeReactionKey: cfg.NoticeReactionEnabled,
 		userFeatureRedeemCodeKey:     cfg.RedeemCodeEnabled,
 		userFeatureFeedbackKey:       cfg.FeedbackEnabled,
+		userFeatureNotificationKey:   cfg.NotificationCenterEnabled,
 	}
 }

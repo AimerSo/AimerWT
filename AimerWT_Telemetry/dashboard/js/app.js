@@ -35,7 +35,16 @@ const app = {
         userWeightTags: [],
         userWeightFormula: null,
         runtimeNoticeConfig: null,
-        trendChartMode: 'total'
+        trendChartMode: 'total',
+        userListPage: 1,
+        userListPageSize: 15,
+        userListTotal: 0,
+        userListTotalPages: 1,
+        userListSort: { column: 'minutes', order: 'asc' },
+        userListRequestController: null,
+        userListSearchTimer: null,
+        userNotificationReplaceLogId: 0,
+        feature_settings_loaded: false
     },
 
     // 颜色配置
@@ -570,6 +579,7 @@ const app = {
                 }
             }
             this.state.dashboardData = payload;
+            this.setAudienceOptions(payload);
             window._aimerTagOptions = Array.isArray(payload?.tag_options) ? payload.tag_options : [];
             this.updateDashboard(this.state.dashboardData);
             if (this.state.currentView === 'userdetail' && this.state.selectedUser) {
@@ -585,6 +595,7 @@ const app = {
                 const fallback = await this.buildDashboardFallbackData();
                 if (fallback) {
                     this.state.dashboardData = fallback;
+                    this.setAudienceOptions(fallback);
                     window._aimerTagOptions = Array.isArray(fallback?.tag_options) ? fallback.tag_options : [];
                     this.updateDashboard(fallback);
                     this.showAlert('统计接口加载失败，已自动切换到基础数据视图', 'warning');
@@ -1009,7 +1020,8 @@ const app = {
                 textStyle: { color: '#f1f5f9', fontSize: 12 },
                 formatter: (params) => {
                     const fullName = params.data && params.data.fullName ? params.data.fullName : params.name;
-                    return '<div style="font-weight:600;margin-bottom:4px;">' + fullName + '</div>' +
+                    const safe_full_name = this.escapeHtmlSafe(String(fullName));
+                    return '<div style="font-weight:600;margin-bottom:4px;">' + safe_full_name + '</div>' +
                         '<div style="display:flex;justify-content:space-between;gap:20px;">' +
                         '<span style="color:#94a3b8;">数量</span><span style="font-weight:700;">' + params.value + '</span></div>' +
                         '<div style="display:flex;justify-content:space-between;gap:20px;">' +
@@ -1173,20 +1185,28 @@ const app = {
 
             const isOnline = this.isUserOnlineByMinutes(minutes);
             const statusClass = isOnline ? 'online' : 'offline';
+            const safe_label = this.escapeHtmlSafe(label);
+            const safe_avatar = this.escapeHtmlSafe(this.getAutoUserName(item).replace('user', 'U'));
+            const safe_id = this.escapeHtmlSafe(String(item.id || '-'));
+            const safe_os = this.escapeHtmlSafe(String(os));
+            const safe_arch = this.escapeHtmlSafe(String(arch));
+            const safe_version = this.escapeHtmlSafe(String(version));
+            const safe_display_hwid = this.escapeHtmlSafe(String(displayHwid));
+            const safe_time = this.escapeHtmlSafe(String(this.formatTimeAgo(minutes)));
 
             div.className = 'recent-item';
             div.innerHTML = `
-                <div class="recent-avatar" style="background: ${isOnline ? 'var(--secondary)' : 'var(--muted)'};">${this.getAutoUserName(item).replace('user', 'U')}</div>
+                <div class="recent-avatar" style="background: ${isOnline ? 'var(--secondary)' : 'var(--muted)'};">${safe_avatar}</div>
                 <div class="recent-main">
                     <div class="recent-name">
                         <span class="status-dot ${statusClass}"></span>
-                        <span style="color: var(--text-muted); font-size: 0.85em; font-weight: normal; margin-right: 4px;">#${item.id || '-'}</span>
-                        ${label}
+                        <span style="color: var(--text-muted); font-size: 0.85em; font-weight: normal; margin-right: 4px;">#${safe_id}</span>
+                        ${safe_label}
                     </div>
-                    <div class="recent-meta">${os} · ${arch} · ${version}</div>
-                    <div class="recent-meta">HWID: ${displayHwid}</div>
+                    <div class="recent-meta">${safe_os} · ${safe_arch} · ${safe_version}</div>
+                    <div class="recent-meta">HWID: ${safe_display_hwid}</div>
                 </div>
-                <div class="recent-time">${this.formatTimeAgo(minutes)}</div>
+                <div class="recent-time">${safe_time}</div>
             `;
             div.addEventListener('click', () => {
                 this.selectRecentUser(item, index);
@@ -1243,8 +1263,8 @@ const app = {
 
         const content = items.map(item => `
             <div class="detail-card">
-                <div class="detail-label">${item.label}</div>
-                <div class="detail-value">${item.value}</div>
+                <div class="detail-label">${this.escapeHtmlSafe(String(item.label ?? ''))}</div>
+                <div class="detail-value">${this.escapeHtmlSafe(String(item.value ?? '-'))}</div>
             </div>
         `).join('');
 
@@ -3321,8 +3341,9 @@ const app = {
             const alias = this.escapeHtmlSafe((item.alias || '').trim() || '暂无备注');
             const content = this.escapeHtmlSafe(item.content || '');
             const createdAt = this.escapeHtmlSafe(item.created_at || '');
-            const machineId = JSON.stringify(String(item.machine_id || ''));
-            const displayName = JSON.stringify('用户#' + String(item.uid || '?'));
+            const machine_id_arg = this.inline_js_arg(item.machine_id);
+            const display_name_arg = this.inline_js_arg('用户#' + String(item.uid || '?'));
+            const comment_id = Number(item.id) || 0;
             const meta = statusMeta[item.status] || statusMeta.visible;
             const nextStatus = item.status === 'hidden' ? 'visible' : 'hidden';
             const nextLabel = item.status === 'hidden' ? '恢复显示' : '隐藏评论';
@@ -3348,9 +3369,9 @@ const app = {
                         </div>
                     </div>
                     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;">
-                        <button class="btn" style="padding:4px 10px;font-size:11px;height:28px;justify-content:center;" onclick="app.toggleNoticeCommunityCommentStatus(${item.id}, '${nextStatus}')">${nextLabel}</button>
-                        <button class="btn" style="padding:4px 10px;font-size:11px;height:28px;justify-content:center;${isBanned ? 'opacity:0.55;cursor:not-allowed;' : 'color:var(--warning);border-color:rgba(245,158,11,0.2);'}" onclick="app.banNoticeCommentMachine(${machineId}, ${displayName})" ${isBanned ? 'disabled' : ''}>${isBanned ? '已封禁评论' : '封禁评论'}</button>
-                        <button class="btn" style="padding:4px 10px;font-size:11px;height:28px;justify-content:center;color:var(--danger);border-color:rgba(239,68,68,0.18);" onclick="app.deleteNoticeCommunityComment(${item.id})">删除评论</button>
+                        <button class="btn" style="padding:4px 10px;font-size:11px;height:28px;justify-content:center;" onclick="app.toggleNoticeCommunityCommentStatus(${comment_id}, '${nextStatus}')">${nextLabel}</button>
+                        <button class="btn" style="padding:4px 10px;font-size:11px;height:28px;justify-content:center;${isBanned ? 'opacity:0.55;cursor:not-allowed;' : 'color:var(--warning);border-color:rgba(245,158,11,0.2);'}" onclick="app.banNoticeCommentMachine(${machine_id_arg}, ${display_name_arg})" ${isBanned ? 'disabled' : ''}>${isBanned ? '已封禁评论' : '封禁评论'}</button>
+                        <button class="btn" style="padding:4px 10px;font-size:11px;height:28px;justify-content:center;color:var(--danger);border-color:rgba(239,68,68,0.18);" onclick="app.deleteNoticeCommunityComment(${comment_id})">删除评论</button>
                     </div>
                 </div>
             `;
@@ -4628,7 +4649,10 @@ const app = {
             notice_comment_enabled: true,
             notice_reaction_enabled: true,
             redeem_code_enabled: true,
-            feedback_enabled: true
+            feedback_enabled: true,
+            notification_center_enabled: false,
+            notification_center_scope: 'all',
+            notification_center_targeting: { rules: [{}] }
         };
     },
 
@@ -4637,6 +4661,7 @@ const app = {
     },
 
     collectUserFeatureSettings() {
+        const notificationTargeting = this.readAudienceTargeting('featureNotificationCenterTargeting');
         return this.normalizeUserFeatureSettings({
             badge_system_enabled: document.getElementById('featureBadgeSystem')?.checked ?? true,
             nickname_change_enabled: document.getElementById('featureNicknameChange')?.checked ?? true,
@@ -4644,7 +4669,10 @@ const app = {
             notice_comment_enabled: document.getElementById('featureNoticeComment')?.checked ?? true,
             notice_reaction_enabled: document.getElementById('featureNoticeReaction')?.checked ?? true,
             redeem_code_enabled: document.getElementById('featureRedeemCode')?.checked ?? true,
-            feedback_enabled: document.getElementById('featureFeedback')?.checked ?? true
+            feedback_enabled: document.getElementById('featureFeedback')?.checked ?? true,
+            notification_center_enabled: document.getElementById('featureNotificationCenter')?.checked ?? false,
+            notification_center_scope: this.legacyScopeForTargeting(notificationTargeting),
+            notification_center_targeting: notificationTargeting
         });
     },
 
@@ -4657,13 +4685,19 @@ const app = {
             featureNoticeComment: settings.notice_comment_enabled,
             featureNoticeReaction: settings.notice_reaction_enabled,
             featureRedeemCode: settings.redeem_code_enabled,
-            featureFeedback: settings.feedback_enabled
+            featureFeedback: settings.feedback_enabled,
+            featureNotificationCenter: settings.notification_center_enabled
         };
 
         Object.entries(map).forEach(([id, checked]) => {
             const el = document.getElementById(id);
             if (el) el.checked = !!checked;
         });
+        this.setAudienceTargeting(
+            'featureNotificationCenterTargeting',
+            settings.notification_center_targeting,
+            settings.notification_center_scope || 'all'
+        );
         this.updateFeatureSettingsSummary();
     },
 
@@ -4676,7 +4710,8 @@ const app = {
             { key: 'notice_comment_enabled', label: '公告评论' },
             { key: 'notice_reaction_enabled', label: '表情互动' },
             { key: 'redeem_code_enabled', label: 'CDK兑换' },
-            { key: 'feedback_enabled', label: '问题反馈' }
+            { key: 'feedback_enabled', label: '问题反馈' },
+            { key: 'notification_center_enabled', label: '通知中心' }
         ];
         const enabledCount = modules.filter(item => settings[item.key]).length;
 
@@ -4708,7 +4743,29 @@ const app = {
         }
     },
 
+    set_feature_settings_load_state(loaded, message, is_loading = false) {
+        this.state.feature_settings_loaded = !!loaded;
+        const save_button = document.getElementById('featureSettingsSaveButton');
+        const reset_button = document.getElementById('featureSettingsResetButton');
+        const refresh_button = document.getElementById('featureSettingsRefreshButton');
+        const status_element = document.getElementById('featureSettingsLoadStatus');
+        if (save_button) save_button.disabled = !loaded;
+        if (reset_button) reset_button.disabled = !loaded;
+        if (refresh_button) refresh_button.disabled = !!is_loading;
+        if (status_element) {
+            status_element.textContent = message || '';
+            status_element.style.color = loaded ? 'var(--secondary)' : (is_loading ? '' : 'var(--danger)');
+        }
+        if (!loaded) {
+            const count_element = document.getElementById('featureSettingsEnabledCount');
+            const mode_element = document.getElementById('featureSettingsModeLabel');
+            if (count_element) count_element.textContent = '— / 8';
+            if (mode_element) mode_element.textContent = is_loading ? '正在读取配置...' : '服务端配置未加载';
+        }
+    },
+
     async initFeatureSettings() {
+        this.set_feature_settings_load_state(false, '正在读取服务端配置...', true);
         try {
             const res = await fetch(`${this.config.apiBase}/admin/control`, {
                 method: 'POST',
@@ -4717,15 +4774,23 @@ const app = {
             });
             if (!res.ok) throw new Error('服务器返回 ' + res.status);
             const data = await res.json();
-            this.applyFeatureSettingsForm(data.config || {});
-            this.applyAvatarPermSettings(data.config || {});
+            if (!data.config || typeof data.config !== 'object' || Array.isArray(data.config)) {
+                throw new Error('服务器未返回有效配置');
+            }
+            this.applyFeatureSettingsForm(data.config);
+            this.applyAvatarPermSettings(data.config);
+            this.set_feature_settings_load_state(true, '已加载服务端配置');
         } catch (error) {
-            this.applyFeatureSettingsForm(this.getDefaultUserFeatureSettings());
+            this.set_feature_settings_load_state(false, '加载失败：' + error.message + '；当前内容不可保存');
             this.showAlert('加载功能设置失败: ' + error.message, 'danger');
         }
     },
 
     async saveFeatureSettings(overrides = null) {
+        if (!this.state.feature_settings_loaded) {
+            this.showAlert('服务端配置尚未成功加载，已阻止保存；请先刷新重试', 'warning');
+            return;
+        }
         const settings = overrides ? this.normalizeUserFeatureSettings(overrides) : this.collectUserFeatureSettings();
         // 收集头像分组权限
         settings.avatar_upload_allow_all = document.getElementById('avatarUploadAllowAll')?.checked ?? false;
@@ -5160,65 +5225,57 @@ const app = {
     /**
      * 初始化用户列表视图
      */
-    async initUserList() {
+    async initUserList(options = {}) {
         const tbody = document.getElementById('fullUserListBody');
         if (tbody) {
             tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text-muted);">正在加载完整用户列表...</td></tr>`;
         }
 
-        try {
-            const users = await this.fetchAllUsersForList();
-            this.state.latestUsersData = users;
-            this.state.userListData = users && users.length > 0 ? [...users] : [];
-            this._rebuildUserRoleSets([this.state.latestUsersData, this.state.recentUsersData]);
-
-            if (this.state.userListSort) {
-                this.applyUserListSort();
-            } else {
-                const defaultSorted = [...this.state.userListData].sort((a, b) => {
-                    const t1 = new Date(a.updated_at || a.last_seen_at || 0).getTime();
-                    const t2 = new Date(b.updated_at || b.last_seen_at || 0).getTime();
-                    if (isNaN(t1)) return 1;
-                    if (isNaN(t2)) return -1;
-                    return t2 - t1;
-                });
-                this.renderUserList(defaultSorted);
-                this.filterUserList();
-            }
-        } catch (error) {
-            console.error('加载完整用户列表失败:', error);
-            if (tbody) {
-                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--danger);">加载用户列表失败：${this.escapeHtmlSafe(error.message || '未知错误')}</td></tr>`;
-            }
+        if (options.resetPage) {
+            this.state.userListPage = 1;
         }
-    },
+        if (this.state.userListRequestController) {
+            this.state.userListRequestController.abort();
+        }
+        const controller = new AbortController();
+        this.state.userListRequestController = controller;
 
-    async fetchAllUsersForList() {
-        const pageSize = 500;
-        let offset = 0;
-        let hasMore = true;
-        let page = 0;
-        const maxPages = 20;
-        const users = [];
+        const params = new URLSearchParams({
+            page: String(this.state.userListPage || 1),
+            limit: String(this.state.userListPageSize || 15),
+            search: (document.getElementById('userListSearch')?.value || '').trim(),
+            status: document.getElementById('userListStatusFilter')?.value || 'all',
+            tag: document.getElementById('userListTagFilter')?.value || 'all',
+            sort: this.state.userListSort?.column || 'minutes',
+            order: this.state.userListSort?.order || 'asc'
+        });
 
-        while (hasMore && page < maxPages) {
-            const response = await fetch(`${this.config.apiBase}/admin/users?offset=${offset}&limit=${pageSize}`);
+        try {
+            const response = await fetch(`${this.config.apiBase}/admin/users?${params}`, { signal: controller.signal });
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
             }
             const data = await response.json();
-            const batch = Array.isArray(data.users) ? data.users : [];
-            users.push(...batch);
-            hasMore = data.has_more === true;
-            offset = Number(data.next_offset || users.length);
-            page += 1;
-        }
+            const users = Array.isArray(data.users) ? data.users : [];
+            if (this.state.userListRequestController !== controller) return;
 
-        if (hasMore) {
-            this.showAlert('用户数量较多，当前仅加载最近 10000 条用户数据', 'warning');
+            this.state.userListPage = Number(data.page) || 1;
+            this.state.userListTotal = Number(data.total) || 0;
+            this.state.userListTotalPages = Math.max(1, Number(data.total_pages) || 1);
+            this.state.latestUsersData = users;
+            this.state.userListData = [...users];
+            this.renderUserList(users);
+        } catch (error) {
+            if (error.name === 'AbortError') return;
+            console.error('加载完整用户列表失败:', error);
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--danger);">加载用户列表失败：${this.escapeHtmlSafe(error.message || '未知错误')}</td></tr>`;
+            }
+        } finally {
+            if (this.state.userListRequestController === controller) {
+                this.state.userListRequestController = null;
+            }
         }
-
-        return users;
     },
 
     /**
@@ -5234,68 +5291,17 @@ const app = {
         }
 
         this.state.userListSort = { column, order: newOrder };
-        this.applyUserListSort();
         this.updateSortIcons(column, newOrder);
+        this.state.userListPage = 1;
+        this.initUserList();
     },
 
     /**
      * 应用用户列表排序
      */
     applyUserListSort() {
-        if (!this.state.userListData || !this.state.userListSort) return;
-
-        const { column, order } = this.state.userListSort;
-        const sorted = [...this.state.userListData];
-
-        sorted.sort((a, b) => {
-            let valA, valB;
-
-            switch (column) {
-                case 'id':
-                    valA = a.id || 0;
-                    valB = b.id || 0;
-                    break;
-                case 'version':
-                    valA = a.version || a.app_version || a.client_version || '';
-                    valB = b.version || b.app_version || b.client_version || '';
-                    break;
-                case 'os':
-                    valA = a.os || '';
-                    valB = b.os || '';
-                    break;
-                case 'locale':
-                    valA = a.locale || '';
-                    valB = b.locale || '';
-                    break;
-                case 'minutes':
-                    valA = a.minutes_ago ?? a.minutes ?? a.last_seen_minutes ?? Infinity;
-                    valB = b.minutes_ago ?? b.minutes ?? b.last_seen_minutes ?? Infinity;
-                    break;
-                case 'status':
-                    const minA = a.minutes_ago ?? a.minutes ?? a.last_seen_minutes ?? Infinity;
-                    const minB = b.minutes_ago ?? b.minutes ?? b.last_seen_minutes ?? Infinity;
-                    valA = this.isUserOnlineByMinutes(minA) ? 1 : 0;
-                    valB = this.isUserOnlineByMinutes(minB) ? 1 : 0;
-                    break;
-                default:
-                    return 0;
-            }
-
-            // 字符串比较
-            if (typeof valA === 'string' && typeof valB === 'string') {
-                return order === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
-            }
-
-            // 数字比较
-            if (order === 'asc') {
-                return valA - valB;
-            } else {
-                return valB - valA;
-            }
-        });
-
-        this.renderUserList(sorted);
-        this.filterUserList();
+        this.state.userListPage = 1;
+        return this.initUserList();
     },
 
     /**
@@ -5319,7 +5325,6 @@ const app = {
 
         const fullList = users && users.length ? [...users] : [];
         this.state._renderedUserList = fullList;
-        this.state._userListPage = 1;
         this.state._userListSelectedHwids = new Set();
         this._populateTagFilter();
         this._renderUserRows(fullList);
@@ -5357,26 +5362,19 @@ const app = {
         };
 
         const countEl = document.getElementById('userListCount');
-        const totalCount = (this.state._renderedUserList || []).length;
+        const totalCount = this.state.userListTotal || 0;
         if (countEl) {
-            countEl.textContent = list.length === totalCount
-                ? `共 ${totalCount} 人`
-                : `${list.length} / ${totalCount} 人`;
+            countEl.textContent = `共 ${totalCount} 人`;
         }
 
-        // 分页逻辑（15 条/页）
-        const pageSize = 15;
-        const currentPage = this.state._userListPage || 1;
-        const totalPages = Math.max(1, Math.ceil(list.length / pageSize));
+        const currentPage = this.state.userListPage || 1;
+        const totalPages = this.state.userListTotalPages || 1;
         const clampedPage = Math.min(currentPage, totalPages);
-        this.state._userListPage = clampedPage;
-        this.state._userListFilteredList = list; // 保存当前筛选列表供翻页用
-        const pageStart = (clampedPage - 1) * pageSize;
-        const pageList = list.slice(pageStart, pageStart + pageSize);
+        this.state.userListPage = clampedPage;
 
         // 更新分页控件
         const pageInfoEl = document.getElementById('userListPageInfo');
-        if (pageInfoEl) pageInfoEl.textContent = `第 ${clampedPage} / ${totalPages} 页，共 ${list.length} 人`;
+        if (pageInfoEl) pageInfoEl.textContent = `第 ${clampedPage} / ${totalPages} 页，共 ${totalCount} 人`;
         const prevBtn = document.getElementById('userListPrevPage');
         const nextBtn = document.getElementById('userListNextPage');
         if (prevBtn) prevBtn.disabled = clampedPage <= 1;
@@ -5387,7 +5385,7 @@ const app = {
         if (selectAllEl) selectAllEl.checked = false;
         this._updateBulkDeleteBtn();
 
-        if (!pageList.length) {
+        if (!list.length) {
             tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:48px;color:var(--text-muted);">
                 <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
                     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
@@ -5397,18 +5395,18 @@ const app = {
             return;
         }
 
-        tbody.innerHTML = pageList.map(user => {
+        tbody.innerHTML = list.map(user => {
             const hwid = user.hwid || user.hwid_hash || '-';
             const minutes = user.minutes_ago ?? user.minutes ?? user.last_seen_minutes ?? '-';
-            const isOnline = this.isUserOnlineByMinutes(minutes);
+            const isOnline = user.online === true;
             const statusClass = isOnline ? 'online' : 'offline';
             const statusText = isOnline ? '在线' : '离线';
             const localeCode = user.locale || '-';
             const localeDisplay = localeMap[localeCode] || localeCode;
-            const isMarked = this.state.markedUsers.has(hwid);
+            const isMarked = user.is_starred === true || this.state.markedUsers.has(hwid);
             const nameStyle = isMarked ? 'color: #f59e0b;' : '';
 
-            const isAdmin = this.state.adminUsers.has(hwid);
+            const isAdmin = user.is_admin === true || this.state.adminUsers.has(hwid);
             const avatarBgStyle = isAdmin
                 ? 'background: linear-gradient(135deg, #60a5fa, #2563eb);'
                 : 'background: linear-gradient(135deg, #4a4a4a, #1a1a1a);';
@@ -5447,6 +5445,8 @@ const app = {
             const tagRow = tag_badges ? `<div class="user-tags">${tag_badges}</div>` : '';
 
             const userData = encodeURIComponent(JSON.stringify(user));
+            const user_data_arg = this.inline_js_arg(userData);
+            const safe_hwid = this.escapeHtmlSafe(String(hwid));
             const safeVersion = this.escapeHtmlSafe(user.version || user.app_version || user.client_version || '-');
             const safeOS = this.escapeHtmlSafe(user.os || '-');
             const safeLocaleDisplay = this.escapeHtmlSafe(localeDisplay);
@@ -5454,9 +5454,9 @@ const app = {
             return `
             <tr style="cursor:pointer;">
                 <td style="width:36px;padding:0 8px;" onclick="event.stopPropagation()">
-                    <input type="checkbox" class="user-row-checkbox" data-hwid="${hwid}" onchange="app.onUserCheckboxChange()" ${this.state._userListSelectedHwids?.has(hwid) ? 'checked' : ''} style="cursor:pointer;">
+                    <input type="checkbox" class="user-row-checkbox" data-hwid="${safe_hwid}" onchange="app.onUserCheckboxChange()" ${this.state._userListSelectedHwids?.has(hwid) ? 'checked' : ''} style="cursor:pointer;">
                 </td>
-                <td onclick="app.openUserDetailByData('${userData}')">
+                <td onclick="app.openUserDetailByData(${user_data_arg})">
                     <div class="user-cell">
                         <div class="user-avatar" style="${avatarBgStyle}${avatarBorderStyle}">#${user.id || '-'}</div>
                         <div class="user-info">
@@ -5476,7 +5476,7 @@ const app = {
                 <td>${safeVersion}</td>
                 <td>${safeOS}</td>
                 <td>${safeLocaleDisplay}</td>
-                <td onclick="app.openUserDetailByData('${userData}')" style="color:var(--text-muted);font-size:12px;">${this.formatTimeAgo(minutes)}</td>
+                <td onclick="app.openUserDetailByData(${user_data_arg})" style="color:var(--text-muted);font-size:12px;">${this.formatTimeAgo(minutes)}</td>
             </tr>
         `}).join('');
     },
@@ -5485,66 +5485,23 @@ const app = {
      * 综合筛选：关键字搜索（用户名/UID/备注/标签） + 在线状态 + 标签
      */
     filterUserList() {
-        const keyword = (document.getElementById('userListSearch')?.value || '').trim().toLowerCase();
-        const statusFilter = document.getElementById('userListStatusFilter')?.value || 'all';
-        const tagFilter = document.getElementById('userListTagFilter')?.value || 'all';
-        let list = this.state._renderedUserList || [];
-
-        // 关键字搜索：用户名、UID、备注、标签名
-        if (keyword) {
-            list = list.filter(u => {
-                const name = (u.username || u.name || u.user || '').toLowerCase();
-                const nickname = (u.nickname || '').toLowerCase();
-                const alias = (u.alias || '').toLowerCase();
-                const uid = String(u.id || '');
-                // 标签搜索
-                let tag_text = '';
-                try {
-                    const tags = typeof u.tags === 'string' ? JSON.parse(u.tags || '[]') : (u.tags || []);
-                    const all_defs = this.state.dashboardData?.tag_options || [];
-                    tag_text = tags.map(tn => {
-                        const def = all_defs.find(t => t.name === tn);
-                        return def ? (this._getTagLabel(def) + ' ' + tn) : tn;
-                    }).join(' ').toLowerCase();
-                } catch {}
-                return name.includes(keyword) || nickname.includes(keyword) || alias.includes(keyword) || uid.includes(keyword) || tag_text.includes(keyword);
-            });
-        }
-
-        // 在线状态筛选
-        if (statusFilter !== 'all') {
-            list = list.filter(u => {
-                const min = u.minutes_ago ?? u.minutes ?? u.last_seen_minutes ?? Infinity;
-                const online = this.isUserOnlineByMinutes(min);
-                return statusFilter === 'online' ? online : !online;
-            });
-        }
-
-        // 标签筛选
-        if (tagFilter !== 'all') {
-            list = list.filter(u => {
-                const hwid = u.hwid || u.hwid_hash || '';
-                if (tagFilter === '_starred') return this.state.markedUsers.has(hwid);
-                if (tagFilter === '_admin') return this.state.adminUsers.has(hwid);
-                let tags = [];
-                try { tags = typeof u.tags === 'string' ? JSON.parse(u.tags || '[]') : (u.tags || []); } catch {}
-                return tags.includes(tagFilter);
-            });
-        }
-
-        this.state._userListPage = 1;
-        this._renderUserRows(list);
+        clearTimeout(this.state.userListSearchTimer);
+        this.state.userListSearchTimer = setTimeout(() => {
+            this.state.userListPage = 1;
+            this.state._userListSelectedHwids = new Set();
+            this.initUserList();
+        }, 250);
     },
 
     /**
      * 翻页控制（delta: -1上一页 / +1下一页）
      */
     userListGoPage(delta) {
-        const page = (this.state._userListPage || 1) + delta;
-        if (page < 1) return;
-        this.state._userListPage = page;
-        const list = this.state._userListFilteredList || this.state._renderedUserList || [];
-        this._renderUserRows(list);
+        const page = (this.state.userListPage || 1) + delta;
+        if (page < 1 || page > (this.state.userListTotalPages || 1)) return;
+        this.state.userListPage = page;
+        this.state._userListSelectedHwids = new Set();
+        this.initUserList();
     },
 
     /**
@@ -5708,6 +5665,21 @@ const app = {
         this.openUserDetail(user);
     },
 
+    inline_js_arg(value) {
+        return JSON.stringify(String(value ?? ''))
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    },
+
+    safe_raster_image_data_uri(value) {
+        const data_uri = String(value || '').trim();
+        return /^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[a-z0-9+/]+={0,2}$/i.test(data_uri)
+            ? data_uri : '';
+    },
+
     /**
      * 渲染用户详情页面（完整版）
      */
@@ -5715,12 +5687,15 @@ const app = {
         const container = document.getElementById('userDetailContent');
         if (!user || !container) return;
 
+        const hwid = user.hwid || user.hwid_hash || '-';
+        const message_draft = this.capture_user_notification_draft(hwid);
+        this.state.userNotificationReplaceLogId = message_draft?.replace_log_id || 0;
+
         const osName = user.os || '-';
         const osVersion = user.os_version || user.osVersion || '-';
         const osBuild = user.os_build || user.osBuild || '-';
         const arch = user.arch || '-';
         const version = user.version || user.app_version || user.client_version || '-';
-        const hwid = user.hwid || user.hwid_hash || '-';
         const displayHwid = this.formatHwid(hwid);
         const pythonVersion = user.python_version || user.python || '-';
         const localeCode = user.locale || user.region || '-';
@@ -5737,6 +5712,8 @@ const app = {
 
         const originalName = this.getAutoUserName(user);
         const alias = this.normalizeUserName(user.alias);
+        const hwid_arg = this.inline_js_arg(hwid);
+        const display_name_arg = this.inline_js_arg(alias || originalName);
         let displayName = this.escapeHtmlSafe(this.getDisplayUserName(user));
         if (alias && alias !== originalName) {
             displayName = `${this.escapeHtmlSafe(alias)} <span style="color: var(--text-muted); font-size: 0.75em; font-weight: normal;">(${this.escapeHtmlSafe(originalName)})</span>`;
@@ -5749,18 +5726,18 @@ const app = {
         };
         const localeDisplay = localeMap[localeCode] || localeCode;
 
-        const isOnline = this.isUserOnlineByMinutes(minutes);
+        const isOnline = user.online === true;
         const statusClass = isOnline ? 'online' : 'offline';
         const statusText = isOnline ? '在线' : '离线';
 
-        const isMarked = this.state.markedUsers.has(hwid);
+        const isMarked = user.is_starred === true || this.state.markedUsers.has(hwid);
         const starIcon = isMarked
             ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`
             : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
         const markText = isMarked ? '取消标记' : '标记用户';
         const markColor = isMarked ? '#f59e0b' : 'var(--text-muted)';
 
-        const isAdmin = this.state.adminUsers.has(hwid);
+        const isAdmin = user.is_admin === true || this.state.adminUsers.has(hwid);
         const adminText = isAdmin ? '取消管理员' : '设为管理员';
         const adminColor = isAdmin ? 'var(--primary)' : 'var(--text-muted)';
 
@@ -5786,7 +5763,7 @@ const app = {
 
         const _db = (oc, icon, text, bg) => `<button class="ud-action-btn ud-action-danger" onclick="${oc}" style="background:${bg};border-color:${bg};color:#fff;">${icon}<span>${text}</span></button>`;
 
-        const _pt = (pk, label, desc, checked) => `<div class="ud-perm-row"><div class="ud-perm-info"><div class="ud-perm-label">${label}</div><div class="ud-perm-desc">${desc}</div></div><label class="switch"><input type="checkbox" ${checked ? 'checked' : ''} onchange="app.toggleCommentPerm('${hwid}','${pk}',this.checked)"><span class="slider"></span></label></div>`;
+        const _pt = (pk, label, desc, checked) => `<div class="ud-perm-row"><div class="ud-perm-info"><div class="ud-perm-label">${label}</div><div class="ud-perm-desc">${desc}</div></div><label class="switch"><input type="checkbox" ${checked ? 'checked' : ''} onchange="app.toggleCommentPerm(${hwid_arg},${this.inline_js_arg(pk)},this.checked)"><span class="slider"></span></label></div>`;
 
         const svgEdit = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
         const svgChat = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
@@ -5823,6 +5800,66 @@ const app = {
             ${_sc(iconApp, '应用环境', _ii('客户端版本', this.escapeHtmlSafe(version)) + _ii('Python 环境', this.escapeHtmlSafe(pythonVersion)))}
             ${_sc(iconAI, 'AI 用量统计', _ii('使用 Tokens', `<b style="color:var(--primary);">${(user.ai_tokens || 0).toLocaleString()}</b>`) + _ii('发送信息', `<b style="color:var(--secondary);">${(user.ai_messages || 0).toLocaleString()}</b>`) + _ii('违规次数', `<b style="color:var(--danger);">${(user.ai_violations || 0).toLocaleString()}</b>`) + _ii('每日限额', '<span id="userDetailDailyLimit">加载中...</span>') + _ii('永久额度', '<span id="userDetailBonus">加载中...</span>'))}
         </div>
+        <div class="ud-message-panel">
+            <div class="ud-manage-header">
+                ${svgBell}
+                <span>发送消息</span>
+                <span class="ud-message-target">目标：${this.escapeHtmlSafe(alias || originalName)} · ${statusText}</span>
+            </div>
+            <div class="ud-message-body">
+                <div class="ud-message-modes" aria-label="消息类型">
+                    <button type="button" class="ud-message-mode" onclick="app.sendPopup(${hwid_arg})">${svgChat}<span>普通弹窗</span></button>
+                    <button type="button" class="ud-message-mode" onclick="app.sendNotification(${hwid_arg})">${svgBell}<span>短暂提示</span></button>
+                    <button type="button" class="ud-message-mode active">${svgBell}<span>消息中心</span></button>
+                </div>
+                <div class="ud-message-grid">
+                    <label class="ud-message-field">
+                        <span>标题</span>
+                        <input class="input" id="udMessageTitle" maxlength="80" value="系统消息" placeholder="最多 80 字">
+                    </label>
+                    <label class="ud-message-field">
+                        <span>图标</span>
+                        <select class="select" id="udMessageIcon">
+                            <option value="ri-notification-3-line">通知</option>
+                            <option value="ri-information-line">信息</option>
+                            <option value="ri-megaphone-line">公告</option>
+                            <option value="ri-gift-line">礼物</option>
+                            <option value="ri-error-warning-line">提醒</option>
+                        </select>
+                    </label>
+                    <label class="ud-message-field full">
+                        <span>列表摘要</span>
+                        <textarea class="input" id="udMessageSummary" maxlength="200" rows="3" placeholder="用户在铃铛面板中看到的内容，最多 200 字"></textarea>
+                    </label>
+                    <label class="ud-message-field">
+                        <span>点击行为</span>
+                        <select class="select" id="udMessageRenderer" onchange="app.updateUserMessageRenderer()">
+                            <option value="none">仅展示，不弹窗</option>
+                            <option value="alert">打开普通弹窗</option>
+                            <option value="notice/general">打开通用公告</option>
+                            <option value="notice/update">打开更新日志</option>
+                            <option value="themed/sponsor_1">打开主题卡片</option>
+                        </select>
+                    </label>
+                    <div class="ud-message-field"></div>
+                    <label class="ud-message-field" id="udMessagePopupTitleField" style="display:none;">
+                        <span>弹窗标题</span>
+                        <input class="input" id="udMessagePopupTitle" maxlength="80" placeholder="留空则使用消息标题">
+                    </label>
+                    <label class="ud-message-field" id="udMessageBodyField" style="display:none;">
+                        <span>弹窗正文</span>
+                        <textarea class="input" id="udMessageBody" maxlength="4000" rows="4" placeholder="留空则使用列表摘要"></textarea>
+                    </label>
+                </div>
+                <div id="udMessagePreview" aria-live="polite" style="display:none;margin-top:14px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-subtle,#f8fafc);"></div>
+                <div class="ud-message-actions">
+                    <span class="ud-message-note" id="udMessageQueueNote">接口成功仅表示已入队；用户离线超过 15 天将无法领取。</span>
+                    <button type="button" class="btn" onclick="app.previewUserNotification(${hwid_arg})"><i class="ri-eye-line"></i><span>发送前预览</span></button>
+                    <button type="button" class="btn primary" id="udMessageSubmit" onclick="app.submitUserNotification(${hwid_arg})">${svgBell}<span>发送到消息中心</span></button>
+                </div>
+            </div>
+        </div>
+
 
         <div class="ud-manage-panel">
             <div class="ud-manage-header">
@@ -5830,13 +5867,13 @@ const app = {
                 <span>管理功能</span>
             </div>
             <div class="ud-manage-body">
-                <div class="ud-manage-group"><div class="ud-manage-group-label">基础操作</div><div class="ud-manage-group-btns">${_ab(`app.updateUserAlias('${hwid}')`, svgEdit, '添加备注')}${_ab(`app.bindUserQQ('${hwid}')`, svgChat, hasBoundQQ ? '修改QQ' : '绑定QQ', `border-color:${hasBoundQQ ? 'var(--secondary)' : 'var(--primary)'};color:${hasBoundQQ ? 'var(--secondary)' : 'var(--primary)'};`)}${_ab(`app.sendPopup('${hwid}')`, svgChat, '发送弹窗')}${_ab(`app.sendNotification('${hwid}')`, svgBell, '发送提示')}${_ab(`app.requestLog('${hwid}')`, svgUpload, '请求日志')}</div></div>
-                <div class="ud-manage-group"><div class="ud-manage-group-label">用户标记</div><div class="ud-manage-group-btns">${_ab(`app.toggleMarkUser('${hwid}')`, starIcon, markText, `border-color:${markColor};color:${markColor};`)}${_ab(`app.toggleAdminUser('${hwid}')`, svgKey, adminText, `border-color:${adminColor};color:${adminColor};`)}</div></div>
-                <div class="ud-manage-group"><div class="ud-manage-group-label">认证与显示名称</div><div class="ud-manage-group-btns">${_ab(`app.toggleUserVerified('${hwid}')`, svgCheck(user.verified), user.verified ? '取消认证' : '认证用户', `border-color:${user.verified ? 'var(--secondary)' : 'var(--text-muted)'};color:${user.verified ? 'var(--secondary)' : 'var(--text-muted)'};`)}${_ab(`app.setUserNickname('${hwid}')`, svgEdit, approvedNickname ? '修改显示名称' : '设置显示名称', 'border-color:var(--primary);color:var(--primary);')}</div></div>
+                <div class="ud-manage-group"><div class="ud-manage-group-label">基础操作</div><div class="ud-manage-group-btns">${_ab(`app.updateUserAlias(${hwid_arg})`, svgEdit, '添加备注')}${_ab(`app.bindUserQQ(${hwid_arg})`, svgChat, hasBoundQQ ? '修改QQ' : '绑定QQ', `border-color:${hasBoundQQ ? 'var(--secondary)' : 'var(--primary)'};color:${hasBoundQQ ? 'var(--secondary)' : 'var(--primary)'};`)}${_ab(`app.requestLog(${hwid_arg})`, svgUpload, '请求日志')}</div></div>
+                <div class="ud-manage-group"><div class="ud-manage-group-label">用户标记</div><div class="ud-manage-group-btns">${_ab(`app.toggleMarkUser(${hwid_arg})`, starIcon, markText, `border-color:${markColor};color:${markColor};`)}${_ab(`app.toggleAdminUser(${hwid_arg})`, svgKey, adminText, `border-color:${adminColor};color:${adminColor};`)}</div></div>
+                <div class="ud-manage-group"><div class="ud-manage-group-label">认证与显示名称</div><div class="ud-manage-group-btns">${_ab(`app.toggleUserVerified(${hwid_arg})`, svgCheck(user.verified), user.verified ? '取消认证' : '认证用户', `border-color:${user.verified ? 'var(--secondary)' : 'var(--text-muted)'};color:${user.verified ? 'var(--secondary)' : 'var(--text-muted)'};`)}${_ab(`app.setUserNickname(${hwid_arg})`, svgEdit, approvedNickname ? '修改显示名称' : '设置显示名称', 'border-color:var(--primary);color:var(--primary);')}</div></div>
                 <div class="ud-manage-group"><div class="ud-manage-group-label">用户标签</div><div id="userTagBadges" class="ud-manage-group-btns" style="gap:6px;"></div></div>
-                <div class="ud-manage-group"><div class="ud-manage-group-label">AI 额度管理</div><div class="ud-manage-group-btns">${_ab(`app.setUserDailyLimit('${hwid}','${alias || originalName}')`, svgClock, '提升每日限额', 'border-color:var(--primary);color:var(--primary);')}${_ab(`app.addBonusCredits('${hwid}','${alias || originalName}')`, svgPlus, '增加永久额度', 'border-color:#10b981;color:#10b981;')}</div></div>
-                <div class="ud-manage-group"><div class="ud-manage-group-label">主题赠送</div><div class="ud-manage-group-btns">${_ab(`app.grantSupporterTheme('${hwid}')`, svgHeart, '赠送 Supporter 主题', 'border-color:#e879f9;color:#e879f9;')}</div></div>
-                <div class="ud-manage-group"><div class="ud-manage-group-label">权限管理</div><div class="ud-manage-group-btns">${_db(`app.banFeedback('${hwid}')`, svgBan, '封禁反馈', 'var(--warning)')}${_db(`app.banAI('${hwid}')`, svgMic, '封禁 AI', '#18181b')}${_db(`app.deleteUser('${hwid}')`, svgTrash, '删除用户', 'var(--danger)')}</div></div>
+                <div class="ud-manage-group"><div class="ud-manage-group-label">AI 额度管理</div><div class="ud-manage-group-btns">${_ab(`app.setUserDailyLimit(${hwid_arg},${display_name_arg})`, svgClock, '提升每日限额', 'border-color:var(--primary);color:var(--primary);')}${_ab(`app.addBonusCredits(${hwid_arg},${display_name_arg})`, svgPlus, '增加永久额度', 'border-color:#10b981;color:#10b981;')}</div></div>
+                <div class="ud-manage-group"><div class="ud-manage-group-label">主题赠送</div><div class="ud-manage-group-btns">${_ab(`app.grantSupporterTheme(${hwid_arg})`, svgHeart, '赠送 Supporter 主题', 'border-color:#e879f9;color:#e879f9;')}</div></div>
+                <div class="ud-manage-group"><div class="ud-manage-group-label">权限管理</div><div class="ud-manage-group-btns">${_db(`app.banFeedback(${hwid_arg})`, svgBan, '封禁反馈', 'var(--warning)')}${_db(`app.banAI(${hwid_arg})`, svgMic, '封禁 AI', '#18181b')}${_db(`app.deleteUser(${hwid_arg})`, svgTrash, '删除用户', 'var(--danger)')}</div></div>
             </div>
         </div>
 
@@ -5865,6 +5902,9 @@ const app = {
         `;
 
         container.innerHTML = html;
+        container.dataset.userHwid = String(hwid);
+        this.restore_user_notification_draft(hwid, message_draft);
+        this.bind_user_notification_preview_invalidation();
         this.loadCommandLogs(hwid, 1);
 
         fetch(`${this.config.apiBase}/admin/ai/usage?days=1`).then(r => r.json()).then(data => {
@@ -5902,14 +5942,21 @@ const app = {
 
         try {
             const res = await fetch(`${this.config.apiBase}/admin/user-command-logs?machine_id=${encodeURIComponent(machineId)}&page=${page}&page_size=10`);
-            if (!res.ok) throw new Error('加载失败');
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
             const items = data.items || [];
             const total = data.total || 0;
             const totalPages = data.total_pages || 1;
             const currentPage = data.page || 1;
             const esc = (value) => this.escapeHtmlSafe(value === undefined || value === null ? '' : String(value));
-            const jsMachineId = JSON.stringify(String(machineId || '')).replace(/"/g, '&quot;');
+            const escape_html_attr = (value) => String(value === undefined || value === null ? '' : value).replace(/[&"'<>]/g, (char) => ({
+                '&': '&amp;',
+                '"': '&quot;',
+                "'": '&#39;',
+                '<': '&lt;',
+                '>': '&gt;',
+            })[char]);
+            const jsMachineId = this.inline_js_arg(machineId);
 
             if (items.length === 0) {
                 body.innerHTML = '<div class="muted" style="text-align:center;padding:16px 0;font-size:13px;">暂无推送日志</div>';
@@ -5919,14 +5966,20 @@ const app = {
             const typeLabels = {
                 popup: { icon: 'ri-window-line', label: '弹窗' },
                 toast: { icon: 'ri-notification-3-line', label: '提示' },
+                system_notification: { icon: 'ri-notification-3-line', label: '消息中心' },
+                system_notification_revoke: { icon: 'ri-notification-off-line', label: '消息撤回' },
                 upload_log: { icon: 'ri-file-upload-line', label: '日志' },
                 gift_theme: { icon: 'ri-gift-line', label: '主题' },
                 unknown: { icon: 'ri-question-line', label: '未知' },
             };
             const statusLabels = {
-                pending: { icon: 'ri-time-line', text: '待接收' },
-                delivered: { icon: 'ri-checkbox-circle-line', text: '已接收' },
-                overwritten: { icon: 'ri-forbid-2-line', text: '已覆盖' },
+                pending: { icon: 'ri-time-line', text: '待领取', color: 'var(--warning)' },
+                delivered: { icon: 'ri-checkbox-circle-line', text: '已送达', color: 'var(--secondary)' },
+                expired: { icon: 'ri-timer-line', text: '已过期', color: 'var(--text-muted)' },
+                unsupported: { icon: 'ri-device-line', text: '不支持', color: 'var(--warning)' },
+                failed: { icon: 'ri-error-warning-line', text: '失败', color: 'var(--danger)' },
+                cancelled: { icon: 'ri-close-circle-line', text: '已取消', color: 'var(--text-muted)' },
+                overwritten: { icon: 'ri-forbid-2-line', text: '已覆盖', color: 'var(--text-muted)' },
             };
 
             let html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
@@ -5943,9 +5996,14 @@ const app = {
                 const typeMeta = typeLabels[item.command_type] || { icon: 'ri-question-line', label: item.command_type };
                 const contentRaw = String(item.content || '');
                 const contentText = contentRaw.length > 30 ? contentRaw.substring(0, 30) + '...' : (contentRaw || '-');
-                const status = statusLabels[item.status] || { icon: 'ri-question-line', text: item.status };
+                const status = item.command_type === 'system_notification_revoke' && item.status === 'delivered'
+                    ? { icon: 'ri-checkbox-circle-line', text: '已撤回', color: 'var(--secondary)' }
+                    : (statusLabels[item.status] || { icon: 'ri-question-line', text: item.status, color: 'var(--text-muted)' });
                 const logId = Number(item.id) || 0;
-                let statusText = `<span style="display:inline-flex;align-items:center;gap:5px;color:var(--text-muted);font-weight:500;"><i class="${esc(status.icon)}" style="font-size:14px;"></i>${esc(status.text)}</span>`;
+                const originalLogId = Number(item.original_log_id);
+                const attempts = Number(item.attempts) || 0;
+                const errorTitle = item.last_error ? ` title="${escape_html_attr(item.last_error)}"` : '';
+                let statusText = `<span${errorTitle} style="display:inline-flex;align-items:center;gap:5px;color:${status.color};font-weight:500;"><i class="${esc(status.icon)}" style="font-size:14px;"></i>${esc(status.text)}</span>`;
                 if (item.status === 'delivered' && item.delivered_at) {
                     const dt = new Date(item.delivered_at).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' });
                     statusText += `<br><span style="color:var(--text-muted);font-size:11px;">${esc(dt)}</span>`;
@@ -5953,9 +6011,28 @@ const app = {
                 html += `<tr style="border-bottom:1px solid var(--border);">`;
                 html += `<td style="padding:8px;white-space:nowrap;">${esc(time)}</td>`;
                 html += `<td style="padding:8px;white-space:nowrap;"><span style="display:inline-flex;align-items:center;gap:6px;"><i class="${esc(typeMeta.icon)}" style="font-size:14px;color:var(--text-muted);"></i>${esc(typeMeta.label)}</span></td>`;
-                html += `<td style="padding:8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(contentRaw)}">${esc(contentText)}</td>`;
+                html += `<td style="padding:8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escape_html_attr(contentRaw)}">${esc(contentText)}</td>`;
                 html += `<td style="padding:8px;">${statusText}</td>`;
-                html += `<td style="padding:8px;text-align:center;"><button class="btn" style="padding:2px 8px;font-size:12px;color:var(--danger);border-color:var(--danger);" onclick="app.deleteCommandLog(${logId}, ${jsMachineId})">删除</button></td>`;
+                let actions = '';
+                if (item.command_type === 'system_notification') {
+                    if (item.status === 'pending' && attempts === 0) {
+                        const encodedContent = encodeURIComponent(contentRaw).replace(/'/g, '%27');
+                        actions += `<button class="btn" style="padding:2px 8px;font-size:12px;margin-right:5px;" onclick="app.prepareUserNotificationReplacement(${logId}, '${encodedContent}')">替换</button>`;
+                        actions += `<button class="btn" style="padding:2px 8px;font-size:12px;color:var(--danger);border-color:var(--danger);" onclick="app.cancelCommandLog(${logId}, ${jsMachineId}, false)">撤销</button>`;
+                    } else if ((item.status === 'pending' && attempts > 0) || ['delivered', 'failed', 'unsupported', 'expired'].includes(item.status)) {
+                        actions = `<button class="btn" style="padding:2px 8px;font-size:12px;color:var(--danger);border-color:var(--danger);" onclick="app.cancelCommandLog(${logId}, ${jsMachineId}, true)">撤回</button>`;
+                    } else {
+                        actions = `<button class="btn" style="padding:2px 8px;font-size:12px;color:var(--danger);border-color:var(--danger);" onclick="app.deleteCommandLog(${logId}, ${jsMachineId})">删除</button>`;
+                    }
+                } else if (item.command_type === 'system_notification_revoke'
+                    && ['failed', 'unsupported', 'expired'].includes(item.status)
+                    && Number.isSafeInteger(originalLogId) && originalLogId > 0) {
+                    actions = `<button class="btn" style="padding:2px 8px;font-size:12px;color:var(--danger);border-color:var(--danger);" onclick="app.cancelCommandLog(${originalLogId}, ${jsMachineId}, true)">再次撤回</button>`;
+                } else if (item.status !== 'pending') {
+                    actions = `<button class="btn" style="padding:2px 8px;font-size:12px;color:var(--danger);border-color:var(--danger);" onclick="app.deleteCommandLog(${logId}, ${jsMachineId})">删除</button>`;
+                }
+                if (!actions) actions = '<span class="muted">—</span>';
+                html += `<td style="padding:8px;text-align:center;white-space:nowrap;">${actions}</td>`;
                 html += '</tr>';
             });
 
@@ -5973,7 +6050,52 @@ const app = {
             body.innerHTML = html;
         } catch (err) {
             console.warn('loadCommandLogs failed:', err);
-            body.innerHTML = '<div class="muted" style="text-align:center;padding:16px 0;font-size:13px;color:var(--danger);">加载失败</div>';
+            const message = this.escapeHtmlSafe(err?.message || '未知错误');
+            body.innerHTML = `<div class="muted" style="text-align:center;padding:16px 0;font-size:13px;color:var(--danger);">加载推送日志失败: ${message}</div>`;
+        }
+    },
+
+    prepareUserNotificationReplacement(logId, encodedContent) {
+        this.state.userNotificationReplaceLogId = Number(logId) || 0;
+        const summaryInput = document.getElementById('udMessageSummary');
+        if (summaryInput && !summaryInput.value.trim()) summaryInput.value = decodeURIComponent(encodedContent || '');
+        const note = document.getElementById('udMessageQueueNote');
+        if (note) note.textContent = `将替换待领取消息 #${this.state.userNotificationReplaceLogId}；新消息入队成功后旧消息才会取消。`;
+        const label = document.getElementById('udMessageSubmit')?.querySelector('span');
+        if (label) label.textContent = '替换并加入队列';
+        document.getElementById('udMessageTitle')?.focus();
+        document.querySelector('.ud-message-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+
+    clearUserNotificationReplacement() {
+        this.state.userNotificationReplaceLogId = 0;
+        const note = document.getElementById('udMessageQueueNote');
+        if (note) note.textContent = '接口成功仅表示已入队；用户离线超过 15 天将无法领取。';
+        const label = document.getElementById('udMessageSubmit')?.querySelector('span');
+        if (label) label.textContent = '发送到消息中心';
+    },
+
+    async cancelCommandLog(logId, machineId, request_revoke = false) {
+        const prompt = request_revoke
+            ? '确认请求撤回这条消息？若客户端已收到，将在下次成功领取撤回命令后从本地历史移除；已经看过的内容无法逆转。'
+            : '确认撤销这条待领取消息？撤销后客户端将不会再领取。';
+        if (!window.confirm(prompt)) return;
+        try {
+            const response = await fetch(`${this.config.apiBase}/admin/user-command-log/${logId}/cancel`, { method: 'POST' });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || 'HTTP ' + response.status);
+            const action = result.action || result.status;
+            const action_messages = {
+                cancelled: '消息已取消',
+                revoke_queued: '消息撤回已入队',
+                already_revoked: '消息已撤回'
+            };
+            if (!action_messages[action]) throw new Error('服务器返回了未知操作结果');
+            if (this.state.userNotificationReplaceLogId === Number(logId)) this.clearUserNotificationReplacement();
+            this.showAlert(action_messages[action], 'success');
+            this.loadCommandLogs(machineId, 1);
+        } catch (error) {
+            this.showAlert((request_revoke ? '撤回失败: ' : '撤销失败: ') + error.message, 'danger');
         }
     },
 
@@ -6091,7 +6213,7 @@ const app = {
             const icon_color = active ? tc.color : '#64748b';
             const icon_cls = tag.icon || 'ri-price-tag-3-line';
             const label = this._getTagLabel(tag);
-            return `<button onclick="app.toggleUserTag('${hwid}','${tag.name}')" style="
+            return `<button onclick="app.toggleUserTag(${this.inline_js_arg(hwid)},${this.inline_js_arg(tag.name)})" style="
                 padding: 4px 12px; border-radius: 16px; font-size: 12px; font-weight: 600;
                 border: 1.5px solid ${border}; background: ${bg}; color: ${txt_color};
                 cursor: pointer; transition: all .15s; display: inline-flex; align-items: center; gap: 4px;
@@ -6283,6 +6405,204 @@ const app = {
             }
         } catch (e) {
             this.showAlert('操作失败: ' + e.message, 'danger');
+        }
+    },
+
+    capture_user_notification_draft(hwid) {
+        const container = document.getElementById('userDetailContent');
+        const machine_id = String(hwid || '');
+        if (!container || !machine_id || container.dataset.userHwid !== machine_id) return null;
+
+        const field_ids = [
+            'udMessageTitle',
+            'udMessageIcon',
+            'udMessageSummary',
+            'udMessageRenderer',
+            'udMessagePopupTitle',
+            'udMessageBody'
+        ];
+        const field_values = {};
+        const field_scroll_tops = {};
+        field_ids.forEach((field_id) => {
+            const field = document.getElementById(field_id);
+            if (!field) return;
+            field_values[field_id] = field.value;
+            field_scroll_tops[field_id] = Number(field.scrollTop) || 0;
+        });
+
+        const active_element = document.activeElement;
+        const active_field_id = field_ids.includes(active_element?.id) ? active_element.id : '';
+        const preview = document.getElementById('udMessagePreview');
+        return {
+            machine_id,
+            field_values,
+            field_scroll_tops,
+            replace_log_id: Number(this.state.userNotificationReplaceLogId) || 0,
+            preview_visible: Boolean(preview && preview.style.display !== 'none'),
+            active_field_id,
+            selection_start: typeof active_element?.selectionStart === 'number' ? active_element.selectionStart : null,
+            selection_end: typeof active_element?.selectionEnd === 'number' ? active_element.selectionEnd : null
+        };
+    },
+
+    restore_user_notification_draft(hwid, draft) {
+        const machine_id = String(hwid || '');
+        if (!draft || draft.machine_id !== machine_id) return;
+
+        Object.entries(draft.field_values || {}).forEach(([field_id, value]) => {
+            const field = document.getElementById(field_id);
+            if (!field) return;
+            field.value = value;
+            field.scrollTop = Number(draft.field_scroll_tops?.[field_id]) || 0;
+        });
+
+        this.state.userNotificationReplaceLogId = Number(draft.replace_log_id) || 0;
+        this.updateUserMessageRenderer();
+        if (this.state.userNotificationReplaceLogId > 0) {
+            const note = document.getElementById('udMessageQueueNote');
+            if (note) note.textContent = `将替换待领取消息 #${this.state.userNotificationReplaceLogId}；新消息入队成功后旧消息才会取消。`;
+            const label = document.getElementById('udMessageSubmit')?.querySelector('span');
+            if (label) label.textContent = '替换并加入队列';
+        }
+        if (draft.preview_visible) this.previewUserNotification(hwid);
+
+        const active_field = draft.active_field_id ? document.getElementById(draft.active_field_id) : null;
+        if (!active_field || typeof active_field.focus !== 'function') return;
+        try {
+            active_field.focus({ preventScroll: true });
+        } catch {
+            active_field.focus();
+        }
+        if (
+            typeof active_field.setSelectionRange === 'function' &&
+            typeof draft.selection_start === 'number' &&
+            typeof draft.selection_end === 'number'
+        ) {
+            active_field.setSelectionRange(draft.selection_start, draft.selection_end);
+        }
+    },
+
+    invalidate_user_notification_preview() {
+        const preview = document.getElementById('udMessagePreview');
+        if (preview) preview.style.display = 'none';
+    },
+
+    bind_user_notification_preview_invalidation() {
+        const field_ids = [
+            'udMessageTitle',
+            'udMessageIcon',
+            'udMessageSummary',
+            'udMessageRenderer',
+            'udMessagePopupTitle',
+            'udMessageBody'
+        ];
+        field_ids.forEach((field_id) => {
+            const field = document.getElementById(field_id);
+            if (!field) return;
+            field.addEventListener(field.tagName === 'SELECT' ? 'change' : 'input', () => {
+                this.invalidate_user_notification_preview();
+            });
+        });
+    },
+
+    updateUserMessageRenderer() {
+        const rendererValue = document.getElementById('udMessageRenderer')?.value || 'none';
+        const showPopupFields = rendererValue !== 'none';
+        const popupTitleField = document.getElementById('udMessagePopupTitleField');
+        const bodyField = document.getElementById('udMessageBodyField');
+        if (popupTitleField) popupTitleField.style.display = showPopupFields ? '' : 'none';
+        if (bodyField) bodyField.style.display = showPopupFields ? '' : 'none';
+        this.invalidate_user_notification_preview();
+    },
+
+    buildUserNotificationRequest(hwid) {
+        const title = document.getElementById('udMessageTitle')?.value?.trim() || '';
+        const summary = document.getElementById('udMessageSummary')?.value?.trim() || '';
+        const icon = document.getElementById('udMessageIcon')?.value || 'ri-notification-3-line';
+        const rendererValue = document.getElementById('udMessageRenderer')?.value || 'none';
+        const rendererParts = rendererValue.split('/');
+        const renderer = rendererParts[0] || 'none';
+        const variant = rendererParts[1] || (renderer === 'alert' ? 'default' : '');
+        const popupTitle = document.getElementById('udMessagePopupTitle')?.value?.trim() || '';
+        const body = document.getElementById('udMessageBody')?.value?.trim() || '';
+        return { machine_id: hwid, title, summary, icon, renderer, variant, popup_title: popupTitle, body, replace_log_id: this.state.userNotificationReplaceLogId || 0 };
+    },
+
+    validateUserNotificationRequest(request) {
+        if (!request.title || !request.summary) return '请填写消息标题和列表摘要';
+        const body = request.body || request.summary;
+        if (request.renderer === 'notice' && /(https?:\/\/|ftp:\/\/|mailto:|data:|javascript:|www\.|!?\[[^\]]*\]\s*\(|<[a-z!/][^>]*>)/i.test(body)) {
+            return '公告正文不支持链接、图片或原始 HTML';
+        }
+        return '';
+    },
+
+    previewUserNotification(hwid) {
+        const request = this.buildUserNotificationRequest(hwid);
+        const validationError = this.validateUserNotificationRequest(request);
+        if (validationError) {
+            this.showAlert(validationError, 'warning');
+            return;
+        }
+        const preview = document.getElementById('udMessagePreview');
+        if (!preview) return;
+        const title = request.popup_title || request.title;
+        const body = request.body || request.summary;
+        const listItem = `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px;border-bottom:1px solid var(--border);"><i class="${this.escapeHtmlSafe(request.icon)}" style="font-size:20px;color:var(--primary);"></i><div><b>${this.escapeHtmlSafe(request.title)}</b><div style="font-size:12px;color:var(--text-muted);margin-top:3px;">${this.escapeHtmlSafe(request.summary)}</div></div></div>`;
+        preview.innerHTML = listItem + '<div id="udMessageActionPreview" style="padding-top:12px;"></div>';
+        const actionPreview = document.getElementById('udMessageActionPreview');
+        if (request.renderer === 'none') {
+            actionPreview.innerHTML = '<div class="muted" style="font-size:12px;">点击后无额外动作</div>';
+        } else if (request.renderer === 'alert') {
+            actionPreview.innerHTML = `<div style="max-width:420px;margin:auto;padding:20px;border:1px solid var(--border);border-radius:12px;background:var(--surface);"><h3 style="margin:0 0 10px;">${this.escapeHtmlSafe(title)}</h3><div style="white-space:pre-wrap;line-height:1.6;">${this.escapeHtmlSafe(body)}</div></div>`;
+        } else if (request.renderer === 'notice' && window.NoticePreviewModule) {
+            window.NoticePreviewModule.renderClientPreview(actionPreview, { id: 0, type: request.variant === 'update' ? 'update' : 'normal', tag: request.variant === 'update' ? '更新' : '公告', title, summary: request.summary, content: body, date: '预览' });
+        } else if (request.renderer === 'themed') {
+            actionPreview.innerHTML = `<div style="width:360px;max-width:100%;margin:auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 12px 36px rgba(0,0,0,.16);"><div style="height:4px;background:linear-gradient(90deg,#94a3b8,#cbd5e1);"></div><div style="padding:28px;text-align:center;"><i class="ri-gift-line" style="font-size:30px;color:#64748b;"></i><h3 style="color:#1e293b;margin:14px 0 10px;">${this.escapeHtmlSafe(title)}</h3><div style="padding:14px;border-radius:10px;background:#f8fafc;color:#475569;white-space:pre-wrap;text-align:left;">${this.escapeHtmlSafe(body)}</div><button type="button" class="btn" style="width:100%;margin-top:18px;" disabled>我知道了</button></div></div>`;
+        }
+        preview.style.display = '';
+    },
+
+    async submitUserNotification(hwid) {
+        const request = this.buildUserNotificationRequest(hwid);
+
+        const validationError = this.validateUserNotificationRequest(request);
+        if (validationError) {
+            this.showAlert(validationError, 'warning');
+            return;
+        }
+
+        const submitButton = document.getElementById('udMessageSubmit');
+        if (submitButton) {
+            submitButton.disabled = true;
+            submitButton.classList.add('loading');
+        }
+        try {
+            const response = await fetch(`${this.config.apiBase}/admin/user-notification`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request)
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(result.error || 'HTTP ' + response.status);
+            }
+            this.showAlert('消息已入队', 'success');
+            this.clearUserNotificationReplacement();
+            const summaryInput = document.getElementById('udMessageSummary');
+            const bodyInput = document.getElementById('udMessageBody');
+            if (summaryInput) summaryInput.value = '';
+            if (bodyInput) bodyInput.value = '';
+            const preview = document.getElementById('udMessagePreview');
+            if (preview) preview.style.display = 'none';
+            this.loadCommandLogs(hwid, 1);
+        } catch (error) {
+            this.showAlert('发送失败: ' + error.message, 'danger');
+        } finally {
+            if (submitButton) {
+                submitButton.disabled = false;
+                submitButton.classList.remove('loading');
+            }
         }
     },
 
@@ -7378,13 +7698,18 @@ Aimer WT涂装系统：
             }
             if (empty) empty.style.display = 'none';
 
-            table.innerHTML = bans.map(function(b) {
+            table.innerHTML = bans.map((b) => {
+                const safe_machine_id = this.escapeHtmlSafe(String(b.machine_id || '-'));
+                const safe_alias = this.escapeHtmlSafe(String(b.alias || '-'));
+                const safe_reason = this.escapeHtmlSafe(String(b.reason || '-'));
+                const safe_created_at = this.escapeHtmlSafe(String(b.created_at || '-'));
+                const ban_id = Number(b.id) || 0;
                 return '<tr>' +
-                    '<td style="font-family: monospace; font-size: 12px;">' + b.machine_id + '</td>' +
-                    '<td>' + (b.alias || '-') + '</td>' +
-                    '<td>' + (b.reason || '-') + '</td>' +
-                    '<td>' + b.created_at + '</td>' +
-                    '<td><button class="btn" style="padding: 4px 8px; font-size: 12px; color: var(--danger);" onclick="app.removeAIBan(' + b.id + ')">解封</button></td>' +
+                    '<td style="font-family: monospace; font-size: 12px;">' + safe_machine_id + '</td>' +
+                    '<td>' + safe_alias + '</td>' +
+                    '<td>' + safe_reason + '</td>' +
+                    '<td>' + safe_created_at + '</td>' +
+                    '<td><button class="btn" style="padding: 4px 8px; font-size: 12px; color: var(--danger);" onclick="app.removeAIBan(' + ban_id + ')">解封</button></td>' +
                 '</tr>';
             }).join('');
         } catch (err) {
@@ -7674,6 +7999,13 @@ Aimer WT涂装系统：
                 : user.rank;
             const statusClass = user.status === '正常' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)';
             const statusColor = user.status === '正常' ? 'var(--secondary)' : 'var(--danger)';
+            const machine_id = String(user.hwid || '');
+            const safe_machine_id = this.escapeHtmlSafe(machine_id);
+            const safe_hwid = this.escapeHtmlSafe(machine_id.substring(0, 12));
+            const safe_name = this.escapeHtmlSafe(String(user.name || '未命名'));
+            const safe_avatar = this.escapeHtmlSafe(String(user.avatar || ''));
+            const safe_last_time = this.escapeHtmlSafe(String(user.lastTime || '-'));
+            const safe_status = this.escapeHtmlSafe(String(user.status || '-'));
 
             const limitDisplay = user.customLimit
                 ? `<span style="color: var(--primary); font-weight: 500;" title="自定义限额">${user.todayUsed}/${user.customLimit}</span>`
@@ -7683,25 +8015,32 @@ Aimer WT涂装系统：
                 <td>${rankBadge}</td>
                 <td>
                     <div style="display: flex; align-items: center; gap: 10px;">
-                        <div style="width: 32px; height: 32px; background: ${user.avatarColor}; border-radius: 8px; color: white; font-size: 14px; font-weight: 600; display: flex; align-items: center; justify-content: center;">${user.avatar}</div>
+                        <div style="width: 32px; height: 32px; background: ${user.avatarColor}; border-radius: 8px; color: white; font-size: 14px; font-weight: 600; display: flex; align-items: center; justify-content: center;">${safe_avatar}</div>
                         <div>
-                            <div style="font-weight: 500;">${user.name}</div>
-                            <div style="font-size: 12px; color: var(--text-muted);">${user.hwid.substring(0, 12)}...</div>
+                            <div style="font-weight: 500;">${safe_name}</div>
+                            <div style="font-size: 12px; color: var(--text-muted);">${safe_hwid}...</div>
                         </div>
                     </div>
                 </td>
                 <td>${user.messages.toLocaleString()}</td>
                 <td>${user.tokens.toLocaleString()}</td>
                 <td>${limitDisplay}</td>
-                <td>${user.lastTime}</td>
-                <td><span style="display: inline-block; padding: 2px 8px; background: ${statusClass}; color: ${statusColor}; border-radius: 4px; font-size: 12px;">${user.status}</span></td>
+                <td>${safe_last_time}</td>
+                <td><span style="display: inline-block; padding: 2px 8px; background: ${statusClass}; color: ${statusColor}; border-radius: 4px; font-size: 12px;">${safe_status}</span></td>
                 <td>
-                    <button class="btn" style="padding: 2px 8px; font-size: 11px; white-space: nowrap;" onclick="app.setUserDailyLimit('${user.hwid}', '${user.name}')">设置限额</button>
+                    <button class="btn js-ai-limit" data-machine-id="${safe_machine_id}" style="padding: 2px 8px; font-size: 11px; white-space: nowrap;">设置限额</button>
                 </td>
             </tr>`;
         }).join('');
 
         table.innerHTML = html;
+        table.querySelectorAll('.js-ai-limit').forEach((button) => {
+            button.addEventListener('click', () => {
+                const machine_id = String(button.dataset.machineId || '');
+                const selected_user = (this.state.aiUsageData.users || []).find((item) => String(item.hwid || '') === machine_id);
+                if (selected_user) this.setUserDailyLimit(selected_user.hwid, selected_user.name);
+            });
+        });
         
         if (info) info.textContent = `共 ${data.length} 条记录，第 ${currentPage}/${totalPages} 页`;
         
@@ -8408,9 +8747,11 @@ Aimer WT涂装系统：
             tooltip: {
                 trigger: 'axis', axisPointer: { type: 'shadow' },
                 backgroundColor: 'rgba(15, 23, 42, 0.88)', borderColor: 'transparent', textStyle: { color: '#e2e8f0', fontSize: 12 },
-                formatter: function (params) {
+                formatter: (params) => {
                     const i = params[0].dataIndex;
-                    return `${names[i]}<br/>${mediums[i]}：<strong>${params[0].value}</strong> 次`;
+                    const safe_name = this.escapeHtmlSafe(String(names[i]));
+                    const safe_medium = this.escapeHtmlSafe(String(mediums[i]));
+                    return `${safe_name}<br/>${safe_medium}：<strong>${params[0].value}</strong> 次`;
                 }
             },
             xAxis: { type: 'value', minInterval: 1, axisLine: { show: false }, splitLine: { lineStyle: { color: 'rgba(148,163,184,0.08)' } }, axisLabel: { color: '#94a3b8', fontSize: 11 } },
@@ -8448,11 +8789,16 @@ Aimer WT涂装系统：
 
         tbody.innerHTML = recentClicks.map(c => {
             const userDisplay = c.alias || (c.machine_id ? c.machine_id.substring(0, 8) + '...' : '-');
+            const safe_created_at = this.escapeHtmlSafe(String(c.created_at || '-'));
+            const safe_machine_id = this.escapeHtmlSafe(String(c.machine_id || ''));
+            const safe_user_display = this.escapeHtmlSafe(String(userDisplay));
+            const safe_medium = this.escapeHtmlSafe(String(this.adMediumLabel(c.ad_medium)));
+            const safe_ad_id = this.escapeHtmlSafe(String(c.ad_id || '-'));
             return `<tr>
-                <td style="padding:8px 12px;white-space:nowrap;color:var(--text-muted);font-size:11px;">${c.created_at || '-'}</td>
-                <td style="padding:8px 12px;" title="${c.machine_id || ''}">${userDisplay}</td>
-                <td style="padding:8px 12px;"><span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;background:rgba(59,130,246,0.1);color:#3b82f6;">${this.adMediumLabel(c.ad_medium)}</span></td>
-                <td style="padding:8px 12px;font-size:11px;color:var(--text-muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.ad_id || ''}">${c.ad_id || '-'}</td>
+                <td style="padding:8px 12px;white-space:nowrap;color:var(--text-muted);font-size:11px;">${safe_created_at}</td>
+                <td style="padding:8px 12px;" title="${safe_machine_id}">${safe_user_display}</td>
+                <td style="padding:8px 12px;"><span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;background:rgba(59,130,246,0.1);color:#3b82f6;">${safe_medium}</span></td>
+                <td style="padding:8px 12px;font-size:11px;color:var(--text-muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${safe_ad_id}">${safe_ad_id}</td>
             </tr>`;
         }).join('');
     }
@@ -8533,26 +8879,36 @@ Object.assign(app, {
                     'expired': '<span style="color: var(--danger);">已过期</span>',
                     'disabled': '<span style="color: var(--text-muted);">已停用</span>',
                 };
-                const statusHtml = statusMap[code.status] || code.status;
-                const typeLabel = typeLabels[code.type] || code.type;
-                const usageText = code.max_uses > 0 ? `${code.used_count} / ${code.max_uses}` : `${code.used_count} / ∞`;
+                const statusHtml = statusMap[code.status] || this.escapeHtmlSafe(String(code.status || '-'));
+                const typeLabel = this.escapeHtmlSafe(String(typeLabels[code.type] || code.type || '-'));
+                const usageText = this.escapeHtmlSafe(String(code.max_uses > 0 ? `${code.used_count} / ${code.max_uses}` : `${code.used_count} / ∞`));
+                const code_id = Number(code.id) || 0;
+                const safe_code = this.escapeHtmlSafe(String(code.code || ''));
+                const safe_note = this.escapeHtmlSafe(String(code.note || '-'));
+                const safe_created_at = this.escapeHtmlSafe(String((code.created_at || '').replace('T', ' ').substring(0, 19)));
                 const activeBtn = code.is_active
-                    ? `<button class="btn" onclick="app.toggleRedeemActive(${code.id}, false)" style="font-size: 11px; padding: 2px 8px;">停用</button>`
-                    : `<button class="btn" onclick="app.toggleRedeemActive(${code.id}, true)" style="font-size: 11px; padding: 2px 8px;">启用</button>`;
+                    ? `<button class="btn" onclick="app.toggleRedeemActive(${code_id}, false)" style="font-size: 11px; padding: 2px 8px;">停用</button>`
+                    : `<button class="btn" onclick="app.toggleRedeemActive(${code_id}, true)" style="font-size: 11px; padding: 2px 8px;">启用</button>`;
 
                 return `<tr>
-                    <td style="font-family: monospace; font-size: 13px; font-weight: 600; letter-spacing: 1px; cursor: pointer;" onclick="navigator.clipboard.writeText('${code.code}'); app.showAlert('已复制', 'success');" title="点击复制">${code.code}</td>
+                    <td class="js-copy-redeem-code" data-code="${safe_code}" style="font-family: monospace; font-size: 13px; font-weight: 600; letter-spacing: 1px; cursor: pointer;" title="点击复制">${safe_code}</td>
                     <td><span style="padding: 2px 8px; border-radius: 8px; font-size: 11px; background: var(--bg); border: 1px solid var(--border);">${typeLabel}</span></td>
                     <td>${usageText}</td>
                     <td>${statusHtml}</td>
-                    <td style="max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${code.note || ''}">${code.note || '-'}</td>
-                    <td style="font-size: 12px; color: var(--text-muted);">${(code.created_at || '').replace('T', ' ').substring(0, 19)}</td>
+                    <td style="max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safe_note}">${safe_note}</td>
+                    <td style="font-size: 12px; color: var(--text-muted);">${safe_created_at}</td>
                     <td style="display: flex; gap: 4px;">
                         ${activeBtn}
-                        <button class="btn" onclick="app.deleteRedeemCode(${code.id})" style="font-size: 11px; padding: 2px 8px; color: var(--danger); border-color: var(--danger);">删除</button>
+                        <button class="btn" onclick="app.deleteRedeemCode(${code_id})" style="font-size: 11px; padding: 2px 8px; color: var(--danger); border-color: var(--danger);">删除</button>
                     </td>
                 </tr>`;
             }).join('');
+            tbody.querySelectorAll('.js-copy-redeem-code').forEach((cell) => {
+                cell.addEventListener('click', () => {
+                    navigator.clipboard.writeText(String(cell.dataset.code || ''));
+                    this.showAlert('已复制', 'success');
+                });
+            });
         } catch (e) {
             tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--danger);">加载失败</td></tr>';
         }
@@ -8576,11 +8932,16 @@ Object.assign(app, {
                 const hwid = r.machine_id || '-';
                 const displayHwid = hwid.length > 12 ? hwid.substring(0, 6) + '...' + hwid.substring(hwid.length - 4) : hwid;
                 const userDisplay = r.alias || displayHwid;
+                const safe_record_code = this.escapeHtmlSafe(String(r.code || '-'));
+                const safe_user_display = this.escapeHtmlSafe(String(userDisplay));
+                const safe_hwid = this.escapeHtmlSafe(String(hwid));
+                const safe_display_hwid = this.escapeHtmlSafe(String(displayHwid));
+                const safe_created_at = this.escapeHtmlSafe(String(r.created_at || '-'));
                 return `<tr>
-                    <td style="font-family: monospace; font-size: 13px; font-weight: 600;">${r.code}</td>
-                    <td>${userDisplay}</td>
-                    <td style="font-family: monospace; font-size: 12px;" title="${hwid}">${displayHwid}</td>
-                    <td style="font-size: 12px; color: var(--text-muted);">${r.created_at || '-'}</td>
+                    <td style="font-family: monospace; font-size: 13px; font-weight: 600;">${safe_record_code}</td>
+                    <td>${safe_user_display}</td>
+                    <td style="font-family: monospace; font-size: 12px;" title="${safe_hwid}">${safe_display_hwid}</td>
+                    <td style="font-size: 12px; color: var(--text-muted);">${safe_created_at}</td>
                 </tr>`;
             }).join('');
         } catch {
@@ -9364,12 +9725,15 @@ Object.assign(app, {
 
             tbody.innerHTML = allRequests.map(r => {
                 const userDisplay = this.escapeHtmlSafe(r.alias || `UID #${r.uid}`);
+                const machine_id_arg = this.inline_js_arg(r.machine_id);
+                const request_id = Number(r.id) || 0;
+                const safe_uid = this.escapeHtmlSafe(String(r.uid || '-'));
                 const statusMap = {
                     'pending': '<span style="color: var(--warning); font-weight: 500;">待审批</span>',
                     'approved': '<span style="color: var(--secondary);">已批准</span>',
                     'rejected': '<span style="color: var(--danger);">已拒绝</span>'
                 };
-                let statusHtml = statusMap[r.status] || r.status;
+                let statusHtml = statusMap[r.status] || this.escapeHtmlSafe(String(r.status || '-'));
                 if (r.status === 'rejected' && r.reject_reason) {
                     statusHtml += `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">原因：${this.escapeHtmlSafe(r.reject_reason)}</div>`;
                 }
@@ -9389,8 +9753,10 @@ Object.assign(app, {
                         <div style="font-weight:600;color:var(--primary);margin-top:2px;">→ ${this.escapeHtmlSafe(r.requested_nickname || '')}</div>
                     </div>`;
                 } else {
-                    const currentAvatar = r.current_avatar ? `<img src="${r.current_avatar}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:2px solid var(--border);">` : '<div style="width:36px;height:36px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted);">无</div>';
-                    const newAvatar = r.avatar_data ? `<img src="${r.avatar_data}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:2px solid var(--primary);">` : '';
+                    const current_avatar_data = this.safe_raster_image_data_uri(r.current_avatar);
+                    const new_avatar_data = this.safe_raster_image_data_uri(r.avatar_data);
+                    const currentAvatar = current_avatar_data ? `<img src="${current_avatar_data}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:2px solid var(--border);">` : '<div style="width:36px;height:36px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted);">无</div>';
+                    const newAvatar = new_avatar_data ? `<img src="${new_avatar_data}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:2px solid var(--primary);">` : '';
                     contentHtml = `<div style="display:flex;align-items:center;gap:8px;">
                         ${currentAvatar}
                         <span style="color:var(--text-muted);font-size:14px;">→</span>
@@ -9401,15 +9767,15 @@ Object.assign(app, {
                 const approveEndpoint = isNickname ? 'nickname-requests' : 'avatar-requests';
                 const actions = r.status === 'pending'
                     ? `<div style="display:flex;gap:4px;">
-                        <button class="btn" onclick="app.approveRequest('${approveEndpoint}', ${r.id})" style="font-size:11px;padding:2px 8px;color:var(--secondary);border-color:var(--secondary);">批准</button>
-                        <button class="btn" onclick="app.openRejectModal('${r._type}', ${r.id})" style="font-size:11px;padding:2px 8px;color:var(--danger);border-color:var(--danger);">拒绝</button>
+                        <button class="btn" onclick="app.approveRequest('${approveEndpoint}', ${request_id})" style="font-size:11px;padding:2px 8px;color:var(--secondary);border-color:var(--secondary);">批准</button>
+                        <button class="btn" onclick="app.openRejectModal('${r._type}', ${request_id})" style="font-size:11px;padding:2px 8px;color:var(--danger);border-color:var(--danger);">拒绝</button>
                        </div>`
                     : '<span style="color:var(--text-muted);font-size:12px;">-</span>';
 
                 return `<tr>
                     <td>
-                        <div style="display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="app.openUserDetailByMachineId('${r.machine_id}')">
-                            <div style="width:28px;height:28px;background:linear-gradient(135deg,#4a4a4a,#1a1a1a);border-radius:8px;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;">#${r.uid}</div>
+                        <div style="display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="app.openUserDetailByMachineId(${machine_id_arg})">
+                            <div style="width:28px;height:28px;background:linear-gradient(135deg,#4a4a4a,#1a1a1a);border-radius:8px;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;">#${safe_uid}</div>
                             <span style="font-weight:500;">${userDisplay}</span>
                         </div>
                     </td>

@@ -14,11 +14,11 @@ import (
 var configMu sync.RWMutex
 
 // SaveConfig 将单个配置项写入数据库
-func SaveConfig(key, value string) {
+func SaveConfig(key, value string) error {
 	configMu.Lock()
 	defer configMu.Unlock()
 
-	db.Where("key = ?", key).Assign(ContentConfig{Value: value}).FirstOrCreate(&ContentConfig{Key: key})
+	return db.Where("key = ?", key).Assign(ContentConfig{Value: value}).FirstOrCreate(&ContentConfig{Key: key}).Error
 }
 
 // LoadConfig 从数据库读取单个配置项
@@ -48,13 +48,20 @@ func LoadAllConfigs() map[string]string {
 }
 
 // PersistSysConfig 将当前 sysConfig 持久化到数据库
-func PersistSysConfig() {
+func PersistSysConfig() error {
 	data, err := json.Marshal(sysConfig)
 	if err != nil {
-		log.Printf("[Config] sysConfig 序列化失败: %v", err)
-		return
+		return err
 	}
-	SaveConfig("sys_config", string(data))
+	return SaveConfig("sys_config", string(data))
+}
+
+func persistSysConfigOrRestore(previousConfig SystemConfig) error {
+	if err := PersistSysConfig(); err != nil {
+		sysConfig = previousConfig
+		return err
+	}
+	return nil
 }
 
 // RestoreSysConfig 从数据库恢复 sysConfig（服务启动时调用）

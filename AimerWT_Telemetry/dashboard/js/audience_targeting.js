@@ -12,6 +12,7 @@ Object.assign(app, {
         if (targeting && Array.isArray(targeting.rules) && targeting.rules.length) {
             return {
                 rules: targeting.rules.map((rule) => ({
+                    minimum_version: String(rule?.minimum_version || '').trim(),
                     versions: this.normalizeAudienceValues(rule?.versions),
                     tags: this.normalizeAudienceValues(rule?.tags),
                     special_groups: this.normalizeAudienceValues(rule?.special_groups)
@@ -58,6 +59,7 @@ Object.assign(app, {
         const rules = this._audience_rules[editor_id] || [{}];
         return {
             rules: rules.map((rule) => ({
+                minimum_version: String(rule.minimum_version || '').trim(),
                 versions: this.normalizeAudienceValues(rule.versions),
                 tags: this.normalizeAudienceValues(rule.tags),
                 special_groups: this.normalizeAudienceValues(rule.special_groups)
@@ -70,12 +72,14 @@ Object.assign(app, {
         const rules = Array.isArray(targeting?.rules) ? targeting.rules : [];
         if (rules.length !== 1) return 'all';
         const rule = rules[0] || {};
+        const minimum_version = String(rule.minimum_version || '').trim();
         const versions = this.normalizeAudienceValues(rule.versions);
         const tags = this.normalizeAudienceValues(rule.tags);
         const groups = this.normalizeAudienceValues(rule.special_groups);
-        const used_fields = [versions.length > 0, tags.length > 0, groups.length > 0].filter(Boolean).length;
+        const used_fields = [minimum_version !== '', versions.length > 0, tags.length > 0, groups.length > 0].filter(Boolean).length;
         if (used_fields === 0) return 'all';
         if (used_fields !== 1) return 'all';
+        if (minimum_version) return 'all';
         if (versions.length === 1) return versions[0];
         if (tags.length === 1) return `tag:${tags[0]}`;
         if (groups.length === 1) return groups[0] === 'starred' ? 'star' : groups[0];
@@ -86,9 +90,11 @@ Object.assign(app, {
         const rules = Array.isArray(targeting?.rules) && targeting.rules.length ? targeting.rules : [{}];
         const group_summaries = rules.map((rule) => {
             const conditions = [];
+            const minimum_version = String(rule?.minimum_version || '').trim();
             const versions = this.normalizeAudienceValues(rule?.versions);
             const tags = this.normalizeAudienceValues(rule?.tags);
             const groups = this.normalizeAudienceValues(rule?.special_groups);
+            if (minimum_version) conditions.push(`版本 ${minimum_version} 及以上`);
             if (versions.length) conditions.push(`版本 ${versions.join('/')}`);
             if (tags.length) conditions.push(`用户组 ${tags.join('/')}`);
             if (groups.length) {
@@ -111,17 +117,24 @@ Object.assign(app, {
         const escape_value = (value) => this.escapeHtmlSafe(String(value || ''));
         const cards = targeting.rules.map((rule, rule_index) => {
             const selected_versions = new Set(rule.versions || []);
+            const selected_minimum_version = String(rule.minimum_version || '').trim();
             const selected_tags = new Set(rule.tags || []);
             const version_options = [...this._audience_options.versions];
             selected_versions.forEach((value) => {
                 if (!version_options.some((item) => item.value === value)) version_options.push({ value, label: value });
             });
+            if (selected_minimum_version && !version_options.some((item) => item.value === selected_minimum_version)) {
+                version_options.push({ value: selected_minimum_version, label: selected_minimum_version });
+            }
             const tag_options = [...this._audience_options.tags];
             selected_tags.forEach((value) => {
                 if (!tag_options.some((item) => item.value === value)) tag_options.push({ value, label: value });
             });
             const version_html = version_options.map((item) => (
                 `<option value="${escape_value(item.value)}" ${selected_versions.has(item.value) ? 'selected' : ''}>${escape_value(item.label)}</option>`
+            )).join('');
+            const minimum_version_html = `<option value="">不限制最低版本</option>` + version_options.map((item) => (
+                `<option value="${escape_value(item.value)}" ${selected_minimum_version === item.value ? 'selected' : ''}>≥ ${escape_value(item.label)}</option>`
             )).join('');
             const tag_html = tag_options.map((item) => (
                 `<option value="${escape_value(item.value)}" ${selected_tags.has(item.value) ? 'selected' : ''}>${escape_value(item.label)}</option>`
@@ -134,6 +147,10 @@ Object.assign(app, {
                         <button type="button" class="btn audience-rule-remove" onclick="app.deleteAudienceRule('${editor_id}', ${rule_index})">${targeting.rules.length === 1 ? '清空条件' : '删除'}</button>
                     </div>
                     <div class="audience-rule-grid">
+                        <label>
+                            <span>最低客户端版本（自动包含未来版本）</span>
+                            <select class="select" style="min-height:38px;padding:0 10px;" data-audience-field="minimum_version" onchange="app.updateAudienceRuleFromEditor('${editor_id}', ${rule_index})">${minimum_version_html}</select>
+                        </label>
                         <label>
                             <span>客户端版本（可多选）</span>
                             <select class="select" multiple size="${Math.min(Math.max(version_options.length, 2), 4)}" data-audience-field="versions" onchange="app.updateAudienceRuleFromEditor('${editor_id}', ${rule_index})">${version_html}</select>
@@ -167,6 +184,7 @@ Object.assign(app, {
             .map((input) => input.dataset.specialGroup);
         const rules = this._audience_rules[editor_id] || [{}];
         rules[rule_index] = {
+            minimum_version: card.querySelector('[data-audience-field="minimum_version"]')?.value || '',
             versions: selected_values('versions'),
             tags: selected_values('tags'),
             special_groups

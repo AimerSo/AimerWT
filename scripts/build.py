@@ -7,6 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.logger import get_logger
@@ -198,6 +199,25 @@ def require_build_env() -> dict[str, str]:
         raise RuntimeError(
             "缺少必填环境变量: " + ", ".join(missing)
         )
+
+    report_url_error = "REPORT_URL 必须是包含主机名的绝对 HTTPS URL"
+    try:
+        report_url = urlsplit(values["REPORT_URL"])
+        report_url_port = report_url.port
+        report_url_hostname = report_url.hostname
+    except ValueError:
+        raise RuntimeError(report_url_error) from None
+
+    if (
+        report_url.scheme != "https"
+        or not report_url_hostname
+        or (
+            report_url_port is not None
+            and not 1 <= report_url_port <= 65535
+        )
+    ):
+        raise RuntimeError(report_url_error)
+
     return values
 
 

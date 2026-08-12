@@ -1543,7 +1543,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* 管理功能面板 */
-.ud-manage-panel, .ud-comment-perms-panel {
+.ud-manage-panel, .ud-message-panel, .ud-comment-perms-panel {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -1566,6 +1566,86 @@ input[type="range"]::-moz-range-thumb {
 .ud-manage-body {
     padding: 10px 14px;
 }
+
+.ud-message-body {
+    padding: 14px;
+}
+
+.ud-message-target {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.ud-message-modes {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.ud-message-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 11px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.ud-message-mode.active {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    color: var(--primary);
+}
+
+.ud-message-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.ud-message-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.ud-message-field.full {
+    grid-column: 1 / -1;
+}
+
+.ud-message-field .input,
+.ud-message-field .select {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.ud-message-field textarea {
+    resize: vertical;
+    font-family: inherit;
+}
+
+.ud-message-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 14px;
+}
+
+.ud-message-note {
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
 
 .ud-manage-group {
     margin-bottom: 10px;
