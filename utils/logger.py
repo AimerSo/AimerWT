@@ -400,7 +400,9 @@ def get_logger(module_name: str | None = None) -> logging.Logger:
     Returns:
         Logger 实例
     """
-    base = setup_logger(APP_LOGGER_NAME)
+    # 模块导入阶段只取得 logger，不创建文件。主程序完成单实例锁和旧目录迁移后，
+    # 由 AppApi 显式调用 setup_logger() 初始化文件日志。
+    base = logging.getLogger(APP_LOGGER_NAME)
     if not module_name or module_name == APP_LOGGER_NAME:
         return base
     return base.getChild(str(module_name))

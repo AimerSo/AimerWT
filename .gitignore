@@ -3,6 +3,7 @@ logs/
 *.log
 AimerWT-Log*.log
 **/AimerWT-Log*.log
+AimerWT_Instance.json
 
 # Python cache
 __pycache__/
@@ -115,8 +116,8 @@ AimerWT_Telemetry/telemetry
 # 服务器部署面板（本地运维工具，不上传）
 服务器面板/
 
-# AI 生成的变更说明文档（不上传）
-OTHER/
+# 本地文档、测试和 AI 生成材料（统一存放于 OTHER，不上传）
+/OTHER/
 docs/superpowers/plans/
 two_phase_changelog.md
 web/ads/README_ads_structure.md
@@ -162,6 +163,7 @@ scripts/run_build.py
 
 # 正式仓库仅保留运行、构建与发布所需源码
 /docs/
+/test/
 /tests/
 **/*_test.go
 **/test_*.py

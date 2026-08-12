@@ -14,43 +14,50 @@ from logging import getLogger
 log = getLogger(__name__)
 
 
+def _get_windows_documents_dir() -> Path:
+    """读取 Windows 当前用户实际的“文档”目录，支持系统重定向。"""
+    try:
+        import ctypes.wintypes
+
+        buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+        ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf)
+        if buf.value:
+            return Path(buf.value)
+    except Exception as e:
+        log.error(f"获取 Windows 文档目录时发生错误: {e}")
+    return Path.home() / "Documents"
+
+
+def get_documents_dir() -> Path:
+    """返回当前用户的文档目录；Windows 使用系统已知文件夹位置。"""
+    if platform.system() == "Windows":
+        return _get_windows_documents_dir()
+    return Path.home() / "Documents"
+
+
+def _get_platform_config_base_dir() -> Path:
+    system = platform.system()
+    if system == "Windows":
+        return get_documents_dir()
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support"
+    xdg_config = os.environ.get("XDG_CONFIG_HOME")
+    return Path(xdg_config) if xdg_config else Path.home() / ".config"
+
+
 def get_docs_data_dir() -> Path:
     """
-    获取应用数据存储目录（跨平台支援）。
-    - Windows: ~/Documents/Aimer_WT
-    - Linux: ~/.config/Aimer_WT
-    - macOS: ~/Library/Application Support/Aimer_WT
-    
-    Returns:
-        Path: 应用数据目录路径
+    获取 AimerWT 3.1+ 应用数据目录。
+    - Windows: Documents/AimerWT
+    - Linux: ~/.config/AimerWT
+    - macOS: ~/Library/Application Support/AimerWT
     """
-    system = platform.system()
+    return _get_platform_config_base_dir() / "AimerWT"
 
-    if system == "Windows":
-        # Windows: 用户文档目录
-        try:
-            import ctypes.wintypes
-            buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
-            # CSIDL_PERSONAL = 5 (My Documents), SHGFP_TYPE_CURRENT = 0
-            ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf)
-            if buf.value:
-                return Path(buf.value) / "Aimer_WT"
-        except Exception as e:
-            log.error(f"获取 Windows 文档目录时发生错误: {e}")
-            pass
-        # 回退到 Documents 目录
-        return Path.home() / "Documents" / "Aimer_WT"
-    elif system == "Darwin":
-        # macOS: Application Support 目录
-        return Path.home() / "Library" / "Application Support" / "Aimer_WT"
-    else:
-        # Linux/其他: 使用 XDG_CONFIG_HOME 或 ~/.config
-        xdg_config = os.environ.get("XDG_CONFIG_HOME")
-        if xdg_config:
-            return Path(xdg_config) / "Aimer_WT"
-        else:
-            return Path.home() / ".config" / "Aimer_WT"
 
+def get_legacy_docs_data_dir() -> Path:
+    """返回 3.0/3.0.1 使用的旧配置目录。"""
+    return _get_platform_config_base_dir() / "Aimer_WT"
 
 def get_app_data_dir() -> Path:
     """

@@ -13,9 +13,11 @@ import platform
 import copy
 import re
 from pathlib import Path
+from typing import Callable
 import sys
 from utils.logger import get_logger
-from utils.utils import get_docs_data_dir
+from utils.utils import get_docs_data_dir, get_legacy_docs_data_dir
+from services.app_data_migration import sync_current_settings_to_legacy
 from services.resource_path_manager import (
     build_resource_paths,
     infer_resource_root_from_legacy_library_dir,
@@ -82,6 +84,8 @@ class ConfigManager:
         "pending_dir": "",
         "resource_root_dir": "",
         "resource_root_history": [],
+        "resource_path_overrides": {},
+        "path_metadata": {},
         "library_dir": "",
         "resource_display_names": {},
         "telemetry_enabled": True,
@@ -92,44 +96,85 @@ class ConfigManager:
         "remote_themes_cache": {}
     }
 
-    def __init__(self):
+    def __init__(
+        self,
+        config_dir: str | Path | None = None,
+        legacy_config_dir: str | Path | None = None,
+        sync_legacy: bool = True,
+        save_callback: Callable[[dict], bool | None] | None = None,
+    ):
         """初始化配置管理器，加载或创建配置文件。"""
-        self.config_dir = DOCS_DIR
-        self.config_file = CONFIG_FILE
+        self.config_dir = Path(config_dir) if config_dir is not None else get_docs_data_dir()
+        self.config_file = self.config_dir / "settings.json"
+        self.legacy_config_dir = (
+            Path(legacy_config_dir) if legacy_config_dir is not None else get_legacy_docs_data_dir()
+        )
+        self.sync_legacy = bool(sync_legacy)
+        self._save_callback = save_callback
         # 初始化默认配置并尝试从 settings.json 加载覆盖
         self.config = copy.deepcopy(self.DEFAULT_CONFIG)
-        self.load_config()
+        self.load_error_code = ""
+        self.loaded_from_disk = self.load_config()
+        self._last_saved_config = copy.deepcopy(self.config)
+
+    def set_save_callback(self, callback: Callable[[dict], bool | None] | None) -> None:
+        self._save_callback = callback
+
+    def _restore_after_save_failure(
+        self,
+        previous_bytes: bytes | None,
+        previous_config: dict | None,
+        *,
+        restore_disk: bool,
+    ) -> bool:
+        disk_restored = True
+        if restore_disk:
+            try:
+                if previous_bytes is None:
+                    if self.config_file.exists():
+                        self.config_file.unlink()
+                else:
+                    rollback_file = self.config_file.with_suffix('.rollback.tmp')
+                    rollback_file.write_bytes(previous_bytes)
+                    rollback_file.replace(self.config_file)
+            except OSError as rollback_error:
+                disk_restored = False
+                log.error(f"配置文件回退失败，内存设置仍会恢复: {rollback_error}")
+        restored = copy.deepcopy(self.DEFAULT_CONFIG)
+        if isinstance(previous_config, dict):
+            for key in self.DEFAULT_CONFIG:
+                if key in previous_config:
+                    restored[key] = previous_config[key]
+        self.config.clear()
+        self.config.update(restored)
+        self._last_saved_config = copy.deepcopy(restored)
+        return disk_restored
 
     def _load_json_with_fallback(self, file_path: Path) -> dict | None:
-        """
-        按编码回退策略读取 JSON 文件并解析为 Python 对象。
-        
-        Args:
-            file_path: JSON 文件路径
-            
-        Returns:
-            解析后的字典，失败则返回 None
-        """
-        encodings = ["utf-8-sig", "utf-8", "cp950", "big5", "gbk"]
-        last_error = None
+        """严格按无 BOM UTF-8 读取正式配置。"""
+        try:
+            text = file_path.read_text(encoding="utf-8")
+            if text.startswith("\ufeff"):
+                raise UnicodeError("正式配置不允许 UTF-8 BOM")
+            data = json.loads(text)
+            return data if isinstance(data, dict) else None
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            log.error(f"无法读取正式配置文件 {file_path}: {error}")
+            return None
 
-        for enc in encodings:
-            try:
-                with open(file_path, 'r', encoding=enc) as f:
-                    return json.load(f)
-            except UnicodeDecodeError:
+    def _config_types_are_valid(self, data: dict) -> bool:
+        for key, default_value in self.DEFAULT_CONFIG.items():
+            if key not in data:
                 continue
-            except json.JSONDecodeError as e:
-                last_error = e
-                log.warning(f"JSON 解析错误 (编码: {enc}): {e}")
-                continue
-            except Exception as e:
-                last_error = e
-                continue
-
-        if last_error:
-            log.error(f"无法读取配置文件 {file_path}: {last_error}")
-        return None
+            value = data[key]
+            if isinstance(default_value, bool):
+                valid = isinstance(value, bool)
+            else:
+                valid = isinstance(value, type(default_value))
+            if not valid:
+                log.error(f"配置字段类型无效: {key}")
+                return False
+        return True
 
     def load_config(self) -> bool:
         """
@@ -144,7 +189,7 @@ class ConfigManager:
 
         try:
             data = self._load_json_with_fallback(self.config_file)
-            if isinstance(data, dict):
+            if isinstance(data, dict) and self._config_types_are_valid(data):
                 # 只更新已知的配置项，忽略未知项
                 for key in self.DEFAULT_CONFIG:
                     if key in data:
@@ -153,9 +198,11 @@ class ConfigManager:
                 log.debug(f"已加载配置文件: {self.config_file}")
                 return True
             else:
-                log.warning("配置文件格式无效，使用默认配置")
+                self.load_error_code = "settings_corrupt"
+                log.warning("配置文件格式无效，停止自动覆盖")
                 return False
         except Exception as e:
+            self.load_error_code = "settings_corrupt"
             log.error(f"加载配置文件失败: {type(e).__name__}: {e}")
             return False
 
@@ -169,30 +216,76 @@ class ConfigManager:
         Raises:
             ConfigSaveError: 保存失败时（仅在严重错误时）
         """
+        previous_config = copy.deepcopy(self._last_saved_config)
+        previous_bytes: bytes | None = None
+        disk_replaced = False
         try:
-            # 确保目录存在
             if not self.config_dir.exists():
                 self.config_dir.mkdir(parents=True, exist_ok=True)
 
-            # 先写入临时文件，成功后再重命名（原子操作）
+            previous_bytes = self.config_file.read_bytes() if self.config_file.is_file() else None
             temp_file = self.config_file.with_suffix('.tmp')
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=4, ensure_ascii=False)
-
-            # 重命名为正式文件
             temp_file.replace(self.config_file)
+            disk_replaced = True
+
+            try:
+                if self._save_callback is not None:
+                    callback_result = self._save_callback(copy.deepcopy(self.config))
+                    if callback_result is False:
+                        raise ConfigSaveError("安装登记未能同步保存")
+            except Exception as callback_error:
+                self._restore_after_save_failure(
+                    previous_bytes,
+                    previous_config,
+                    restore_disk=disk_replaced,
+                )
+                log.error(f"配置与安装登记同步失败，已恢复旧设置: {callback_error}")
+                return False
+
+            if self.sync_legacy:
+                try:
+                    sync_current_settings_to_legacy(
+                        self.config,
+                        self.legacy_config_dir,
+                        self.config_dir,
+                    )
+                except Exception as sync_error:
+                    log.warning(f"旧版兼容配置同步失败: {sync_error}")
             log.debug(f"配置已保存: {self.config_file}")
+            self._last_saved_config = copy.deepcopy(self.config)
             return True
 
         except PermissionError as e:
+            self._restore_after_save_failure(
+                previous_bytes, previous_config, restore_disk=disk_replaced
+            )
             log.error(f"保存配置文件失败（权限不足）: {e}")
             return False
         except OSError as e:
+            self._restore_after_save_failure(
+                previous_bytes, previous_config, restore_disk=disk_replaced
+            )
             log.error(f"保存配置文件失败（系统错误）: {e}")
             return False
         except Exception as e:
+            self._restore_after_save_failure(
+                previous_bytes, previous_config, restore_disk=disk_replaced
+            )
             log.error(f"保存配置文件失败: {type(e).__name__}: {e}")
             return False
+
+    def _record_path_choice(self, role: str, path: str) -> None:
+        metadata = self.config.get("path_metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            self.config["path_metadata"] = metadata
+        has_path = bool(str(path or "").strip())
+        metadata[str(role)] = {
+            "user_modified": has_path,
+            "path_source": "user_selected" if has_path else "current_default",
+        }
 
     def get_game_path(self) -> str:
         """读取当前配置中的游戏根目录路径。"""
@@ -209,6 +302,7 @@ class ConfigManager:
             bool: 是否成功保存
         """
         self.config["game_path"] = str(path) if path else ""
+        self._record_path_choice("game_root", self.config["game_path"])
         return self.save_config()
 
     def get_sights_path(self) -> str:
@@ -226,6 +320,7 @@ class ConfigManager:
             bool: 是否成功保存
         """
         self.config["sights_path"] = str(path) if path else ""
+        self._record_path_choice("game_usersights", self.config["sights_path"])
         return self.save_config()
 
     def get_theme_mode(self) -> str:
@@ -425,18 +520,36 @@ class ConfigManager:
         return normalized in self.get_uid_popup_state().get("shown_seq_ids", [])
 
     def _migrate_resource_root_config(self) -> None:
-        """
-        将旧版语音包库路径兼容为资源库根目录。
-        """
+        """将旧版语音包库路径兼容为资源库根目录或明确的语音库路径。"""
         resource_root_dir = str(self.config.get("resource_root_dir") or "").strip()
         legacy_library_dir = str(self.config.get("library_dir") or "").strip()
-        if not resource_root_dir:
+        overrides = self.config.get("resource_path_overrides")
+        if not isinstance(overrides, dict):
+            overrides = {}
+            self.config["resource_path_overrides"] = overrides
+
+        if not resource_root_dir and legacy_library_dir:
             inferred = infer_resource_root_from_legacy_library_dir(legacy_library_dir)
             if inferred is not None:
                 self.config["resource_root_dir"] = str(inferred)
                 resource_root_dir = str(inferred)
+            else:
+                overrides["voice_library"] = legacy_library_dir
+                metadata = self.config.get("path_metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                    self.config["path_metadata"] = metadata
+                metadata["voice_library"] = {
+                    "user_modified": True,
+                    "path_source": "legacy_setting",
+                }
+
         if resource_root_dir:
-            self.config["library_dir"] = str(build_resource_paths(resource_root_dir).voice_library_dir)
+            self.config["library_dir"] = str(
+                build_resource_paths(resource_root_dir, overrides).voice_library_dir
+            )
+        elif str(overrides.get("voice_library") or "").strip():
+            self.config["library_dir"] = str(overrides["voice_library"])
 
     def mark_uid_popup_shown(self, seq_id) -> bool:
         """记录指定 UID 已经主动展示过欢迎弹窗。"""
@@ -532,6 +645,7 @@ class ConfigManager:
             bool: 是否成功保存
         """
         self.config["pending_dir"] = str(path) if path else ""
+        self._record_path_choice("pending_dir", self.config["pending_dir"])
         return self.save_config()
 
     def get_library_dir(self) -> str:
@@ -539,35 +653,34 @@ class ConfigManager:
         return self.config.get("library_dir", "")
 
     def set_library_dir(self, path: str) -> bool:
-        """
-        兼容旧版语音包库目录路径写入。
-        
-        Args:
-            path: 语音包库路径
-            
-        Returns:
-            bool: 是否成功保存
-        """
+        """兼容旧版语音包库路径；任意目录作为明确覆盖保留。"""
         path_text = str(path) if path else ""
         old_root = self.config.get("resource_root_dir", "")
-        self.config["library_dir"] = path_text
+        overrides = self.config.get("resource_path_overrides")
+        if not isinstance(overrides, dict):
+            overrides = {}
+            self.config["resource_path_overrides"] = overrides
+
         if not path_text:
-            self.config["resource_root_dir"] = ""
-            self.config["resource_root_history"] = update_resource_root_history(
-                self.config.get("resource_root_history", []),
-                old_root,
-                current_root="",
+            overrides.pop("voice_library", None)
+            self.config["library_dir"] = (
+                str(build_resource_paths(old_root, overrides).voice_library_dir) if old_root else ""
             )
+            self._record_path_choice("voice_library", "")
             return self.save_config()
+
         inferred = infer_resource_root_from_legacy_library_dir(path_text)
         if inferred is not None:
             new_root = str(inferred)
+            overrides.pop("voice_library", None)
             self.config["resource_root_dir"] = new_root
             self.config["resource_root_history"] = update_resource_root_history(
-                self.config.get("resource_root_history", []),
-                old_root,
-                current_root=new_root,
+                self.config.get("resource_root_history", []), old_root, current_root=new_root
             )
+        else:
+            overrides["voice_library"] = path_text
+        self.config["library_dir"] = path_text
+        self._record_path_choice("voice_library", path_text)
         return self.save_config()
 
     def get_resource_root_dir(self) -> str:
@@ -580,8 +693,11 @@ class ConfigManager:
         """
         old_root = self.config.get("resource_root_dir", "")
         self.config["resource_root_dir"] = str(path) if path else ""
+        self._record_path_choice("resource_root", self.config["resource_root_dir"])
         self.config["library_dir"] = (
-            str(build_resource_paths(path).voice_library_dir) if path else ""
+            str(build_resource_paths(path, self.config.get("resource_path_overrides", {})).voice_library_dir)
+            if path
+            else str((self.config.get("resource_path_overrides") or {}).get("voice_library") or "")
         )
         self.config["resource_root_history"] = update_resource_root_history(
             self.config.get("resource_root_history", []),

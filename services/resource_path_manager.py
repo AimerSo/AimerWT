@@ -2,8 +2,11 @@
 """
 AimerWT 资源库路径管理：统一解析资源库根目录、标准子库、备份目录和目录识别文件。
 """
+import hashlib
 import json
 import os
+import shutil
+import stat
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,6 +53,21 @@ class ResourcePaths:
     custom_text_backup_dir: Path
 
 
+@dataclass(frozen=True)
+class ResourcePathResolution:
+    paths: ResourcePaths
+    conflicts: dict[str, tuple[Path, ...]]
+    root_id: str = ""
+
+
+@dataclass(frozen=True)
+class ResourceRootRecovery:
+    status: str
+    resource_root_dir: Path | None
+    root_id: str
+    candidates: tuple[Path, ...]
+
+
 MARKER_DEFINITIONS: tuple[tuple[str, str, str | None], ...] = (
     (RESOURCE_ROOT_MARKER, "resource_root", None),
     (f"{DIR_VOICE_LIBRARY_NAME}/AimerWT_VoiceLibrary.json", "voice_library", "resource_root"),
@@ -61,6 +79,30 @@ MARKER_DEFINITIONS: tuple[tuple[str, str, str | None], ...] = (
     (f"{DIR_BACKUP_ROOT_NAME}/{DIR_SOUND_BACKUP_NAME}/AimerWT_SoundBackup.json", "sound_backup", "backup_root"),
     (f"{DIR_BACKUP_ROOT_NAME}/{DIR_CUSTOM_TEXT_BACKUP_NAME}/AimerWT_CustomTextBackup.json", "custom_text_backup", "backup_root"),
 )
+
+ROLE_MARKER_FILENAMES = {
+    "resource_root": RESOURCE_ROOT_MARKER,
+    "voice_library": "AimerWT_VoiceLibrary.json",
+    "sights_library": "AimerWT_SightsLibrary.json",
+    "task_library": "AimerWT_TaskLibrary.json",
+    "model_library": "AimerWT_ModelLibrary.json",
+    "hangar_library": "AimerWT_HangarLibrary.json",
+    "backup_root": "AimerWT_BackupRoot.json",
+    "sound_backup": "AimerWT_SoundBackup.json",
+    "custom_text_backup": "AimerWT_CustomTextBackup.json",
+}
+
+ROLE_PATH_ATTRIBUTES = {
+    "resource_root": "resource_root_dir",
+    "voice_library": "voice_library_dir",
+    "sights_library": "sights_library_dir",
+    "task_library": "task_library_dir",
+    "model_library": "model_library_dir",
+    "hangar_library": "hangar_library_dir",
+    "backup_root": "backup_root_dir",
+    "sound_backup": "sound_backup_dir",
+    "custom_text_backup": "custom_text_backup_dir",
+}
 
 
 def _now_iso() -> str:
@@ -78,6 +120,112 @@ def _norm_path(path: str | Path) -> str:
     except Exception:
         resolved = Path(path)
     return os.path.normcase(os.path.normpath(str(resolved)))
+
+
+class ResourceCopyError(RuntimeError):
+    pass
+
+
+def _is_reparse_path(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+        return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    except OSError:
+        return False
+
+
+def _resource_tree_files(root: Path) -> list[Path]:
+    if _is_reparse_path(root):
+        raise ResourceCopyError(f"资源库是目录连接或符号链接：{root}")
+    files: list[Path] = []
+    for current_root, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
+        current = Path(current_root)
+        for dir_name in list(dir_names):
+            child = current / dir_name
+            if _is_reparse_path(child):
+                raise ResourceCopyError(f"资源库中包含目录连接或符号链接：{child}")
+        for file_name in file_names:
+            child = current / file_name
+            if _is_reparse_path(child):
+                raise ResourceCopyError(f"资源库中包含文件链接：{child}")
+            files.append(child)
+    return files
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def copy_resource_root_transactional(
+    source_root: str | Path,
+    destination_root: str | Path,
+    *,
+    free_space_provider=None,
+    minimum_free_reserve: int = 100 * 1024 * 1024,
+) -> dict[str, str]:
+    """复制完整资源库；校验成功前不启用目标目录，源目录始终保留。"""
+    source = Path(source_root)
+    destination = Path(destination_root)
+    if not source.is_dir():
+        raise ResourceCopyError(f"旧资源库不存在：{source}")
+    if _norm_path(source) == _norm_path(destination):
+        raise ResourceCopyError("旧资源库与新位置相同，无需复制")
+    if destination.exists():
+        if _is_reparse_path(destination):
+            raise ResourceCopyError(f"新资源位置是目录连接或符号链接：{destination}")
+        try:
+            if any(destination.iterdir()):
+                raise ResourceCopyError(f"新资源位置不是空目录：{destination}")
+        except OSError as error:
+            raise ResourceCopyError(f"无法检查新资源位置：{error}") from error
+
+    source_files = _resource_tree_files(source)
+    planned_bytes = sum(path.stat().st_size for path in source_files)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    free_bytes = int(
+        free_space_provider(destination.parent)
+        if free_space_provider
+        else shutil.disk_usage(destination.parent).free
+    )
+    if free_bytes < int(planned_bytes * 1.1) + max(0, int(minimum_free_reserve)):
+        raise ResourceCopyError("复制资源库所需空间不足，旧资源库保持不变")
+
+    operation_id = uuid.uuid4().hex[:8]
+    stage = destination.parent / f"{destination.name}.copy-{operation_id}"
+    rollback = destination.parent / f"{destination.name}.before-copy-{operation_id}"
+    try:
+        shutil.copytree(source, stage, symlinks=True)
+        copied_files = _resource_tree_files(stage)
+        copied_by_relative = {path.relative_to(stage): path for path in copied_files}
+        for source_file in source_files:
+            relative = source_file.relative_to(source)
+            copied_file = copied_by_relative.get(relative)
+            if copied_file is None or source_file.stat().st_size != copied_file.stat().st_size:
+                raise ResourceCopyError(f"资源文件复制不完整：{relative}")
+            if _sha256_file(source_file) != _sha256_file(copied_file):
+                raise ResourceCopyError(f"资源文件复制校验失败：{relative}")
+        if destination.exists():
+            destination.replace(rollback)
+        try:
+            stage.replace(destination)
+        except OSError:
+            if rollback.exists() and not destination.exists():
+                rollback.replace(destination)
+            raise
+    except (OSError, ResourceCopyError) as error:
+        raise ResourceCopyError(f"资源库复制未完成，旧资源库仍可继续使用：{error}") from error
+    return {
+        "source_root": str(source),
+        "destination_root": str(destination),
+        "retained_previous_target": str(rollback) if rollback.exists() else "",
+        "stage_dir": str(stage) if stage.exists() else "",
+    }
 
 
 def default_resource_root_dir() -> Path:
@@ -99,7 +247,7 @@ def infer_resource_root_from_legacy_library_dir(library_dir: str | Path | None) 
     return None
 
 
-def build_resource_paths(resource_root_dir: str | Path | None = None) -> ResourcePaths:
+def _default_resource_paths(resource_root_dir: str | Path | None = None) -> ResourcePaths:
     root = resolve_resource_root_dir(resource_root_dir)
     backup_root = root / DIR_BACKUP_ROOT_NAME
     return ResourcePaths(
@@ -113,6 +261,168 @@ def build_resource_paths(resource_root_dir: str | Path | None = None) -> Resourc
         sound_backup_dir=backup_root / DIR_SOUND_BACKUP_NAME,
         custom_text_backup_dir=backup_root / DIR_CUSTOM_TEXT_BACKUP_NAME,
     )
+
+
+def _valid_marker(
+    data: dict[str, Any] | None,
+    role: str,
+    root_id: str | None = None,
+) -> bool:
+    if not isinstance(data, dict):
+        return False
+    if (
+        data.get("app") != "AimerWT"
+        or data.get("schema") != "resource_marker"
+        or data.get("version") != RESOURCE_MARKER_VERSION
+        or data.get("role") != role
+    ):
+        return False
+    marker_root_id = str(data.get("root_id") or "")
+    if not marker_root_id:
+        return False
+    return not root_id or marker_root_id == root_id
+
+
+def read_resource_marker(marker_path: str | Path) -> dict[str, Any] | None:
+    return _read_marker(Path(marker_path))
+
+
+def _marker_candidates(parent_dir: Path, role: str, root_id: str) -> list[Path]:
+    if not parent_dir.is_dir() or parent_dir.is_symlink():
+        return []
+    marker_name = ROLE_MARKER_FILENAMES[role]
+    candidates: list[Path] = []
+    try:
+        child_dirs = [item for item in parent_dir.iterdir() if item.is_dir() and not item.is_symlink()]
+    except OSError:
+        return []
+    for child_dir in child_dirs:
+        data = _read_marker(child_dir / marker_name)
+        if _valid_marker(data, role, root_id):
+            candidates.append(child_dir)
+    return candidates
+
+
+def resolve_resource_paths(
+    resource_root_dir: str | Path | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> ResourcePathResolution:
+    defaults = _default_resource_paths(resource_root_dir)
+    values = {role: getattr(defaults, attribute) for role, attribute in ROLE_PATH_ATTRIBUTES.items()}
+    clean_overrides = overrides if isinstance(overrides, dict) else {}
+    root_marker = _read_marker(defaults.resource_root_dir / RESOURCE_ROOT_MARKER)
+    root_id = str(root_marker.get("root_id") or "") if _valid_marker(root_marker, "resource_root") else ""
+    conflicts: dict[str, tuple[Path, ...]] = {}
+
+    if root_id:
+        for role in ("voice_library", "sights_library", "task_library", "model_library", "hangar_library", "backup_root"):
+            override_text = str(clean_overrides.get(role) or "").strip()
+            if override_text:
+                values[role] = Path(override_text)
+                continue
+            candidates = _marker_candidates(defaults.resource_root_dir, role, root_id)
+            if len(candidates) == 1:
+                values[role] = candidates[0]
+            elif len(candidates) > 1:
+                conflicts[role] = tuple(candidates)
+
+        backup_root = values["backup_root"]
+        values["sound_backup"] = backup_root / DIR_SOUND_BACKUP_NAME
+        values["custom_text_backup"] = backup_root / DIR_CUSTOM_TEXT_BACKUP_NAME
+        for role in ("sound_backup", "custom_text_backup"):
+            override_text = str(clean_overrides.get(role) or "").strip()
+            if override_text:
+                values[role] = Path(override_text)
+                continue
+            candidates = _marker_candidates(backup_root, role, root_id)
+            if len(candidates) == 1:
+                values[role] = candidates[0]
+            elif len(candidates) > 1:
+                conflicts[role] = tuple(candidates)
+    else:
+        for role in ROLE_PATH_ATTRIBUTES:
+            if role == "resource_root":
+                continue
+            override_text = str(clean_overrides.get(role) or "").strip()
+            if override_text:
+                values[role] = Path(override_text)
+        if str(clean_overrides.get("backup_root") or "").strip():
+            backup_root = values["backup_root"]
+            if not str(clean_overrides.get("sound_backup") or "").strip():
+                values["sound_backup"] = backup_root / DIR_SOUND_BACKUP_NAME
+            if not str(clean_overrides.get("custom_text_backup") or "").strip():
+                values["custom_text_backup"] = backup_root / DIR_CUSTOM_TEXT_BACKUP_NAME
+
+    paths = ResourcePaths(**{attribute: values[role] for role, attribute in ROLE_PATH_ATTRIBUTES.items()})
+    return ResourcePathResolution(paths=paths, conflicts=conflicts, root_id=root_id)
+
+
+def build_resource_paths(
+    resource_root_dir: str | Path | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> ResourcePaths:
+    return resolve_resource_paths(resource_root_dir, overrides).paths
+
+
+def recover_resource_root(
+    configured_root: str | Path | None,
+    default_root: str | Path | None,
+    history: list[str | Path] | tuple[str | Path, ...] | None,
+    expected_root_id: str | None = None,
+) -> ResourceRootRecovery:
+    trusted_paths = [Path(item) for item in (configured_root, default_root, *(history or [])) if str(item or "").strip()]
+    candidates: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+
+    def _consider(path: Path) -> None:
+        normalized = _norm_path(path)
+        if normalized in seen or path.is_symlink():
+            return
+        seen.add(normalized)
+        marker = _read_marker(path / RESOURCE_ROOT_MARKER)
+        if not _valid_marker(marker, "resource_root", expected_root_id):
+            return
+        candidates.append((path, str(marker.get("root_id") or "")))
+
+    for trusted_path in trusted_paths:
+        _consider(trusted_path)
+        parent = trusted_path.parent
+        if not parent.is_dir() or parent.is_symlink():
+            continue
+        try:
+            for child in parent.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    _consider(child)
+        except OSError:
+            continue
+
+    if not candidates:
+        return ResourceRootRecovery("missing", None, str(expected_root_id or ""), ())
+
+    grouped: dict[str, list[Path]] = {}
+    for path, root_id in candidates:
+        grouped.setdefault(root_id, []).append(path)
+    duplicate_paths = [path for paths in grouped.values() if len(paths) > 1 for path in paths]
+    if duplicate_paths:
+        return ResourceRootRecovery(
+            "conflict",
+            None,
+            str(expected_root_id or candidates[0][1]),
+            tuple(duplicate_paths),
+        )
+
+    preferred: list[Path] = []
+    for value in (configured_root, default_root):
+        if str(value or "").strip():
+            preferred.append(Path(value))
+    for preferred_path in preferred:
+        for candidate_path, root_id in candidates:
+            if _norm_path(preferred_path) == _norm_path(candidate_path):
+                return ResourceRootRecovery("current", candidate_path, root_id, tuple(path for path, _ in candidates))
+    if len(candidates) == 1:
+        path, root_id = candidates[0]
+        return ResourceRootRecovery("recovered", path, root_id, (path,))
+    return ResourceRootRecovery("conflict", None, "", tuple(path for path, _ in candidates))
 
 
 def update_resource_root_history(
@@ -174,7 +484,46 @@ class ResourcePathManager:
         return resolve_resource_root_dir(self.config.get("resource_root_dir", ""))
 
     def get_paths(self) -> ResourcePaths:
-        return build_resource_paths(self.get_resource_root_dir())
+        return self.get_resolution().paths
+
+    def get_resolution(self) -> ResourcePathResolution:
+        return resolve_resource_paths(
+            self.get_resource_root_dir(),
+            self.config.get("resource_path_overrides", {}),
+        )
+
+    def recover_configured_root(
+        self,
+        default_root: str | Path | None = None,
+        expected_root_id: str | None = None,
+    ) -> ResourceRootRecovery:
+        configured_root = self.get_resource_root_dir()
+        result = recover_resource_root(
+            configured_root=configured_root,
+            default_root=default_root or default_resource_root_dir(),
+            history=self.config.get("resource_root_history", []),
+            expected_root_id=expected_root_id,
+        )
+        if result.status != "recovered" or result.resource_root_dir is None:
+            return result
+
+        recovered_root = str(result.resource_root_dir)
+        self.config["resource_root_history"] = update_resource_root_history(
+            self.config.get("resource_root_history", []),
+            configured_root,
+            current_root=recovered_root,
+        )
+        self.config["resource_root_dir"] = recovered_root
+        metadata = self.config.get("path_metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            self.config["path_metadata"] = metadata
+        metadata["resource_root"] = {
+            "user_modified": False,
+            "path_source": "recovery_scan",
+        }
+        self.config["library_dir"] = str(self.get_paths().voice_library_dir)
+        return result
 
     def get_resource_path_info(self) -> dict[str, Any]:
         paths = self.get_paths()
@@ -194,10 +543,25 @@ class ResourcePathManager:
             "custom_text_backup_dir": str(paths.custom_text_backup_dir),
         }
 
-    def ensure_standard_dirs_and_markers(self) -> dict[str, Any]:
-        paths = self.get_paths()
+    def ensure_standard_dirs_and_markers(
+        self,
+        root_id_hint: str | None = None,
+    ) -> dict[str, Any]:
+        resolution = self.get_resolution()
+        paths = resolution.paths
         created: list[str] = []
         marker_errors: list[str] = []
+
+        if resolution.conflicts:
+            return {
+                "success": False,
+                "resource_root_dir": str(paths.resource_root_dir),
+                "created_dirs": [],
+                "marker_errors": [
+                    f"{role} 发现多个相同身份目录: {', '.join(str(path) for path in candidates)}"
+                    for role, candidates in resolution.conflicts.items()
+                ],
+            }
 
         for dir_path in (
             paths.resource_root_dir,
@@ -216,15 +580,49 @@ class ResourcePathManager:
 
         root_marker = paths.resource_root_dir / RESOURCE_ROOT_MARKER
         root_data = _read_marker(root_marker) or {}
-        root_id = str(root_data.get("root_id") or uuid.uuid4())
+        if root_marker.exists() and not _valid_marker(root_data, "resource_root"):
+            return {
+                "success": False,
+                "resource_root_dir": str(paths.resource_root_dir),
+                "created_dirs": created,
+                "marker_errors": ["资源库识别文件损坏或格式不受支持"],
+            }
+        existing_root_id = str(root_data.get("root_id") or "")
+        if root_id_hint and existing_root_id and existing_root_id != str(root_id_hint):
+            return {
+                "success": False,
+                "resource_root_dir": str(paths.resource_root_dir),
+                "created_dirs": created,
+                "marker_errors": ["资源库身份与安装登记不一致"],
+            }
+        root_id = existing_root_id or str(root_id_hint or uuid.uuid4())
         now = _now_iso()
+        marker_paths = {
+            role: getattr(paths, ROLE_PATH_ATTRIBUTES[role]) / ROLE_MARKER_FILENAMES[role]
+            for role in ROLE_PATH_ATTRIBUTES
+            if role != "resource_root"
+        }
+        marker_data: dict[str, dict[str, Any]] = {}
+        for _relative_marker, role, parent_role in MARKER_DEFINITIONS[1:]:
+            marker_path = marker_paths[role]
+            previous = _read_marker(marker_path) or {}
+            marker_data[role] = previous
+            if marker_path.exists() and (
+                not _valid_marker(previous, role, root_id)
+                or previous.get("parent_role") != parent_role
+            ):
+                return {
+                    "success": False,
+                    "resource_root_dir": str(paths.resource_root_dir),
+                    "created_dirs": created,
+                    "marker_errors": [f"{role} 目录属于另一个资源库或识别文件损坏"],
+                }
 
         try:
             self._write_marker(root_marker, "resource_root", None, root_id, root_data, now)
-            for relative_marker, role, parent_role in MARKER_DEFINITIONS[1:]:
-                marker_path = paths.resource_root_dir / relative_marker
-                previous = _read_marker(marker_path) or {}
-                self._write_marker(marker_path, role, parent_role, root_id, previous, now)
+            for _relative_marker, role, parent_role in MARKER_DEFINITIONS[1:]:
+                marker_path = marker_paths[role]
+                self._write_marker(marker_path, role, parent_role, root_id, marker_data[role], now)
             self._write_marker_note(paths.resource_root_dir)
         except Exception as e:
             marker_errors.append(str(e))

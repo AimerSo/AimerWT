@@ -45,6 +45,11 @@ from services.resource_path_manager import (
     ResourcePathManager,
     infer_resource_root_from_legacy_library_dir,
 )
+from services.startup_bootstrap import (
+    StartupRegistrationError,
+    bootstrap_startup_data,
+    register_startup_installation,
+)
 from utils.logger import setup_logger, get_logger, set_ui_callback
 from services.sights_manager import SightsManager
 from services.skins_manager import SkinsManager
@@ -68,7 +73,7 @@ from services.telemetry_manager import (
     set_client_device_token,
     submit_feedback,
 )
-from utils.utils import get_docs_data_dir, get_log_dir, open_folder_cross_platform
+from utils.utils import get_docs_data_dir, get_legacy_docs_data_dir, get_log_dir, open_folder_cross_platform
 from services.remote_asset_cache import RemoteAssetCache
 try:
     from services.theme_unlock import ThemeUnlockService
@@ -113,7 +118,8 @@ DIAGNOSTIC_LOG_PATH = DIAGNOSTIC_TOOL_DIR / "diagnostic_events.jsonl"
 _diagnostic_recorder = None
 _diagnostic_recorder_checked = False
 _diagnostic_logger_attached = False
-_single_instance_lock_file = None
+_startup_instance_guard = None
+_startup_migration_result = None
 
 
 def _get_remote_themes_dir() -> Path:
@@ -494,57 +500,78 @@ def _show_fatal_error(title: str, message: str) -> None:
         pass
 
 
-def _acquire_single_instance_lock(lock_path: Path | None = None) -> bool:
-    global _single_instance_lock_file
-    if _single_instance_lock_file is not None:
-        return True
-
-    lock_path = lock_path or (get_docs_data_dir() / "AimerWT.single-instance.lock")
+def _show_resource_migration_choice(existing_root: Path, current_default: Path) -> str:
+    """在主窗口启动前让用户明确选择旧资源库的处理方式。"""
     try:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_file = open(lock_path, "a+b")
-        lock_file.seek(0)
-        if sys.platform == "win32":
-            import msvcrt
+        import tkinter as tk
 
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
+        selected = {"value": ""}
+        root = tk.Tk()
+        root.title("AimerWT 资源库迁移")
+        root.resizable(False, False)
+        root.attributes("-topmost", True)
 
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        try:
-            lock_file.close()
-        except Exception:
-            pass
-        return False
+        container = tk.Frame(root, padx=24, pady=20)
+        container.pack(fill="both", expand=True)
+        tk.Label(
+            container,
+            text="发现旧版正在使用的资源库",
+            font=("Microsoft YaHei UI", 13, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            container,
+            text=(
+                f"旧资源库：{existing_root}\n"
+                f"新位置：{current_default}\n\n"
+                "请选择 3.1 如何处理。旧资源库不会被删除。"
+            ),
+            justify="left",
+            wraplength=620,
+            font=("Microsoft YaHei UI", 10),
+            pady=12,
+        ).pack(anchor="w")
 
-    _single_instance_lock_file = lock_file
-    return True
+        def choose(value: str) -> None:
+            selected["value"] = value
+            root.destroy()
 
+        button_frame = tk.Frame(container)
+        button_frame.pack(fill="x", pady=(8, 0))
+        choices = (
+            ("继续使用旧资源库（推荐）", "use_existing"),
+            ("复制到新位置", "copy_to_current"),
+            ("使用新空资源库", "use_empty"),
+        )
+        for label, value in choices:
+            tk.Button(
+                button_frame,
+                text=label,
+                command=lambda current=value: choose(current),
+                width=24,
+                pady=6,
+            ).pack(side="left", padx=(0, 8))
 
-def _release_single_instance_lock() -> None:
-    global _single_instance_lock_file
-    lock_file = _single_instance_lock_file
-    if lock_file is None:
-        return
-    _single_instance_lock_file = None
-    try:
-        lock_file.seek(0)
-        if sys.platform == "win32":
-            import msvcrt
-
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        root.protocol("WM_DELETE_WINDOW", lambda: choose(""))
+        root.update_idletasks()
+        width = root.winfo_reqwidth()
+        height = root.winfo_reqheight()
+        x = max(0, (root.winfo_screenwidth() - width) // 2)
+        y = max(0, (root.winfo_screenheight() - height) // 2)
+        root.geometry(f"{width}x{height}+{x}+{y}")
+        root.mainloop()
+        if not selected["value"]:
+            raise RuntimeError("用户关闭了资源库迁移选择")
+        return selected["value"]
     except Exception:
-        pass
-    try:
-        lock_file.close()
-    except Exception:
-        pass
+        raise
+
+
+def _release_startup_instance_guard() -> None:
+    global _startup_instance_guard
+    guard = _startup_instance_guard
+    _startup_instance_guard = None
+    if guard is not None:
+        guard.release()
 
 
 def _install_global_exception_handlers() -> None:
@@ -738,19 +765,27 @@ class AppApi:
         self._exit_animation_active = False
         self._latest_server_config = None
 
-        # 管理器实例：配置、语音包库、涂装、炮镜、游戏目录操作
-        # 注意：所有管理器现在统一使用 logger.py 的日誌系统
+        # 管理器实例：配置、资源路径、安装登记、语音包库和游戏目录操作
         self._cfg_mgr = ConfigManager()
+        self._resource_paths = ResourcePathManager(self._cfg_mgr.config, app_version=APP_VERSION)
+        runtime_executable = Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__).resolve()
+        self._startup_registration = register_startup_installation(
+            self._cfg_mgr,
+            self._resource_paths,
+            app_version=APP_VERSION,
+            migration=_startup_migration_result,
+            install_dir=runtime_executable.parent,
+            executable_path=runtime_executable,
+            resource_migration_choice_provider=_show_resource_migration_choice,
+        )
+        self._installation_registry = self._startup_registration.registry
         if ThemeUnlockService is not None:
             self._theme_unlock = ThemeUnlockService(self._cfg_mgr)
         else:
             log.info("Theme unlock module unavailable; using GitHub fallback mode.")
             self._theme_unlock = _ThemeUnlockFallbackService(self._cfg_mgr)
 
-        # 从配置读取自定义路径
         custom_pending = self._cfg_mgr.get_pending_dir()
-        self._resource_paths = ResourcePathManager(self._cfg_mgr.config, app_version=APP_VERSION)
-        self._resource_paths.ensure_standard_dirs_and_markers()
         resource_paths = self._resource_paths.get_paths()
         self._lib_mgr = LibraryManager(
             pending_dir=custom_pending if custom_pending else None,
@@ -2253,6 +2288,14 @@ class AppApi:
             "close_confirm": self._cfg_mgr.get_close_confirm(),
             "ui_language": self._cfg_mgr.get_ui_language(),
             "background_paused": self._background_start_paused,
+            "startup_migration": copy.deepcopy(_startup_migration_result or {"status": "not_run"}),
+            "installation_id": self._startup_registration.current.get("installation_id", ""),
+            "resource_recovery": {
+                "status": self._startup_registration.resource_recovery.status,
+                "candidates": [
+                    str(path) for path in self._startup_registration.resource_recovery.candidates
+                ],
+            },
         }
 
     def ensure_telemetry_ready(self, timeout_ms=2500):
@@ -2748,7 +2791,8 @@ class AppApi:
             path = folder[0].replace(os.sep, "/")
             valid, msg = self._logic.validate_game_path(path)
             if valid:
-                self._cfg_mgr.set_game_path(path)
+                if not self._cfg_mgr.set_game_path(path):
+                    return {"valid": False, "path": path, "msg": "路径登记保存失败，仍使用原路径"}
                 log.info(f"[SUCCESS] 手动加载路径: {path}")
                 return {"valid": True, "path": path}
             else:
@@ -3102,13 +3146,14 @@ class AppApi:
 
             time.sleep(0.3)
             if found_path:
-                self._cfg_mgr.set_game_path(found_path)
-                self._logic.validate_game_path(found_path)
-                log.info("[SUCCESS] 自动搜索成功，路径已保存。")
-
-                # 通知前端更新 UI
-                path_js = json.dumps(found_path.replace(os.sep, "/"), ensure_ascii=False)
-                self._window.evaluate_js(f"app.onSearchSuccess({path_js})")
+                if not self._cfg_mgr.set_game_path(found_path):
+                    log.error("自动搜索找到游戏，但路径登记保存失败，仍使用原路径。")
+                    self._window.evaluate_js("app.onSearchFail()")
+                else:
+                    self._logic.validate_game_path(found_path)
+                    log.info("[SUCCESS] 自动搜索成功，路径已保存。")
+                    path_js = json.dumps(found_path.replace(os.sep, "/"), ensure_ascii=False)
+                    self._window.evaluate_js(f"app.onSearchSuccess({path_js})")
             else:
                 log.error("深度扫描未发现游戏客户端。")
                 self._window.evaluate_js("app.onSearchFail()")
@@ -5918,7 +5963,8 @@ class AppApi:
             valid, msg = self._logic.validate_game_path(game_path)
             if not valid:
                 return {"success": False, "msg": msg or "路径无效"}
-            self._cfg_mgr.set_game_path(game_path)
+            if not self._cfg_mgr.set_game_path(game_path):
+                return {"success": False, "msg": "路径登记保存失败，仍使用原路径"}
             return {"success": True, "path": game_path}
         except Exception as e:
             log.error(f"设置 UserSkins 主版本路径失败: {e}")
@@ -7200,7 +7246,10 @@ class AppApi:
         try:
             cfg_path = self._cfg_mgr.get_sights_path()
             path = self._sights_mgr.select_uid_path(uid, configured_sights_path=cfg_path)
-            self._cfg_mgr.set_sights_path(path)
+            if not self._cfg_mgr.set_sights_path(path):
+                if cfg_path:
+                    self._sights_mgr.set_usersights_path(cfg_path)
+                return {"success": False, "error": "路径登记保存失败，仍使用原路径"}
             log.info(f"已选择 UID {uid} 的炮镜路径: {path}")
             return {"success": True, "path": path}
         except Exception as e:
@@ -7213,8 +7262,12 @@ class AppApi:
         if folder and len(folder) > 0:
             path = folder[0]
             try:
+                previous_path = self._cfg_mgr.get_sights_path()
                 self._sights_mgr.set_usersights_path(path)
-                self._cfg_mgr.set_sights_path(path)
+                if not self._cfg_mgr.set_sights_path(path):
+                    if previous_path:
+                        self._sights_mgr.set_usersights_path(previous_path)
+                    return {"success": False, "error": "路径登记保存失败，仍使用原路径"}
                 log.info(f"炮镜路径已设置: {path}")
                 return {"success": True, "path": path}
             except Exception as e:
@@ -7816,7 +7869,8 @@ class AppApi:
 
             if pending_dir == "":
                 # 重设为预设
-                self._cfg_mgr.set_pending_dir("")
+                if not self._cfg_mgr.set_pending_dir(""):
+                    return {"success": False, "msg": "路径登记保存失败，仍使用原路径"}
                 default_pending = Path(self._lib_mgr.get_current_paths()["default_pending_dir"])
                 self._lib_mgr.update_paths(pending_dir=str(default_pending))
                 log.info(f"待解压区已重设为预设路径: {default_pending}")
@@ -7832,7 +7886,8 @@ class AppApi:
                     p.mkdir(parents=True, exist_ok=True)
                 except Exception as e:
                     return {"success": False, "msg": f"无法建立待解压区目录: {e}"}
-            self._cfg_mgr.set_pending_dir(pending_dir)
+            if not self._cfg_mgr.set_pending_dir(pending_dir):
+                return {"success": False, "msg": "路径登记保存失败，仍使用原路径"}
             self._lib_mgr.update_paths(pending_dir=pending_dir)
             return {"success": True}
         except Exception as e:
@@ -8242,6 +8297,7 @@ def on_app_started():
 
 
 def main() -> int:
+    global _startup_instance_guard, _startup_migration_result
     _install_global_exception_handlers()
 
     cli = _parse_cli_args()
@@ -8249,10 +8305,20 @@ def main() -> int:
     if getattr(cli, "self_test", False):
         return _run_startup_self_test()
 
-    if not _acquire_single_instance_lock():
-        _show_fatal_error("Aimer WT 已在运行", "Aimer WT 已经在运行，请勿重复启动。")
-        return 0
-    atexit.register(_release_single_instance_lock)
+    startup = bootstrap_startup_data(
+        APP_VERSION,
+        legacy_dir=get_legacy_docs_data_dir(),
+        target_dir=get_docs_data_dir(),
+    )
+    if not startup.success:
+        _show_fatal_error(
+            "AimerWT 启动受阻",
+            f"{startup.message}\n\n问题编号：{startup.error_code}",
+        )
+        return startup.exit_code
+    _startup_instance_guard = startup.guard
+    _startup_migration_result = startup.migration
+    atexit.register(_release_startup_instance_guard)
 
     if webview is None:
         err = globals().get("_WEBVIEW_IMPORT_ERROR")
@@ -8273,7 +8339,16 @@ def main() -> int:
         return 3
 
     # 创建后端 API 桥接对象
-    api = AppApi(perf_enabled=bool(getattr(cli, "perf", False)))
+    try:
+        api = AppApi(perf_enabled=bool(getattr(cli, "perf", False)))
+    except StartupRegistrationError as error:
+        log.error("启动登记失败 [%s]: %s", error.error_code, error)
+        _show_fatal_error(
+            "AimerWT 数据登记受阻",
+            f"{error}\n\n问题编号：{error.error_code}",
+        )
+        _release_startup_instance_guard()
+        return error.exit_code
 
     if sys.platform == "win32":
         try:
