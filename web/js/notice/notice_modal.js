@@ -348,21 +348,37 @@
 
     function ensureModal() {
         let overlay = document.getElementById(MODAL_ID);
-        if (overlay) return overlay;
+        if (overlay) {
+            if (overlay.parentElement !== document.body) {
+                document.body.appendChild(overlay);
+            }
+            return overlay;
+        }
 
         overlay = document.createElement('div');
         overlay.id = MODAL_ID;
         overlay.className = 'modal-overlay notice-detail-overlay';
         overlay.innerHTML = '<div id="notice-detail-shell" class="notice-detail-shell"></div>';
-        (document.getElementById('app-root') || document.body).appendChild(overlay);
+        document.body.appendChild(overlay);
 
         overlay.addEventListener('click', (e) => {
             const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
             const clickedInsideModal = path.some((node) => node && node.classList && node.classList.contains('notice-detail-modal'));
             if (!clickedInsideModal) closeNoticeDetail();
         });
+        document.addEventListener('keydown', (event) => {
+            if (event.key !== 'Escape') return;
+            const current = document.getElementById(MODAL_ID);
+            if (!current || !current.classList.contains('show') || current.classList.contains('hiding')) return;
+            event.stopPropagation();
+            closeNoticeDetail();
+        });
 
         return overlay;
+    }
+
+    function setNoticeDetailOpen(open) {
+        document.body.classList.toggle('notice-detail-open', Boolean(open));
     }
 
     function closeNoticeDetail() {
@@ -376,6 +392,7 @@
             if (!overlay.classList.contains('hiding')) return;
             overlay.classList.remove('show');
             overlay.classList.remove('hiding');
+            setNoticeDetailOpen(false);
         };
 
         overlay.addEventListener('animationend', finalize, { once: true });
@@ -683,6 +700,7 @@
         overlay.classList.remove('entered');
         overlay.classList.remove('hiding');
         overlay.classList.add('show');
+        setNoticeDetailOpen(true);
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 if (!overlay.classList.contains('show') || overlay.classList.contains('hiding')) return;

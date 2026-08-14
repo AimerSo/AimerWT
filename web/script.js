@@ -5538,49 +5538,75 @@ app.init = async function () {
     }, 2000);
 };
 
-// 添加上下文菜单功能
-app.showContextMenu = function (event, menuItems) {
+app.hideContextMenu = function () {
+    const cleanup = this._contextMenuCleanup;
+    this._contextMenuCleanup = null;
+    const existingMenu = document.querySelector('.context-menu');
+    if (existingMenu) existingMenu.remove();
+    if (typeof cleanup === 'function') cleanup();
+};
+
+// 共用右键菜单：支持 compact 尺寸，捕获阶段关闭，避免内部 stopPropagation 把菜单卡住
+app.showContextMenu = function (event, menuItems, options) {
     event.preventDefault();
     event.stopPropagation();
+    this.hideContextMenu();
 
-    // 移除已存在的菜单
-    const existingMenu = document.querySelector('.context-menu');
-    if (existingMenu) {
-        existingMenu.remove();
-    }
-
-    // 创建菜单容器
+    const compact = !!(options && options.compact);
     const menu = document.createElement('div');
-    menu.className = 'context-menu';
-    menu.style.cssText = `
-        position: fixed;
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        z-index: 10000;
-        min-width: 220px;
-        padding: 8px 0;
-    `;
+    menu.className = 'context-menu' + (compact ? ' compact' : '');
+    menu.style.cssText = compact
+        ? `
+            position: fixed;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 10000;
+            min-width: 176px;
+            max-width: 240px;
+            padding: 4px 0;
+        `
+        : `
+            position: fixed;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 10000;
+            min-width: 220px;
+            padding: 8px 0;
+        `;
 
-    // 添加菜单项
     menuItems.forEach(item => {
         const menuItem = document.createElement('div');
         menuItem.className = 'context-menu-item' + (item.danger ? ' danger' : '');
-        menuItem.style.cssText = `
-            padding: 10px 16px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            transition: background 0.2s;
-        `;
+        menuItem.style.cssText = compact
+            ? `
+                padding: 8px 12px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                transition: background 0.2s;
+            `
+            : `
+                padding: 10px 16px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                transition: background 0.2s;
+            `;
 
+        const iconSize = compact ? '14px' : '18px';
+        const labelSize = compact ? '13px' : '14px';
+        const descSize = compact ? '10px' : '12px';
         menuItem.innerHTML = `
-            <i class="${item.icon}" style="font-size: 18px; ${item.danger ? 'color: var(--danger);' : ''}"></i>
-            <div style="flex: 1;">
-                <div style="font-weight: 500; ${item.danger ? 'color: var(--danger);' : ''}">${item.label}</div>
-                ${item.description ? `<div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">${item.description}</div>` : ''}
+            <i class="${item.icon}" style="font-size: ${iconSize}; ${item.danger ? 'color: var(--danger);' : ''}"></i>
+            <div style="flex: 1; min-width: 0;">
+                <div style="font-weight: 500; font-size: ${labelSize}; line-height: 1.2; ${item.danger ? 'color: var(--danger);' : ''}">${item.label}</div>
+                ${item.description ? `<div style="font-size: ${descSize}; color: var(--text-secondary); margin-top: 1px; line-height: 1.3;">${item.description}</div>` : ''}
             </div>
         `;
 
@@ -5598,7 +5624,7 @@ app.showContextMenu = function (event, menuItems) {
         menuItem.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            menu.remove();
+            app.hideContextMenu();
             if (item.action) {
                 const handleActionError = (error) => {
                     console.error('context menu action failed:', error);
@@ -5617,17 +5643,13 @@ app.showContextMenu = function (event, menuItems) {
         menu.appendChild(menuItem);
     });
 
-    // 添加到页面
     document.body.appendChild(menu);
 
-    // 定位菜单
     const x = event.clientX;
     const y = event.clientY;
     const menuRect = menu.getBoundingClientRect();
     const windowWidth = window.innerWidth;
     const windowHeight = window.innerHeight;
-
-    // 调整位置避免超出屏幕
     let left = x;
     let top = y;
 
@@ -5641,15 +5663,38 @@ app.showContextMenu = function (event, menuItems) {
     menu.style.left = left + 'px';
     menu.style.top = top + 'px';
 
-    // 点击其他地方关闭菜单
-    const closeMenu = (e) => {
-        if (!menu.contains(e.target)) {
-            menu.remove();
-            document.removeEventListener('click', closeMenu);
-        }
+    const onPointerDown = (e) => {
+        if (menu.contains(e.target)) return;
+        app.hideContextMenu();
     };
+    const onKeyDown = (e) => {
+        if (e.key === 'Escape') app.hideContextMenu();
+    };
+    const onViewportChange = () => {
+        app.hideContextMenu();
+    };
+
+    this._contextMenuCleanup = () => {
+        document.removeEventListener('pointerdown', onPointerDown, true);
+        document.removeEventListener('mousedown', onPointerDown, true);
+        document.removeEventListener('click', onPointerDown, true);
+        document.removeEventListener('contextmenu', onPointerDown, true);
+        document.removeEventListener('keydown', onKeyDown, true);
+        window.removeEventListener('scroll', onViewportChange, true);
+        window.removeEventListener('blur', onViewportChange);
+        window.removeEventListener('resize', onViewportChange);
+    };
+
     setTimeout(() => {
-        document.addEventListener('click', closeMenu);
+        if (!document.body.contains(menu)) return;
+        document.addEventListener('pointerdown', onPointerDown, true);
+        document.addEventListener('mousedown', onPointerDown, true);
+        document.addEventListener('click', onPointerDown, true);
+        document.addEventListener('contextmenu', onPointerDown, true);
+        document.addEventListener('keydown', onKeyDown, true);
+        window.addEventListener('scroll', onViewportChange, true);
+        window.addEventListener('blur', onViewportChange);
+        window.addEventListener('resize', onViewportChange);
     }, 0);
 };
 

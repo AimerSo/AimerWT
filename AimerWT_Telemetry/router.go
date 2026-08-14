@@ -30,6 +30,7 @@ const (
 	userNotificationTTL          = 15 * 24 * time.Hour
 	userNotificationTitleLimit   = 80
 	userNotificationSummaryLimit = 200
+	userNotificationTagLimit     = 12
 	userNotificationBodyLimit    = 4000
 )
 
@@ -37,6 +38,7 @@ var errInvalidUserNotification = errors.New("通知字段无效")
 var errClientCommandNotPending = errors.New("命令不是待领取状态")
 var errUserNotificationCannotRevoke = errors.New("系统消息无法撤回")
 var userNotificationRestrictedContent = regexp.MustCompile(`(?i)(https?://|ftp://|mailto:|data:|javascript:|www\.|!?\[[^\]]*\]\s*\(|<[a-z!/][^>]*>)`)
+var userNotificationColorPattern = regexp.MustCompile(`^(?:#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(?:,\s*(?:0|1|0?\.\d+)\s*)?\))$`)
 var adClickIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
 var allowedAdClickMedia = map[string]struct{}{
 	"carousel": {}, "knowledge_link": {}, "notice": {},
@@ -49,6 +51,17 @@ var userNotificationIcons = map[string]struct{}{
 	"ri-megaphone-line":      {},
 	"ri-gift-line":           {},
 	"ri-error-warning-line":  {},
+	"ri-bug-line":            {},
+	"ri-markdown-line":       {},
+}
+
+var userNotificationTypes = map[string]struct{}{
+	"normal": {}, "update": {}, "urgent": {}, "event": {}, "bonus": {},
+}
+
+var userNotificationShapes = map[string]struct{}{
+	"rounded": {},
+	"circle":  {},
 }
 
 type userNotificationRequest struct {
@@ -56,6 +69,13 @@ type userNotificationRequest struct {
 	Title        string `json:"title"`
 	Summary      string `json:"summary"`
 	Icon         string `json:"icon"`
+	VisualType   string `json:"type"`
+	Tag          string `json:"tag"`
+	IconColor    string `json:"icon_color"`
+	IconBG       string `json:"icon_bg"`
+	IconShape    string `json:"icon_shape"`
+	TagColor     string `json:"tag_color"`
+	TagBG        string `json:"tag_bg"`
 	Renderer     string `json:"renderer"`
 	Variant      string `json:"variant"`
 	PopupTitle   string `json:"popup_title"`
@@ -72,6 +92,13 @@ func createUserNotification(req userNotificationRequest, createdAt time.Time) (*
 	req.Title = strings.TrimSpace(req.Title)
 	req.Summary = strings.TrimSpace(req.Summary)
 	req.Icon = strings.TrimSpace(req.Icon)
+	req.VisualType = strings.ToLower(strings.TrimSpace(req.VisualType))
+	req.Tag = strings.TrimSpace(req.Tag)
+	req.IconColor = strings.TrimSpace(req.IconColor)
+	req.IconBG = strings.TrimSpace(req.IconBG)
+	req.IconShape = strings.ToLower(strings.TrimSpace(req.IconShape))
+	req.TagColor = strings.TrimSpace(req.TagColor)
+	req.TagBG = strings.TrimSpace(req.TagBG)
 	req.Renderer = strings.TrimSpace(req.Renderer)
 	req.Variant = strings.TrimSpace(req.Variant)
 	req.PopupTitle = strings.TrimSpace(req.PopupTitle)
@@ -91,6 +118,27 @@ func createUserNotification(req userNotificationRequest, createdAt time.Time) (*
 	}
 	if _, ok := userNotificationIcons[req.Icon]; !ok {
 		return nil, invalidUserNotification("图标不在白名单内")
+	}
+	if len([]rune(req.Tag)) > userNotificationTagLimit {
+		return nil, invalidUserNotification("标签不能超过 12 字")
+	}
+	if req.IconColor != "" && !userNotificationColorPattern.MatchString(req.IconColor) {
+		return nil, invalidUserNotification("图标颜色格式不正确")
+	}
+	if req.IconBG != "" && !userNotificationColorPattern.MatchString(req.IconBG) {
+		return nil, invalidUserNotification("图标底色格式不正确")
+	}
+	if req.IconShape == "" {
+		req.IconShape = "rounded"
+	}
+	if _, ok := userNotificationShapes[req.IconShape]; !ok {
+		return nil, invalidUserNotification("图标形状不在白名单内")
+	}
+	if req.TagColor != "" && !userNotificationColorPattern.MatchString(req.TagColor) {
+		return nil, invalidUserNotification("标签文字色格式不正确")
+	}
+	if req.TagBG != "" && !userNotificationColorPattern.MatchString(req.TagBG) {
+		return nil, invalidUserNotification("标签底色格式不正确")
 	}
 	if req.Renderer == "" {
 		req.Renderer = "none"
@@ -124,6 +172,15 @@ func createUserNotification(req userNotificationRequest, createdAt time.Time) (*
 	default:
 		return nil, invalidUserNotification("渲染器不在白名单内")
 	}
+	if req.VisualType == "" {
+		req.VisualType = "normal"
+		if req.Renderer == "notice" && req.Variant == "update" {
+			req.VisualType = "update"
+		}
+	}
+	if _, ok := userNotificationTypes[req.VisualType]; !ok {
+		return nil, invalidUserNotification("消息类型不在白名单内")
+	}
 	if req.Renderer != "none" {
 		if req.PopupTitle == "" {
 			req.PopupTitle = req.Title
@@ -154,6 +211,13 @@ func createUserNotification(req userNotificationRequest, createdAt time.Time) (*
 			"title":           req.Title,
 			"summary":         req.Summary,
 			"icon":            req.Icon,
+			"type":            req.VisualType,
+			"tag":             req.Tag,
+			"icon_color":      req.IconColor,
+			"icon_bg":         req.IconBG,
+			"icon_shape":      req.IconShape,
+			"tag_color":       req.TagColor,
+			"tag_bg":          req.TagBG,
 			"created_at":      createdAt.UnixMilli(),
 			"expires_at":      expiresAt.UnixMilli(),
 			"presentation": gin.H{

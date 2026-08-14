@@ -20,7 +20,7 @@
     justify-content: center;
     cursor: pointer;
     box-shadow: 0 8px 20px rgba(9, 16, 32, 0.16);
-    transition: opacity 0.28s ease, transform 0.28s ease, box-shadow 0.28s ease, color 0.2s ease;
+    transition: opacity 0.28s ease, box-shadow 0.28s ease, color 0.2s ease;
     opacity: 0;
     transform: translateY(5px) scale(0.96);
     pointer-events: none;
@@ -58,9 +58,18 @@
     box-shadow: 0 12px 28px rgba(9, 16, 32, 0.24);
 }
 
+#btn-notification-bell.near:active,
+#btn-notification-bell:hover:active,
+#btn-notification-bell.bell-has-new:active,
+#btn-notification-bell.bell-panel-open:active {
+    transform: translateY(1px) scale(0.9);
+    box-shadow: 0 4px 12px rgba(9, 16, 32, 0.18);
+}
+
 /* 铃铛晃动动画 */
-#btn-notification-bell.bell-ringing i {
-    animation: bell-swing 0.8s ease-in-out 3;
+#btn-notification-bell.bell-ringing i,
+#btn-notification-bell.bell-ringing-system i {
+    animation: bell-swing 0.8s ease-in-out infinite;
     transform-origin: 50% 4px;
 }
 
@@ -119,11 +128,12 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     position: fixed;
     inset: 0;
     z-index: 2650;
-    display: none;
+    display: block;
+    pointer-events: none;
 }
 
 .notif-panel-overlay.open {
-    display: block;
+    pointer-events: auto;
 }
 
 .notif-panel {
@@ -140,20 +150,30 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
         0 20px 60px rgba(9, 16, 32, 0.22),
         0 8px 24px rgba(9, 16, 32, 0.10),
         0 0 0 1px rgba(255, 255, 255, 0.06) inset;
-    display: none;
+    display: flex;
     flex-direction: column;
     overflow: hidden;
     backdrop-filter: blur(16px) saturate(1.2);
     -webkit-backdrop-filter: blur(16px) saturate(1.2);
     opacity: 0;
-    transform: translateY(12px) scale(0.96);
-    transition: opacity 0.25s ease, transform 0.25s cubic-bezier(.2, .8, .2, 1);
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(16px) scale(0.97);
+    transition: opacity 0.28s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), visibility 0.28s;
 }
 
 .notif-panel.open {
-    display: flex;
     opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
     transform: translateY(0) scale(1);
+}
+
+.notif-panel.hiding {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(12px) scale(0.98);
 }
 
 /* 面板头部 */
@@ -208,6 +228,76 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     color: var(--primary, #ff9900);
 }
 
+.notif-panel-action-btn.active {
+    background: color-mix(in srgb, var(--primary, #ff9900) 10%, transparent);
+    color: var(--primary, #ff9900);
+}
+
+.notif-panel-action-btn:active,
+.notif-tab-btn:active,
+.notif-item-clickable:active {
+    transform: scale(0.96);
+    transition-duration: 0.08s;
+}
+
+.notif-panel-action-btn:focus-visible,
+.notif-tab-btn:focus-visible,
+.notif-toggle-switch input:focus-visible + .notif-toggle-slider {
+    outline: 2px solid var(--primary, #ff9900);
+    outline-offset: 2px;
+}
+
+/* 消息列表和设置页共用面板中部，切换时保留头尾不动 */
+.notif-panel-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+
+.notif-panel-feed,
+.notif-settings-page {
+    grid-area: 1 / 1;
+    min-width: 0;
+    min-height: 0;
+    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+}
+
+.notif-panel-feed {
+    display: flex;
+    flex-direction: column;
+    z-index: 1;
+}
+
+.notif-settings-page {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 2;
+    overflow-y: auto;
+    padding: 18px;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(8px);
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb, #CCCCCC) transparent;
+}
+
+.notif-panel-body.settings-open .notif-panel-feed {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-6px);
+}
+
+.notif-panel-body.settings-open .notif-settings-page {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+}
+
 /* Tab 栏 */
 .notif-tab-bar {
     display: flex;
@@ -232,6 +322,13 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 0;
+}
+
+.notif-tab-label {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
     gap: 5px;
 }
 
@@ -256,6 +353,10 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
 
 /* Tab 未读数 */
 .notif-tab-count {
+    position: absolute;
+    left: calc(100% + 3px);
+    top: 50%;
+    transform: translateY(-50%);
     font-size: 10px;
     font-weight: 700;
     background: rgba(239, 68, 68, 0.12);
@@ -280,37 +381,67 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
 .notif-list-wrap {
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
+    display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+    overflow: hidden;
     padding: 6px 0;
+}
+
+.notif-list-pane {
+    grid-area: 1 / 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(6px);
+    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar-thumb, #CCCCCC) transparent;
 }
 
-.notif-list-wrap::-webkit-scrollbar {
+.notif-list-pane.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+}
+
+.notif-list-pane::-webkit-scrollbar,
+.notif-settings-page::-webkit-scrollbar {
     width: var(--scrollbar-width, 6px);
     height: var(--scrollbar-width, 6px);
 }
 
-.notif-list-wrap::-webkit-scrollbar-button {
+.notif-list-pane::-webkit-scrollbar-button,
+.notif-settings-page::-webkit-scrollbar-button {
     display: none;
     width: 0;
     height: 0;
 }
 
-.notif-list-wrap::-webkit-scrollbar-track {
+.notif-list-pane::-webkit-scrollbar-track,
+.notif-settings-page::-webkit-scrollbar-track {
     background: transparent;
 }
 
-.notif-list-wrap::-webkit-scrollbar-thumb {
+.notif-list-pane::-webkit-scrollbar-thumb,
+.notif-settings-page::-webkit-scrollbar-thumb {
     background-color: var(--scrollbar-thumb, #CCCCCC);
     border-radius: var(--scrollbar-radius, 3px);
 }
 
-.notif-list-wrap::-webkit-scrollbar-thumb:hover {
+.notif-list-pane::-webkit-scrollbar-thumb:hover,
+.notif-settings-page::-webkit-scrollbar-thumb:hover {
     background-color: var(--scrollbar-thumb-hover, var(--primary, #FF9900));
 }
 
-.notif-list {
+.notif-list-pane .notif-list {
+    flex: 1 0 auto;
+    min-height: 100%;
     display: flex;
     flex-direction: column;
 }
@@ -327,7 +458,7 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     font: inherit;
     text-align: left;
     cursor: default;
-    transition: background 0.18s ease;
+    transition: background 0.18s ease, transform 0.08s ease;
     border-bottom: 1px solid color-mix(in srgb, var(--border-color, #e2e8f0) 50%, transparent);
 }
 
@@ -364,6 +495,10 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     color: #3B82F6;
 }
 
+.notif-item-icon.icon-shape-circle {
+    border-radius: 999px;
+}
+
 /* 点赞图标 */
 .notif-item-icon.icon-like {
     background: rgba(239, 68, 68, 0.10);
@@ -381,6 +516,42 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     min-width: 0;
 }
 
+.notif-system-action.notif-item-unread {
+    box-shadow: inset 3px 0 0 var(--primary, #ff9900);
+}
+
+.notif-system-action.notif-item-unread .notif-item-text {
+    font-weight: 650;
+    color: var(--text-main, #2c3e50);
+}
+
+.notif-system-action:not(.notif-item-unread) .notif-item-text {
+    font-weight: 500;
+    color: color-mix(in srgb, var(--text-main, #2c3e50) 68%, var(--text-sec, #7f8c8d));
+}
+
+.notif-system-action:not(.notif-item-unread) .notif-item-sub,
+.notif-system-action:not(.notif-item-unread) .notif-item-time {
+    opacity: 0.72;
+}
+
+.notif-system-action:not(.notif-item-unread) .notif-item-icon {
+    opacity: 0.55;
+}
+
+.notif-system-action:not(.notif-item-unread) .notice-tag {
+    opacity: 0.72;
+}
+
+.notif-item-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    min-height: 22px;
+    margin: 0 0 3px;
+}
+
 .notif-item-text {
     font-size: 13px;
     font-weight: 500;
@@ -395,6 +566,20 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     -webkit-box-orient: vertical;
 }
 
+.notif-panel .notif-item-text {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    -webkit-box-orient: unset;
+    white-space: nowrap;
+}
+
+.notif-item-title-row .notif-item-text {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+}
+
 .notif-item-text strong {
     color: var(--primary, #ff9900);
     font-weight: 600;
@@ -407,19 +592,47 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-height: 16px;
 }
 
 .notif-item-time {
     font-size: 11px;
     color: var(--text-sec, #7f8c8d);
-    white-space: nowrap;
-    flex-shrink: 0;
+    position: relative;
+    flex: 0 0 auto;
+    min-width: 0;
     margin-top: 2px;
+    text-align: right;
+}
+
+.notif-item-time-sizer {
+    visibility: hidden;
+    display: block;
+    white-space: nowrap;
+    font-size: 11px;
+    pointer-events: none;
+}
+
+.notif-item-time-text {
+    position: absolute;
+    top: 0;
+    right: 0;
+    white-space: nowrap;
+}
+
+.notif-item-time-sizer,
+.notif-item-time-text {
+    font-variant-numeric: tabular-nums;
 }
 
 /* 空状态 */
 .notif-empty {
-    padding: 48px 20px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 20px;
     text-align: center;
     color: var(--text-sec, #7f8c8d);
 }
@@ -437,15 +650,18 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
 
 /* ---- 设置面板 ---- */
 
-.notif-settings-panel {
-    padding: 14px 18px;
-    border-top: 1px solid var(--border-color, #e2e8f0);
-    flex-shrink: 0;
-    display: none;
+.notif-settings-kicker {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-sec, #64748b);
 }
 
-.notif-settings-panel.open {
-    display: block;
+.notif-settings-card {
+    background: color-mix(in srgb, var(--bg-body, #f8fafc) 72%, var(--bg-card, #fff));
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 14px;
+    padding: 14px 16px;
 }
 
 .notif-settings-row {
@@ -453,6 +669,14 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+}
+
+.notif-settings-hint {
+    margin: 8px 0 0;
+    padding-right: 48px;
+    font-size: 11px;
+    color: var(--text-sec, #64748b);
+    line-height: 1.5;
 }
 
 .notif-settings-label {
@@ -526,6 +750,24 @@ body.overlay-performance-lock #app-root > #btn-notification-bell {
     color: var(--text-sec, #7f8c8d);
     opacity: 0.6;
     margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #btn-notification-bell,
+    .notif-panel,
+    .notif-panel-feed,
+    .notif-settings-page,
+    .notif-list-pane,
+    .notif-panel-action-btn,
+    .notif-tab-btn,
+    .notif-item {
+        transition: none !important;
+    }
+
+    #btn-notification-bell.bell-ringing i,
+    #btn-notification-bell.bell-ringing-system i {
+        animation: none !important;
+    }
 }
 
 /* ---- 弹窗/遮罩打开时的联动样式 ---- */

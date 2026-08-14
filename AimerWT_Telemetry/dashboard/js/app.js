@@ -5825,7 +5825,62 @@ const app = {
                             <option value="ri-megaphone-line">公告</option>
                             <option value="ri-gift-line">礼物</option>
                             <option value="ri-error-warning-line">提醒</option>
+                            <option value="ri-bug-line">问题</option>
+                            <option value="ri-markdown-line">文档</option>
                         </select>
+                    </label>
+                    <label class="ud-message-field">
+                        <span>图标形状</span>
+                        <select class="select" id="udMessageIconShape">
+                            <option value="rounded">圆角方形</option>
+                            <option value="circle">圆形</option>
+                        </select>
+                    </label>
+                    <label class="ud-message-field">
+                        <span>消息类型</span>
+                        <select class="select" id="udMessageType" onchange="app.syncUserMessageTypeColors()">
+                            <option value="normal">日常</option>
+                            <option value="update">更新</option>
+                            <option value="urgent">紧急</option>
+                            <option value="event">活动</option>
+                            <option value="bonus">福利</option>
+                        </select>
+                    </label>
+                    <label class="ud-message-field">
+                        <span>列表标签</span>
+                        <input class="input" id="udMessageTag" maxlength="12" value="公告" placeholder="例如：公告、BUG、更新">
+                    </label>
+                    <label class="ud-message-field full">
+                        <span>图标配色</span>
+                        <div class="ud-message-palette">
+                            <div class="ud-message-swatches" id="udMessageIconSwatches"></div>
+                            <div class="ud-message-color-pair">
+                                <div class="ud-message-color-control">
+                                    <input type="color" id="udMessageIconColor" value="#3b82f6" aria-label="图标颜色" oninput="app.onUserMessageColorInput('icon')">
+                                    <span>#3B82F6</span>
+                                </div>
+                                <div class="ud-message-color-control">
+                                    <input type="color" id="udMessageIconBg" value="#dbeafe" aria-label="图标底色" oninput="app.onUserMessageColorInput('icon')">
+                                    <span>#DBEAFE</span>
+                                </div>
+                            </div>
+                        </div>
+                    </label>
+                    <label class="ud-message-field full">
+                        <span>标签配色</span>
+                        <div class="ud-message-palette">
+                            <div class="ud-message-swatches" id="udMessageTagSwatches"></div>
+                            <div class="ud-message-color-pair">
+                                <div class="ud-message-color-control">
+                                    <input type="color" id="udMessageTagColor" value="#64748b" aria-label="标签文字色" oninput="app.onUserMessageColorInput('tag')">
+                                    <span>#64748B</span>
+                                </div>
+                                <div class="ud-message-color-control">
+                                    <input type="color" id="udMessageTagBg" value="#e2e8f0" aria-label="标签底色" oninput="app.onUserMessageColorInput('tag')">
+                                    <span>#E2E8F0</span>
+                                </div>
+                            </div>
+                        </div>
                     </label>
                     <label class="ud-message-field full">
                         <span>列表摘要</span>
@@ -5905,6 +5960,8 @@ const app = {
         container.dataset.userHwid = String(hwid);
         this.restore_user_notification_draft(hwid, message_draft);
         this.bind_user_notification_preview_invalidation();
+        this.renderUserMessageColorSwatches();
+        this.syncUserMessageSwatchState();
         this.loadCommandLogs(hwid, 1);
 
         fetch(`${this.config.apiBase}/admin/ai/usage?days=1`).then(r => r.json()).then(data => {
@@ -6416,6 +6473,13 @@ const app = {
         const field_ids = [
             'udMessageTitle',
             'udMessageIcon',
+            'udMessageIconShape',
+            'udMessageType',
+            'udMessageTag',
+            'udMessageIconColor',
+            'udMessageIconBg',
+            'udMessageTagColor',
+            'udMessageTagBg',
             'udMessageSummary',
             'udMessageRenderer',
             'udMessagePopupTitle',
@@ -6456,6 +6520,11 @@ const app = {
             field.scrollTop = Number(draft.field_scroll_tops?.[field_id]) || 0;
         });
 
+        ['udMessageIconColor', 'udMessageIconBg', 'udMessageTagColor', 'udMessageTagBg'].forEach((field_id) => {
+            const field = document.getElementById(field_id);
+            if (field?.nextElementSibling) field.nextElementSibling.textContent = String(field.value || '').toUpperCase();
+        });
+
         this.state.userNotificationReplaceLogId = Number(draft.replace_log_id) || 0;
         this.updateUserMessageRenderer();
         if (this.state.userNotificationReplaceLogId > 0) {
@@ -6465,6 +6534,7 @@ const app = {
             if (label) label.textContent = '替换并加入队列';
         }
         if (draft.preview_visible) this.previewUserNotification(hwid);
+        this.syncUserMessageSwatchState();
 
         const active_field = draft.active_field_id ? document.getElementById(draft.active_field_id) : null;
         if (!active_field || typeof active_field.focus !== 'function') return;
@@ -6491,6 +6561,13 @@ const app = {
         const field_ids = [
             'udMessageTitle',
             'udMessageIcon',
+            'udMessageIconShape',
+            'udMessageType',
+            'udMessageTag',
+            'udMessageIconColor',
+            'udMessageIconBg',
+            'udMessageTagColor',
+            'udMessageTagBg',
             'udMessageSummary',
             'udMessageRenderer',
             'udMessagePopupTitle',
@@ -6503,6 +6580,109 @@ const app = {
                 this.invalidate_user_notification_preview();
             });
         });
+    },
+
+    userMessageTypeColorPresets() {
+        return {
+            normal: { icon: '#3B82F6', icon_bg: '#DBEAFE', tag: '#64748B', tag_bg: '#E2E8F0' },
+            update: { icon: '#3B82F6', icon_bg: '#DBEAFE', tag: '#3B82F6', tag_bg: '#DBEAFE' },
+            urgent: { icon: '#EF4444', icon_bg: '#FEE2E2', tag: '#EF4444', tag_bg: '#FEE2E2' },
+            event: { icon: '#F97316', icon_bg: '#FFEDD5', tag: '#F97316', tag_bg: '#FFEDD5' },
+            bonus: { icon: '#059669', icon_bg: '#D1FAE5', tag: '#059669', tag_bg: '#D1FAE5' }
+        };
+    },
+
+    userMessageColorSwatches() {
+        return [
+            { id: 'notify', label: '通知蓝', color: '#3B82F6', bg: '#DBEAFE' },
+            { id: 'normal', label: '日常灰', color: '#64748B', bg: '#E2E8F0' },
+            { id: 'urgent', label: '紧急红', color: '#EF4444', bg: '#FEE2E2' },
+            { id: 'event', label: '活动橙', color: '#F97316', bg: '#FFEDD5' },
+            { id: 'bonus', label: '福利绿', color: '#059669', bg: '#D1FAE5' },
+            { id: 'primary', label: '主题橙', color: '#FF9900', bg: '#FFF4E0' }
+        ];
+    },
+
+    setUserMessageColorField(field_id, value) {
+        const field = document.getElementById(field_id);
+        if (!field) return;
+        const hex = String(value || '').toUpperCase();
+        field.value = hex.toLowerCase();
+        if (field.nextElementSibling) field.nextElementSibling.textContent = hex;
+    },
+
+    applyUserMessageColorPair(kind, color, bg) {
+        if (kind === 'icon') {
+            this.setUserMessageColorField('udMessageIconColor', color);
+            this.setUserMessageColorField('udMessageIconBg', bg);
+        } else {
+            this.setUserMessageColorField('udMessageTagColor', color);
+            this.setUserMessageColorField('udMessageTagBg', bg);
+        }
+        this.syncUserMessageSwatchState();
+        this.invalidate_user_notification_preview();
+    },
+
+    renderUserMessageColorSwatches() {
+        const swatches = this.userMessageColorSwatches();
+        ['icon', 'tag'].forEach((kind) => {
+            const wrap = document.getElementById(kind === 'icon' ? 'udMessageIconSwatches' : 'udMessageTagSwatches');
+            if (!wrap) return;
+            wrap.innerHTML = swatches.map((item) => (
+                `<button type="button" class="ud-message-swatch" data-kind="${kind}" data-id="${item.id}" data-color="${item.color}" data-bg="${item.bg}" title="${item.label}" aria-label="${item.label}">` +
+                `<span style="background:${item.bg};color:${item.color};">${item.label}</span>` +
+                `</button>`
+            )).join('');
+            wrap.querySelectorAll('.ud-message-swatch').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    this.applyUserMessageColorPair(kind, btn.getAttribute('data-color'), btn.getAttribute('data-bg'));
+                });
+            });
+        });
+    },
+
+    syncUserMessageSwatchState() {
+        const current = {
+            icon: (document.getElementById('udMessageIconColor')?.value || '').toUpperCase(),
+            icon_bg: (document.getElementById('udMessageIconBg')?.value || '').toUpperCase(),
+            tag: (document.getElementById('udMessageTagColor')?.value || '').toUpperCase(),
+            tag_bg: (document.getElementById('udMessageTagBg')?.value || '').toUpperCase()
+        };
+        document.querySelectorAll('.ud-message-swatch').forEach((btn) => {
+            const kind = btn.getAttribute('data-kind');
+            const color = (btn.getAttribute('data-color') || '').toUpperCase();
+            const bg = (btn.getAttribute('data-bg') || '').toUpperCase();
+            const selected = kind === 'icon'
+                ? current.icon === color && current.icon_bg === bg
+                : current.tag === color && current.tag_bg === bg;
+            btn.classList.toggle('selected', selected);
+        });
+    },
+
+    onUserMessageColorInput(kind) {
+        const colorId = kind === 'icon' ? 'udMessageIconColor' : 'udMessageTagColor';
+        const bgId = kind === 'icon' ? 'udMessageIconBg' : 'udMessageTagBg';
+        const colorField = document.getElementById(colorId);
+        const bgField = document.getElementById(bgId);
+        if (colorField?.nextElementSibling) colorField.nextElementSibling.textContent = String(colorField.value || '').toUpperCase();
+        if (bgField?.nextElementSibling) bgField.nextElementSibling.textContent = String(bgField.value || '').toUpperCase();
+        this.syncUserMessageSwatchState();
+        this.invalidate_user_notification_preview();
+    },
+
+    syncUserMessageTypeColors() {
+        const type = document.getElementById('udMessageType')?.value || 'normal';
+        const preset = this.userMessageTypeColorPresets()[type] || this.userMessageTypeColorPresets().normal;
+        this.setUserMessageColorField('udMessageIconColor', preset.icon);
+        this.setUserMessageColorField('udMessageIconBg', preset.icon_bg);
+        this.setUserMessageColorField('udMessageTagColor', preset.tag);
+        this.setUserMessageColorField('udMessageTagBg', preset.tag_bg);
+        this.syncUserMessageSwatchState();
+        this.invalidate_user_notification_preview();
+    },
+
+    syncUserMessageTagColors() {
+        this.syncUserMessageTypeColors();
     },
 
     updateUserMessageRenderer() {
@@ -6519,17 +6699,29 @@ const app = {
         const title = document.getElementById('udMessageTitle')?.value?.trim() || '';
         const summary = document.getElementById('udMessageSummary')?.value?.trim() || '';
         const icon = document.getElementById('udMessageIcon')?.value || 'ri-notification-3-line';
+        const icon_shape = document.getElementById('udMessageIconShape')?.value === 'circle' ? 'circle' : 'rounded';
+        const type = document.getElementById('udMessageType')?.value || 'normal';
+        const tag = document.getElementById('udMessageTag')?.value?.trim() || '';
+        const icon_color = this.normalizeBannerColor(document.getElementById('udMessageIconColor')?.value) || '';
+        const icon_bg = this.normalizeBannerColor(document.getElementById('udMessageIconBg')?.value) || '';
+        const tag_color = this.normalizeBannerColor(document.getElementById('udMessageTagColor')?.value) || '';
+        const tag_bg = this.normalizeBannerColor(document.getElementById('udMessageTagBg')?.value) || '';
         const rendererValue = document.getElementById('udMessageRenderer')?.value || 'none';
         const rendererParts = rendererValue.split('/');
         const renderer = rendererParts[0] || 'none';
         const variant = rendererParts[1] || (renderer === 'alert' ? 'default' : '');
         const popupTitle = document.getElementById('udMessagePopupTitle')?.value?.trim() || '';
         const body = document.getElementById('udMessageBody')?.value?.trim() || '';
-        return { machine_id: hwid, title, summary, icon, renderer, variant, popup_title: popupTitle, body, replace_log_id: this.state.userNotificationReplaceLogId || 0 };
+        return { machine_id: hwid, title, summary, icon, type, tag, icon_color, icon_bg, icon_shape, tag_color, tag_bg, renderer, variant, popup_title: popupTitle, body, replace_log_id: this.state.userNotificationReplaceLogId || 0 };
     },
 
     validateUserNotificationRequest(request) {
         if (!request.title || !request.summary) return '请填写消息标题和列表摘要';
+        if (Array.from(request.tag || '').length > 12) return '列表标签不能超过 12 字';
+        if (!['normal', 'update', 'urgent', 'event', 'bonus'].includes(request.type)) return '消息类型不正确';
+        if (!['rounded', 'circle'].includes(request.icon_shape)) return '图标形状不正确';
+        if (!request.icon_color || !request.icon_bg) return '请选择有效的图标颜色和底色';
+        if (!request.tag_color || !request.tag_bg) return '请选择有效的标签文字色和底色';
         const body = request.body || request.summary;
         if (request.renderer === 'notice' && /(https?:\/\/|ftp:\/\/|mailto:|data:|javascript:|www\.|!?\[[^\]]*\]\s*\(|<[a-z!/][^>]*>)/i.test(body)) {
             return '公告正文不支持链接、图片或原始 HTML';
@@ -6548,8 +6740,30 @@ const app = {
         if (!preview) return;
         const title = request.popup_title || request.title;
         const body = request.body || request.summary;
-        const listItem = `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px;border-bottom:1px solid var(--border);"><i class="${this.escapeHtmlSafe(request.icon)}" style="font-size:20px;color:var(--primary);"></i><div><b>${this.escapeHtmlSafe(request.title)}</b><div style="font-size:12px;color:var(--text-muted);margin-top:3px;">${this.escapeHtmlSafe(request.summary)}</div></div></div>`;
-        preview.innerHTML = listItem + '<div id="udMessageActionPreview" style="padding-top:12px;"></div>';
+        const tag = request.tag || (request.type === 'update' ? '更新' : '公告');
+        const iconRadius = request.icon_shape === 'circle' ? '999px' : '10px';
+        const tagStyle = `color:${this.escapeHtmlSafe(request.tag_color)};background:${this.escapeHtmlSafe(request.tag_bg)};`;
+        const iconStyle = `color:${this.escapeHtmlSafe(request.icon_color)};background:${this.escapeHtmlSafe(request.icon_bg)};border-radius:${iconRadius};`;
+        const listItem = [
+            '<div class="ud-inbox-preview">',
+            '  <div class="ud-inbox-preview-caption">消息中心列表</div>',
+            '  <div class="ud-inbox-preview-card">',
+            `    <div class="ud-inbox-preview-item">`,
+            `      <span class="ud-inbox-preview-icon" style="${iconStyle}"><i class="${this.escapeHtmlSafe(request.icon)}"></i></span>`,
+            '      <div class="ud-inbox-preview-body">',
+            '        <div class="ud-inbox-preview-title-row">',
+            `          <span class="ud-inbox-preview-tag" style="${tagStyle}">${this.escapeHtmlSafe(tag)}</span>`,
+            `          <b class="ud-inbox-preview-title">${this.escapeHtmlSafe(request.title)}</b>`,
+            '        </div>',
+            `        <p class="ud-inbox-preview-summary">${this.escapeHtmlSafe(request.summary)}</p>`,
+            '      </div>',
+            '      <span class="ud-inbox-preview-time">刚刚</span>',
+            '    </div>',
+            '  </div>',
+            '  <div class="ud-inbox-preview-caption">点击后效果</div>',
+            '</div>'
+        ].join('');
+        preview.innerHTML = listItem + '<div id="udMessageActionPreview"></div>';
         const actionPreview = document.getElementById('udMessageActionPreview');
         if (request.renderer === 'none') {
             actionPreview.innerHTML = '<div class="muted" style="font-size:12px;">点击后无额外动作</div>';

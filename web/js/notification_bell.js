@@ -6,25 +6,39 @@
  * - 新消息到达时铃铛状态管理（晃动、红点）
  * - 通知数据的存储与容量管理（系统与互动消息均≤10条、15天过期）
  * - 用户偏好设置（互动消息提醒开关）
+ * - 前景弹窗出现时暂时收起消息中心，关闭后恢复
+ * - 本地删除消息，并用 tombstone 避免广播通知再次写入
  * - 对外提供消息推送接口供 Python 桥接层和 WebSocket 调用
  */
 (function () {
     var STORAGE_KEY_SYSTEM = 'aimerwt_notification_system_msgs';
     var STORAGE_KEY_INTERACT = 'aimerwt_notification_interact_msgs';
     var STORAGE_KEY_SETTINGS = 'aimerwt_notification_settings';
+    var STORAGE_KEY_DELETED = 'aimerwt_notification_deleted_keys';
     var STORAGE_KEY_READ_TS = 'aimerwt_notification_last_read_ts';
     var STORAGE_KEY_READ_TS_SYSTEM = 'aimerwt_notification_system_last_read_ts';
     var STORAGE_KEY_READ_TS_INTERACT = 'aimerwt_notification_interact_last_read_ts';
 
     var MAX_INTERACT_MSGS = 10;
     var MAX_SYSTEM_MSGS = 10;
+    var MAX_DELETED_KEYS = 40;
     var MESSAGE_TTL_DAYS = 15;
+    var INTERACTION_RING_MS = 5000;
     var SYSTEM_MESSAGE_ICONS = {
         'ri-notification-3-line': true,
         'ri-information-line': true,
         'ri-megaphone-line': true,
         'ri-gift-line': true,
-        'ri-error-warning-line': true
+        'ri-error-warning-line': true,
+        'ri-bug-line': true,
+        'ri-markdown-line': true
+    };
+    var SYSTEM_MESSAGE_TYPES = {
+        normal: true,
+        update: true,
+        urgent: true,
+        event: true,
+        bonus: true
     };
     var PROXIMITY_PAD = 50;
     var _bellBtn = null;
@@ -33,6 +47,9 @@
     var _unreadInteract = 0;
     var _proximityBound = false;
     var _clickBound = false;
+    var _overlayWatcherBound = false;
+    var _overlaySyncRaf = 0;
+    var _resumePanelAfterOverlay = false;
     var _ringTimer = null;
 
     function isNotificationCenterEnabled() {
@@ -123,6 +140,64 @@
         return saveJSON(STORAGE_KEY_INTERACT, msgs);
     }
 
+    function getDeletedRecords() {
+        var records = loadJSON(STORAGE_KEY_DELETED, []);
+        return Array.isArray(records) ? records : [];
+    }
+
+    function pruneDeletedRecords() {
+        var now = Date.now();
+        var cutoff = now - (MESSAGE_TTL_DAYS * 24 * 60 * 60 * 1000);
+        var records = getDeletedRecords().filter(function (record) {
+            return record && record.key && Number(record.at) > cutoff;
+        });
+        if (records.length > MAX_DELETED_KEYS) {
+            records = records.slice(records.length - MAX_DELETED_KEYS);
+        }
+        return records;
+    }
+
+    function mergeDeletedKeys(keys) {
+        var records = pruneDeletedRecords();
+        var seen = {};
+        records.forEach(function (record) {
+            seen[record.key] = true;
+        });
+        var now = Date.now();
+        (keys || []).forEach(function (key) {
+            var normalized = String(key || '').trim();
+            if (!normalized || seen[normalized]) return;
+            seen[normalized] = true;
+            records.push({ key: normalized, at: now });
+        });
+        if (records.length > MAX_DELETED_KEYS) {
+            records = records.slice(records.length - MAX_DELETED_KEYS);
+        }
+        return records;
+    }
+
+    function collectSystemTombstoneKeys(msg) {
+        var keys = [];
+        var dedupeKey = buildSystemMessageKey(msg);
+        var contentKey = buildSystemMessageContentKey(msg);
+        if (dedupeKey) keys.push(dedupeKey);
+        if (contentKey && contentKey !== dedupeKey) keys.push(contentKey);
+        if (msg && msg.id) keys.push('local:' + String(msg.id));
+        return keys;
+    }
+
+    function isTombstonedSystemMessage(msg) {
+        var records = pruneDeletedRecords();
+        if (!records.length) return false;
+        var seen = {};
+        records.forEach(function (record) {
+            seen[record.key] = true;
+        });
+        return collectSystemTombstoneKeys(msg).some(function (key) {
+            return seen[key];
+        });
+    }
+
     function buildSystemMessageKey(msg) {
         if (!msg || typeof msg !== 'object') return '';
         if (msg.notification_id) return 'notification:' + String(msg.notification_id);
@@ -145,8 +220,34 @@
             'content',
             String(msg.title || '系统通知'),
             String(msg.content || ''),
-            String(msg.icon || 'ri-notification-3-line')
+            String(msg.icon || 'ri-notification-3-line'),
+            String(msg.type || ''),
+            String(msg.tag || ''),
+            String(msg.icon_color || ''),
+            String(msg.icon_bg || ''),
+            String(msg.icon_shape || ''),
+            String(msg.tag_color || ''),
+            String(msg.tag_bg || '')
         ].join('|');
+    }
+
+    function sanitizeCssColor(value) {
+        var color = String(value || '').trim();
+        if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color)) return color;
+        if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(?:,\s*(?:0|1|0?\.\d+)\s*)?\)$/.test(color)) return color;
+        return '';
+    }
+
+    function normalizeIconShape(value) {
+        return String(value || '').trim() === 'circle' ? 'circle' : 'rounded';
+    }
+
+    function normalizeSystemMessageType(type, presentation) {
+        var normalized = String(type || '').trim().toLowerCase();
+        if (SYSTEM_MESSAGE_TYPES[normalized]) return normalized;
+        var renderer = String(presentation && presentation.renderer || '');
+        var variant = String(presentation && presentation.variant || '');
+        return renderer === 'notice' && variant === 'update' ? 'update' : 'normal';
     }
 
     function getReadStorageKey(tab) {
@@ -162,18 +263,6 @@
         return Number(loadJSON(STORAGE_KEY_READ_TS, 0)) || 0;
     }
 
-    function getLatestReceivedTimestamp(tab) {
-        var messages = tab === 'interact' ? getInteractMessages() : getSystemMessages();
-        return messages.reduce(function (latest, message) {
-            return Math.max(latest, Number(message && message.received_at) || 0);
-        }, Date.now());
-    }
-
-    function setReadTimestamps(tabs) {
-        return saveStorageValues(tabs.map(function (tab) {
-            return { key: getReadStorageKey(tab), data: getLatestReceivedTimestamp(tab) };
-        }));
-    }
 
     function normalizeStoredTimestamp(message, now) {
         var timestamp = Number(message.timestamp || message.created_at);
@@ -188,10 +277,29 @@
         return timestamp;
     }
 
+    function normalizeStoredReadState(message, lastReadTimestamp, now, notificationSilent) {
+        var changed = false;
+        if (typeof message.unread !== 'boolean') {
+            message.unread = !notificationSilent && Number(message.received_at) > lastReadTimestamp;
+            changed = true;
+        }
+        if (message.unread) {
+            if (Number(message.read_at) !== 0) {
+                message.read_at = 0;
+                changed = true;
+            }
+        } else if (!Number.isFinite(Number(message.read_at)) || Number(message.read_at) <= 0) {
+            message.read_at = Number(message.received_at) || now;
+            changed = true;
+        }
+        return changed;
+    }
+
     function pruneExpiredSystemMessages() {
         var msgs = getSystemMessages();
         var now = Date.now();
         var cutoff = now - (MESSAGE_TTL_DAYS * 24 * 60 * 60 * 1000);
+        var lastReadTimestamp = getLastReadTimestamp('system');
         var normalized = false;
         var filtered = msgs.filter(function (m) {
             if (!m || typeof m !== 'object') return false;
@@ -201,6 +309,25 @@
             var timestamp = normalizeStoredTimestamp(m, now);
             if (oldTimestamp !== timestamp || oldExpiresAt !== m.expires_at || oldReceivedAt !== m.received_at) normalized = true;
             if (m.expires_at && Number(m.expires_at) <= now) return false;
+            if (normalizeStoredReadState(m, lastReadTimestamp, now, false)) normalized = true;
+            var messageType = normalizeSystemMessageType(m.type, m.presentation);
+            if (m.type !== messageType) {
+                m.type = messageType;
+                normalized = true;
+            }
+            var iconColor = sanitizeCssColor(m.icon_color);
+            var iconBg = sanitizeCssColor(m.icon_bg);
+            var tagColor = sanitizeCssColor(m.tag_color);
+            var tagBg = sanitizeCssColor(m.tag_bg);
+            var iconShape = normalizeIconShape(m.icon_shape);
+            if (m.icon_color !== iconColor || m.icon_bg !== iconBg || m.tag_color !== tagColor || m.tag_bg !== tagBg || m.icon_shape !== iconShape) {
+                m.icon_color = iconColor;
+                m.icon_bg = iconBg;
+                m.tag_color = tagColor;
+                m.tag_bg = tagBg;
+                m.icon_shape = iconShape;
+                normalized = true;
+            }
             return timestamp > cutoff;
         });
         if (normalized || filtered.length !== msgs.length) {
@@ -213,6 +340,7 @@
         var msgs = getInteractMessages();
         var now = Date.now();
         var cutoff = now - (MESSAGE_TTL_DAYS * 24 * 60 * 60 * 1000);
+        var lastReadTimestamp = getLastReadTimestamp('interact');
         var normalized = false;
         var filtered = msgs.filter(function (m) {
             if (!m || typeof m !== 'object') return false;
@@ -221,6 +349,7 @@
             var oldReceivedAt = m.received_at;
             var timestamp = normalizeStoredTimestamp(m, now);
             if (oldTimestamp !== timestamp || oldExpiresAt !== m.expires_at || oldReceivedAt !== m.received_at) normalized = true;
+            if (normalizeStoredReadState(m, lastReadTimestamp, now, Boolean(m.notification_silent))) normalized = true;
             return Number(m.expires_at) > now && timestamp > cutoff;
         });
         if (normalized || filtered.length !== msgs.length) saveInteractMessages(filtered);
@@ -229,8 +358,6 @@
 
     /** 计算未读数 */
     function recalcUnread() {
-        var systemLastRead = getLastReadTimestamp('system');
-        var interactLastRead = getLastReadTimestamp('interact');
         var sysMsgs = pruneExpiredSystemMessages();
         var intMsgs = pruneExpiredInteractMessages();
 
@@ -238,10 +365,10 @@
         _unreadInteract = 0;
 
         sysMsgs.forEach(function (m) {
-            if (m && Number(m.received_at) > systemLastRead) _unreadSystem++;
+            if (m && m.unread === true) _unreadSystem++;
         });
         intMsgs.forEach(function (m) {
-            if (m && !m.notification_silent && Number(m.received_at) > interactLastRead) _unreadInteract++;
+            if (m && !m.notification_silent && m.unread === true) _unreadInteract++;
         });
     }
 
@@ -250,7 +377,13 @@
         settings.interaction_notify_enabled = Boolean(enabled);
         var values = [{ key: STORAGE_KEY_SETTINGS, data: settings }];
         if (!enabled) {
-            values.push({ key: STORAGE_KEY_READ_TS_INTERACT, data: getLatestReceivedTimestamp('interact') });
+            var now = Date.now();
+            var messages = pruneExpiredInteractMessages();
+            messages.forEach(function (message) {
+                message.unread = false;
+                message.read_at = now;
+            });
+            values.push({ key: STORAGE_KEY_INTERACT, data: messages });
         }
         if (!saveStorageValues(values)) return false;
         recalcUnread();
@@ -276,18 +409,30 @@
         if (!btn) return;
         if (!isNotificationCenterEnabled()) {
             btn.style.display = 'none';
-            btn.classList.remove('bell-has-new', 'bell-panel-open', 'bell-ringing', 'near');
+            btn.classList.remove('bell-has-new', 'bell-panel-open', 'bell-ringing', 'bell-ringing-system', 'near');
             return;
         }
         btn.style.display = '';
         var hasNew = getTotalUnread() > 0;
         btn.classList.toggle('bell-has-new', hasNew);
         btn.classList.toggle('bell-panel-open', _panelOpen);
+        btn.classList.toggle('bell-ringing-system', _unreadSystem > 0);
+        if (_unreadSystem > 0) {
+            btn.classList.remove('bell-ringing');
+            if (_ringTimer) {
+                clearTimeout(_ringTimer);
+                _ringTimer = null;
+            }
+        }
     }
 
-    function triggerRing() {
+    function triggerRing(kind) {
         if (!isNotificationCenterEnabled()) return;
         var btn = getBellButton();
+        if (_unreadSystem > 0 || kind === 'system') {
+            updateBellState();
+            return;
+        }
         if (!btn) return;
         btn.classList.remove('bell-ringing');
         void btn.offsetWidth; // 重置动画
@@ -296,13 +441,13 @@
         _ringTimer = setTimeout(function () {
             btn.classList.remove('bell-ringing');
             _ringTimer = null;
-        }, 2500);
+        }, INTERACTION_RING_MS);
     }
 
     function stopRing() {
         var btn = getBellButton();
         if (!btn) return;
-        btn.classList.remove('bell-ringing');
+        btn.classList.remove('bell-ringing', 'bell-ringing-system');
         if (_ringTimer) {
             clearTimeout(_ringTimer);
             _ringTimer = null;
@@ -338,35 +483,105 @@
 
     /* ---- 面板控制 ---- */
 
+    function isBlockingOverlayNode(node) {
+        if (!node || node.nodeType !== 1 || !node.classList) return false;
+        if (node.classList.contains('notif-panel-overlay')) return false;
+        if (node.classList.contains('modal-overlay')) return true;
+        return node.id === 'modal-uid-welcome';
+    }
+
+    function hasBlockingOverlay() {
+        var overlays = document.querySelectorAll('.modal-overlay.show, #modal-uid-welcome.show');
+        for (var i = 0; i < overlays.length; i++) {
+            if (overlays[i].classList.contains('notif-panel-overlay')) continue;
+            return true;
+        }
+        return false;
+    }
+
+    function dismissForOverlay() {
+        if (!_panelOpen) return;
+        _resumePanelAfterOverlay = true;
+        _panelOpen = false;
+        if (window.NotificationPanelModule) window.NotificationPanelModule.close();
+        updateBellState();
+    }
+
+    function syncPanelWithOverlays() {
+        if (hasBlockingOverlay()) {
+            dismissForOverlay();
+            return;
+        }
+        if (!_resumePanelAfterOverlay) return;
+        _resumePanelAfterOverlay = false;
+        openPanel();
+    }
+
+    function scheduleOverlaySync() {
+        if (_overlaySyncRaf) return;
+        _overlaySyncRaf = window.requestAnimationFrame(function () {
+            _overlaySyncRaf = 0;
+            syncPanelWithOverlays();
+        });
+    }
+
+    function bindOverlayWatcher() {
+        if (_overlayWatcherBound || typeof MutationObserver !== 'function') return;
+        _overlayWatcherBound = true;
+        var observer = new MutationObserver(function (mutations) {
+            for (var i = 0; i < mutations.length; i++) {
+                var mutation = mutations[i];
+                if (mutation.type === 'attributes') {
+                    if (isBlockingOverlayNode(mutation.target)) {
+                        scheduleOverlaySync();
+                        return;
+                    }
+                    continue;
+                }
+                var nodes = [];
+                var a;
+                for (a = 0; a < mutation.addedNodes.length; a++) nodes.push(mutation.addedNodes[a]);
+                for (a = 0; a < mutation.removedNodes.length; a++) nodes.push(mutation.removedNodes[a]);
+                for (a = 0; a < nodes.length; a++) {
+                    var node = nodes[a];
+                    if (isBlockingOverlayNode(node) || (node && node.querySelector && node.querySelector('.modal-overlay, #modal-uid-welcome'))) {
+                        scheduleOverlaySync();
+                        return;
+                    }
+                }
+            }
+        });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class']
+        });
+    }
+
     function openPanel() {
         if (!isNotificationCenterEnabled()) return;
+        if (hasBlockingOverlay()) return;
         _panelOpen = true;
-        stopRing();
         updateBellState();
         if (window.NotificationPanelModule) {
             window.NotificationPanelModule.open();
         }
     }
 
-    function closePanel(activeTab) {
+    function closePanel() {
+        _resumePanelAfterOverlay = false;
         _panelOpen = false;
-        var tab = activeTab;
-        if (!tab && window.NotificationPanelModule && typeof window.NotificationPanelModule.getActiveTab === 'function') {
-            tab = window.NotificationPanelModule.getActiveTab();
-        }
-        var saved = setReadTimestamps([tab === 'interact' ? 'interact' : 'system']);
-        recalcUnread();
         updateBellState();
         if (window.NotificationPanelModule) {
             window.NotificationPanelModule.close();
         }
-        if (!saved) showStorageFailure('notification.storage_read_failed');
-        return saved;
+        return true;
     }
 
     function hidePanel() {
+        _resumePanelAfterOverlay = false;
         _panelOpen = false;
-        stopRing();
         if (window.NotificationPanelModule) window.NotificationPanelModule.close();
         updateBellState();
     }
@@ -388,11 +603,14 @@
      */
     function pushSystemMessage(msg) {
         if (!msg || typeof msg !== 'object') return { success: false, code: 'invalid', message: '系统消息格式无效' };
-        var receivedAt = Math.max(Date.now(), getLastReadTimestamp('system') + 1);
+        var receivedAt = Date.now();
         var dedupeKey = buildSystemMessageKey(msg);
         var contentKey = buildSystemMessageContentKey(msg);
         var hasSourceId = msg.notification_id || msg.id != null || msg.source_id;
         var msgs = pruneExpiredSystemMessages();
+        if (isTombstonedSystemMessage(msg)) {
+            return { success: true, code: 'deleted', message: '消息已被用户删除' };
+        }
         if (dedupeKey && msgs.some(function (m) {
             return buildSystemMessageKey(m) === dedupeKey ||
                 (!hasSourceId && buildSystemMessageContentKey(m) === contentKey);
@@ -419,19 +637,29 @@
             title: String(presentation.title || msg.title || '系统通知'),
             body: String(presentation.body || msg.summary || msg.content || '')
         };
+        var messageType = normalizeSystemMessageType(msg.type, normalizedPresentation);
         var message = {
             id: 'sys_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
             notification_id: String(msg.notification_id || ''),
             source_id: String(msg.notification_id || msg.source_id || msg.id || ''),
             source_timestamp: msg.created_at || msg.timestamp || '',
             dedupe_key: dedupeKey,
-            type: 'system',
+            category: 'system',
+            type: messageType,
+            tag: String(msg.tag || '').trim().substring(0, 12),
             title: String(msg.title || '系统通知'),
             content: String(msg.summary || msg.content || ''),
             icon: SYSTEM_MESSAGE_ICONS[msg.icon] ? msg.icon : 'ri-notification-3-line',
+            icon_color: sanitizeCssColor(msg.icon_color),
+            icon_bg: sanitizeCssColor(msg.icon_bg),
+            icon_shape: normalizeIconShape(msg.icon_shape),
+            tag_color: sanitizeCssColor(msg.tag_color),
+            tag_bg: sanitizeCssColor(msg.tag_bg),
             timestamp: msg.created_at || msg.timestamp || Date.now(),
             received_at: receivedAt,
             expires_at: Number(msg.expires_at) || 0,
+            unread: true,
+            read_at: 0,
             presentation: normalizedPresentation
         };
         msgs.push(message);
@@ -444,7 +672,7 @@
         }
         recalcUnread();
         updateBellState();
-        if (isNotificationCenterEnabled()) triggerRing();
+        if (isNotificationCenterEnabled()) triggerRing('system');
         if (_panelOpen && window.NotificationPanelModule) {
             window.NotificationPanelModule.refresh();
         }
@@ -469,7 +697,7 @@
         if (!msg || typeof msg !== 'object') return { success: false, code: 'invalid', message: '互动消息格式无效' };
         var settings = getSettings();
         var notificationSilent = !settings.interaction_notify_enabled;
-        var receivedAt = Math.max(Date.now(), getLastReadTimestamp('interact') + 1);
+        var receivedAt = Date.now();
 
         var message = {
             id: 'int_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
@@ -481,7 +709,9 @@
             timestamp: Number(msg.created_at || msg.timestamp) || Date.now(),
             received_at: receivedAt,
             notification_silent: notificationSilent,
-            expires_at: Number(msg.expires_at) || 0
+            expires_at: Number(msg.expires_at) || 0,
+            unread: !notificationSilent,
+            read_at: notificationSilent ? receivedAt : 0
         };
         if (!message.expires_at) message.expires_at = message.timestamp + (MESSAGE_TTL_DAYS * 24 * 60 * 60 * 1000);
         var msgs = pruneExpiredInteractMessages();
@@ -495,7 +725,7 @@
         }
         recalcUnread();
         updateBellState();
-        if (!notificationSilent && isNotificationCenterEnabled()) triggerRing();
+        if (!notificationSilent && isNotificationCenterEnabled()) triggerRing('interaction');
         if (_panelOpen && window.NotificationPanelModule) {
             window.NotificationPanelModule.refresh();
         }
@@ -508,15 +738,53 @@
 
     /** 标记全部已读 */
     function markAllRead() {
-        var saved = setReadTimestamps(['system', 'interact']);
+        var now = Date.now();
+        var systemMessages = pruneExpiredSystemMessages();
+        var interactMessages = pruneExpiredInteractMessages();
+        systemMessages.forEach(function (message) {
+            message.unread = false;
+            message.read_at = now;
+        });
+        interactMessages.forEach(function (message) {
+            message.unread = false;
+            message.read_at = now;
+        });
+        var saved = saveStorageValues([
+            { key: STORAGE_KEY_SYSTEM, data: systemMessages },
+            { key: STORAGE_KEY_INTERACT, data: interactMessages }
+        ]);
         recalcUnread();
-        updateBellState();
         stopRing();
+        updateBellState();
         if (_panelOpen && window.NotificationPanelModule) {
             window.NotificationPanelModule.refresh();
         }
         if (!saved) showStorageFailure('notification.storage_read_failed');
         return saved;
+    }
+
+    function markSystemMessageRead(payload) {
+        var messageId = payload && typeof payload === 'object'
+            ? String(payload.id || payload.notification_id || payload.source_id || '')
+            : String(payload || '');
+        if (!messageId) return false;
+        var messages = pruneExpiredSystemMessages();
+        var target = messages.find(function (message) {
+            return String(message.id || '') === messageId ||
+                String(message.notification_id || message.source_id || '') === messageId;
+        });
+        if (!target) return false;
+        if (target.unread === false) return true;
+        target.unread = false;
+        target.read_at = Date.now();
+        if (!saveSystemMessages(messages)) {
+            showStorageFailure('notification.storage_read_failed');
+            return false;
+        }
+        recalcUnread();
+        updateBellState();
+        if (_panelOpen && window.NotificationPanelModule) window.NotificationPanelModule.refresh();
+        return true;
     }
 
     function revokeSystemNotification(payload) {
@@ -544,6 +812,54 @@
         return { success: true, code: 'revoked', message: '消息已撤回' };
     }
 
+    function deleteMessage(payload) {
+        var messageId = payload && typeof payload === 'object'
+            ? String(payload.id || '')
+            : String(payload || '');
+        var category = payload && typeof payload === 'object'
+            ? String(payload.category || 'system')
+            : 'system';
+        if (!messageId) {
+            return { success: false, code: 'invalid', message: '删除消息标识无效' };
+        }
+
+        var storageEntries = [];
+        if (category === 'interact') {
+            var interactMessages = pruneExpiredInteractMessages();
+            var nextInteract = interactMessages.filter(function (message) {
+                return String(message.id || '') !== messageId;
+            });
+            if (nextInteract.length === interactMessages.length) {
+                return { success: true, code: 'not_found', message: '消息已不存在' };
+            }
+            storageEntries.push({ key: STORAGE_KEY_INTERACT, data: nextInteract });
+            storageEntries.push({ key: STORAGE_KEY_DELETED, data: mergeDeletedKeys(['interact:' + messageId]) });
+        } else {
+            var systemMessages = pruneExpiredSystemMessages();
+            var target = null;
+            var nextSystem = systemMessages.filter(function (message) {
+                if (String(message.id || '') !== messageId) return true;
+                target = message;
+                return false;
+            });
+            if (!target) {
+                return { success: true, code: 'not_found', message: '消息已不存在' };
+            }
+            storageEntries.push({ key: STORAGE_KEY_SYSTEM, data: nextSystem });
+            storageEntries.push({ key: STORAGE_KEY_DELETED, data: mergeDeletedKeys(collectSystemTombstoneKeys(target)) });
+        }
+
+        if (!saveStorageValues(storageEntries)) {
+            return { success: false, code: 'storage_failed', message: '消息删除保存失败' };
+        }
+        recalcUnread();
+        updateBellState();
+        if (_panelOpen && window.NotificationPanelModule) {
+            window.NotificationPanelModule.refresh();
+        }
+        return { success: true, code: 'deleted', message: '消息已删除' };
+    }
+
     /* ---- 初始化 ---- */
 
     function init() {
@@ -565,6 +881,7 @@
             _clickBound = true;
         }
         bindProximity();
+        bindOverlayWatcher();
         updateBellState();
     }
 
@@ -583,6 +900,8 @@
         pushSystemMessages: pushSystemMessages,
         pushInteractionMessage: pushInteractionMessage,
         revokeSystemNotification: revokeSystemNotification,
+        deleteMessage: deleteMessage,
+        dismissForOverlay: dismissForOverlay,
         markAllRead: markAllRead,
         updateProximity: updateProximity,
         openPanel: openPanel,
@@ -590,6 +909,7 @@
         togglePanel: togglePanel,
         getSystemMessages: getSystemMessages,
         getInteractMessages: getInteractMessages,
+        markSystemMessageRead: markSystemMessageRead,
         getSettings: getSettings,
         saveSettings: saveSettings,
         setInteractionNotifyEnabled: setInteractionNotifyEnabled,

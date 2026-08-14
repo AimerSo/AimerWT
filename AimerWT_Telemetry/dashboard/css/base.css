@@ -1632,6 +1632,188 @@ input[type="range"]::-moz-range-thumb {
     font-family: inherit;
 }
 
+.ud-message-color-control {
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    box-sizing: border-box;
+}
+
+.ud-message-palette {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ud-message-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ud-message-swatch {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
+.ud-message-swatch span {
+    display: block;
+    min-width: 54px;
+    padding: 6px 8px;
+    border-radius: 7px;
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 1.2;
+}
+
+.ud-message-swatch.selected {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.ud-message-color-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.ud-message-color-control input[type="color"] {
+    width: 30px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+}
+
+.ud-message-color-control span {
+    color: var(--text);
+    font: 500 12px ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.ud-message-preview-tag {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.4;
+    background: rgba(59, 130, 246, 0.12);
+    color: #2563eb;
+}
+
+.ud-message-preview-tag.update { background: rgba(139, 92, 246, 0.12); color: #7c3aed; }
+.ud-message-preview-tag.urgent { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
+.ud-message-preview-tag.event { background: rgba(245, 158, 11, 0.14); color: #d97706; }
+.ud-message-preview-tag.bonus { background: rgba(16, 185, 129, 0.12); color: #059669; }
+
+.ud-inbox-preview-caption {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin: 0 0 8px;
+}
+
+.ud-inbox-preview-caption + .ud-inbox-preview-caption,
+.ud-inbox-preview-card + .ud-inbox-preview-caption {
+    margin-top: 14px;
+}
+
+.ud-inbox-preview-card {
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    border-radius: 18px;
+    background: #fff;
+    box-shadow: 0 8px 24px rgba(9, 16, 32, 0.08);
+}
+
+.ud-inbox-preview-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 18px;
+    box-shadow: inset 3px 0 0 #ff9900;
+}
+
+.ud-inbox-preview-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    font-size: 16px;
+}
+
+.ud-inbox-preview-body {
+    min-width: 0;
+    flex: 1;
+}
+
+.ud-inbox-preview-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    min-height: 22px;
+    margin: 0 0 3px;
+}
+
+.ud-inbox-preview-tag {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+.ud-inbox-preview-title {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: #2c3e50;
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.5;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ud-inbox-preview-summary {
+    overflow: hidden;
+    color: #7f8c8d;
+    font-size: 11px;
+    line-height: 1.45;
+    margin: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ud-inbox-preview-time {
+    flex: 0 0 auto;
+    color: #7f8c8d;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+    white-space: nowrap;
+}
+
+#udMessageActionPreview {
+    padding-top: 4px;
+}
+
 .ud-message-actions {
     display: flex;
     align-items: center;
