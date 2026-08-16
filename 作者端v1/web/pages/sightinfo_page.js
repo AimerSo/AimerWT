@@ -74,6 +74,7 @@ window.AuthorPageModules.sightinfo = {
     _file_page: 1,
     _scan: null,
     _cover_preview: "",
+    _detail_preview: "",
     _report: null,
     _validation_stale: false,
     _analysis_results: {},
@@ -133,6 +134,8 @@ window.AuthorPageModules.sightinfo = {
         this._bind_click("btn-sight-add-group", () => this._add_group());
         this._bind_click("btn-sight-select-cover", () => this._select_cover());
         this._bind_click("btn-sight-clear-cover", () => this._clear_cover());
+        this._bind_click("btn-sight-select-detail", () => this._select_detail_image());
+        this._bind_click("btn-sight-clear-detail", () => this._clear_detail_image());
 
         const project_search = document.getElementById("sight-project-search");
         if (project_search) {
@@ -833,6 +836,39 @@ window.AuthorPageModules.sightinfo = {
         this._app.notifyToast("success", "封面已从当前草稿移除，保存后生效");
     },
 
+    async _select_detail_image() {
+        if (!this._project_name) return;
+        await this._with_loading("正在复制详情页图片…", async () => {
+            const response = await this._api_call("select_sight_detail_image", this._project_name);
+            if (!response?.success) {
+                if (response?.data?.cancelled) return;
+                this._notify_api_error(response, "选择详情页图片失败");
+                return;
+            }
+            this._draft.detail_cover = response.data?.detail_cover || { source_path: "", output_name: "detail.webp" };
+            this._detail_preview = response.data?.detail_preview || "";
+            this._mark_dirty();
+            this._render_cover();
+            this._app.notifyToast("success", response.msg || "详情页图片已加入项目");
+        });
+    },
+
+    async _clear_detail_image() {
+        if (!this._project_name || !this._draft?.detail_cover?.source_path) return;
+        const confirmed = await this._app.showConfirmDialog({
+            title: "清除详情页图片",
+            message: "将从当前项目配置移除详情页图片引用。保存后导出包不再包含 detail.webp，客户端详情页会回退使用封面；项目内工作副本会保留。",
+            confirmText: "清除图片",
+            cancelText: "保留图片"
+        });
+        if (!confirmed) return;
+        this._draft.detail_cover = { source_path: "", output_name: "detail.webp" };
+        this._detail_preview = "";
+        this._mark_dirty();
+        this._render_cover();
+        this._app.notifyToast("success", "详情页图片已从当前草稿移除，保存后生效");
+    },
+
     async _open_project_folder() {
         if (!this._project_name) return;
         const response = await this._api_call("open_sight_project_folder", this._project_name);
@@ -849,6 +885,7 @@ window.AuthorPageModules.sightinfo = {
         this._draft = this._clone(data?.project || null);
         this._scan = data?.scan || null;
         this._cover_preview = String(data?.cover_preview || "");
+        this._detail_preview = String(data?.detail_preview || "");
         this._report = data?.report || null;
         this._validation_stale = !this._report;
         this._analysis_results = {};
@@ -878,6 +915,7 @@ window.AuthorPageModules.sightinfo = {
         this._dirty = false;
         this._scan = null;
         this._cover_preview = "";
+        this._detail_preview = "";
         this._report = null;
         this._validation_stale = false;
         this._analysis_results = {};
@@ -1319,6 +1357,19 @@ window.AuthorPageModules.sightinfo = {
         this._set_text("sight-cover-source", source || "未设置");
         const clear_button = document.getElementById("btn-sight-clear-cover");
         if (clear_button) clear_button.disabled = !source || this._loading;
+
+        const detail_image = document.getElementById("sight-detail-preview");
+        const detail_placeholder = document.getElementById("sight-detail-placeholder");
+        const detail_source = this._draft?.detail_cover?.source_path || "";
+        if (detail_image) {
+            detail_image.hidden = !this._detail_preview;
+            if (this._detail_preview) detail_image.src = this._detail_preview;
+            else detail_image.removeAttribute("src");
+        }
+        if (detail_placeholder) detail_placeholder.hidden = Boolean(this._detail_preview);
+        this._set_text("sight-detail-source", detail_source || "未设置");
+        const clear_detail = document.getElementById("btn-sight-clear-detail");
+        if (clear_detail) clear_detail.disabled = !detail_source || this._loading;
     },
 
     _render_advanced() {
@@ -1352,6 +1403,7 @@ window.AuthorPageModules.sightinfo = {
         const assigned_paths = new Set((this._draft?.groups || []).flatMap((group) => group.files || []).map((path) => String(path).toLowerCase()));
         const ungrouped_count = Number(summary.ungrouped_count ?? included_files.filter((item) => !assigned_paths.has(String(item.output_path || "").toLowerCase())).length);
         const cover_label = summary.cover_output || (this._draft?.cover?.source_path ? "preview.webp" : "默认图");
+        const detail_label = summary.detail_output || (this._draft?.detail_cover?.source_path ? "detail.webp" : "回退封面");
         container.innerHTML = `
             <div><span>发布载体</span><strong>ZIP</strong></div>
             <div><span>显示类型</span><strong>${display_label}</strong></div>
@@ -1360,7 +1412,8 @@ window.AuthorPageModules.sightinfo = {
             <div><span>精确匹配</span><strong>${matched_label}</strong></div>
             <div><span>作者分组</span><strong>${group_count}</strong></div>
             <div><span>未分组</span><strong>${ungrouped_count}</strong></div>
-            <div><span>封面输出</span><strong>${this._escape(cover_label)}</strong></div>`;
+            <div><span>封面输出</span><strong>${this._escape(cover_label)}</strong></div>
+            <div><span>详情页图</span><strong>${this._escape(detail_label)}</strong></div>`;
         this._set_text("sight-target-mode", this._target_mode_label(summary.target_mode));
         const map = document.getElementById("sight-install-map");
         if (!map) return;
@@ -1951,7 +2004,7 @@ window.AuthorPageModules.sightinfo = {
 
     _sync_action_state() {
         const has_project = Boolean(this._project_name && this._draft);
-        const current_ids = ["btn-sight-open-project", "btn-sight-rename", "btn-sight-delete", "btn-sight-rescan", "btn-sight-validate", "btn-sight-analyze-all", "btn-sight-add-group", "btn-sight-select-cover"];
+        const current_ids = ["btn-sight-open-project", "btn-sight-rename", "btn-sight-delete", "btn-sight-rescan", "btn-sight-validate", "btn-sight-analyze-all", "btn-sight-add-group", "btn-sight-select-cover", "btn-sight-select-detail"];
         current_ids.forEach((id) => {
             const button = document.getElementById(id);
             if (button) button.disabled = this._loading || !has_project;
@@ -1970,6 +2023,8 @@ window.AuthorPageModules.sightinfo = {
         }
         const clear = document.getElementById("btn-sight-clear-cover");
         if (clear) clear.disabled = this._loading || !has_project || !this._draft?.cover?.source_path;
+        const clear_detail = document.getElementById("btn-sight-clear-detail");
+        if (clear_detail) clear_detail.disabled = this._loading || !has_project || !this._draft?.detail_cover?.source_path;
     },
 
     _focus_report_issue(type, index) {
@@ -1981,7 +2036,7 @@ window.AuthorPageModules.sightinfo = {
         if (field.startsWith("package.")) tab = "basic";
         else if (field.startsWith("export.") || issue.code?.includes("meta_") || issue.code?.includes("migration")) tab = "advanced";
         else if (issue.group_id || issue.code?.startsWith("group_") || issue.code === "file_ungrouped") tab = "groups";
-        else if (issue.code === "cover_missing" || issue.code === "link_missing") tab = "cover";
+        else if (issue.code === "cover_missing" || issue.code === "detail_missing" || issue.code === "link_missing") tab = "cover";
         this._set_active_tab(tab);
         if (field) requestAnimationFrame(() => document.querySelector(`#page-sightinfo [data-sight-field="${CSS.escape(field)}"]`)?.focus());
     },

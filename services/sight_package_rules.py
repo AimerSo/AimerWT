@@ -26,6 +26,11 @@ PACKAGE_COVER_ASSET_NAMES = frozenset({
     *PREVIEW_ASSET_NAMES,
     "icon.png", "icon.jpg", "icon.jpeg", "icon.webp",
 })
+DETAIL_ASSET_NAMES = frozenset({
+    "detail.png", "detail.jpg", "detail.jpeg", "detail.webp",
+})
+COVER_OUTPUT_NAME = "preview.webp"
+DETAIL_OUTPUT_NAME = "detail.webp"
 WINDOWS_RESERVED_NAMES = frozenset({
     "CON", "PRN", "AUX", "NUL",
     "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -202,3 +207,14 @@ def is_preview_asset_name(member_path: str | PurePosixPath) -> bool:
 def is_package_cover_asset_name(member_path: str | PurePosixPath) -> bool:
     """判断资源包封面读取链路支持的 preview/icon 文件名。"""
     return PurePosixPath(str(member_path).replace("\\", "/")).name.lower() in PACKAGE_COVER_ASSET_NAMES
+
+
+def is_package_detail_asset_name(member_path: str | PurePosixPath) -> bool:
+    """判断详情页专用图读取链路支持的 detail 文件名。"""
+    return PurePosixPath(str(member_path).replace("\\", "/")).name.lower() in DETAIL_ASSET_NAMES
+
+
+def is_package_image_asset_name(member_path: str | PurePosixPath) -> bool:
+    """判断作者端导入允许复制的封面或详情页图片文件名。"""
+    name = PurePosixPath(str(member_path).replace("\\", "/")).name.lower()
+    return name in PACKAGE_COVER_ASSET_NAMES or name in DETAIL_ASSET_NAMES

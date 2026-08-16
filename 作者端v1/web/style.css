@@ -6476,8 +6476,14 @@ body .modal-content {
 
 .sightinfo-cover-layout {
     display: grid;
-    grid-template-columns: minmax(220px, 0.78fr) minmax(260px, 1.22fr);
+    grid-template-columns: 1fr;
     gap: 22px;
+}
+
+.sightinfo-cover-stages {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
 }
 
 .sightinfo-cover-stage {
@@ -6490,6 +6496,19 @@ body .modal-content {
     border-radius: 13px;
     background: #f5f7f9;
     overflow: hidden;
+}
+
+.sightinfo-cover-stage-label {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 1;
+    padding: 4px 8px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.9);
+    color: #5d6773;
+    font-size: 10px;
+    font-weight: 700;
 }
 
 .sightinfo-cover-stage > img {
@@ -7076,7 +7095,8 @@ body .modal-content {
         grid-template-columns: 1fr;
     }
 
-    .sightinfo-cover-layout {
+    .sightinfo-cover-layout,
+    .sightinfo-cover-stages {
         grid-template-columns: 1fr;
     }
 }

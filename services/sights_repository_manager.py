@@ -30,6 +30,7 @@ from services.sight_embedded_metadata import (
     SightEmbeddedMetadataError,
     parse_embedded_metadata_file,
 )
+from services.sight_package_rules import DETAIL_ASSET_NAMES, DETAIL_OUTPUT_NAME
 from utils.logger import get_logger
 from utils.utils import get_app_data_dir
 
@@ -1439,6 +1440,11 @@ class SightsRepositoryManager:
         )
 
     @classmethod
+    def _is_detail_asset_path(cls, relative_path: str) -> bool:
+        name = PurePosixPath(str(relative_path or "").replace("\\", "/")).name.lower()
+        return name in DETAIL_ASSET_NAMES
+
+    @classmethod
     def _cover_extension_from_name(cls, name: str) -> str:
         suffix = PurePosixPath(str(name or "")).suffix.lower()
         return suffix if suffix in cls.cover_suffixes else ".png"
@@ -1465,7 +1471,9 @@ class SightsRepositoryManager:
                 (
                     path
                     for path in cover_dir.iterdir()
-                    if path.is_file() and path.suffix.lower() in self.cover_suffixes
+                    if path.is_file()
+                    and path.suffix.lower() in self.cover_suffixes
+                    and path.name.lower() not in DETAIL_ASSET_NAMES
                 ),
                 key=lambda path: path.name.lower(),
             )
@@ -1524,6 +1532,52 @@ class SightsRepositoryManager:
                 return {
                     "resource_id": resource_key,
                     "cover_source": "package_asset",
+                    "path": str(asset_path),
+                }
+        return {}
+
+    def find_resource_detail_image(self, resource_id: str) -> dict[str, Any]:
+        """从炮镜包资源资产中查找详情页专用图，不回退到封面目录。"""
+        resource_key = str(resource_id or "").strip()
+        if not resource_key:
+            return {}
+
+        try:
+            resource, resource_dir = self.load_resource(resource_key)
+        except (FileNotFoundError, json.JSONDecodeError, OSError, SightsRepositoryError):
+            return {}
+
+        preferred_names = (
+            DETAIL_OUTPUT_NAME,
+            "detail.png",
+            "detail.jpg",
+            "detail.jpeg",
+        )
+        assets_dir = resource_dir / "assets"
+        for name in preferred_names:
+            candidate = assets_dir / name
+            if candidate.is_file() and not candidate.is_symlink():
+                return {
+                    "resource_id": resource_key,
+                    "detail_source": "package_asset",
+                    "path": str(candidate),
+                }
+
+        for entry in resource.get("asset_files", []):
+            if not isinstance(entry, dict):
+                continue
+            source_rel = str(entry.get("source_relative_path") or "").replace("\\", "/").strip("/")
+            original_rel = str(entry.get("original_relative_path") or source_rel).replace("\\", "/").strip("/")
+            if not source_rel or not self._is_detail_asset_path(original_rel):
+                continue
+            try:
+                asset_path = self._path_from_posix(resource_dir, source_rel)
+            except ValueError:
+                continue
+            if asset_path.is_file() and not asset_path.is_symlink():
+                return {
+                    "resource_id": resource_key,
+                    "detail_source": "package_asset",
                     "path": str(asset_path),
                 }
         return {}

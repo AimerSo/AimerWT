@@ -219,6 +219,7 @@ class _ThemeUnlockFallbackService:
         "wuye_fuyin.json",
         "zqrx_mifuyu.json",
         "supporter.json",
+        "DaiSongSong.json",
     }
 
     def __init__(self, config_manager):

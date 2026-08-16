@@ -83,6 +83,7 @@ web/themes/beiku.json
 web/themes/bi_an.json
 web/themes/lianying.json
 web/themes/chifeng.json
+web/themes/DaiSongSong.json
 
 # Supporter-only theme assets / local unlock module (do not upload)
 web/assets/aifadian.png

@@ -54,6 +54,7 @@ from services.sight_package_rules import (
     build_archive_install_mapping,
     infer_archive_target,
     is_archive_member_path_safe,
+    is_package_detail_asset_name,
     is_preview_asset_name as is_sight_preview_asset_name,
     is_unsafe_windows_path_part,
     looks_like_vehicle_sight_dir,
@@ -896,6 +897,70 @@ class SightsManager:
             "cover_pending": False,
             "cover_type": cover_type,
             "cover_source": source_value,
+        }
+
+    def _resolve_sight_detail_cover_fields(self, context: dict[str, Any]) -> dict[str, Any]:
+        """详情页单独读取封面，不依赖列表扫描时的 cover_url。"""
+        sight_dir = Path(context["sight_dir"])
+        item_kind = str(context.get("item_kind") or "")
+        resource_id = str(context.get("resource_id") or "").strip()
+        enabled_name = str(context.get("enabled_name") or "")
+
+        repository_cover: dict[str, Any] = {}
+        if resource_id:
+            repository_cover = self._sights_repo.find_resource_cover(resource_id)
+        if not repository_cover.get("path"):
+            repository_cover = self._find_repository_cover_from_summary(
+                self._get_install_summary(enabled_name)
+            )
+
+        legacy_preview = None
+        if item_kind != "external_file":
+            legacy_preview = self._find_preview_image(sight_dir)
+
+        preview_path = Path(repository_cover["path"]) if repository_cover.get("path") else legacy_preview
+        cover_source = str(
+            repository_cover.get("cover_source")
+            or ("legacy_usersights" if legacy_preview else "default")
+        )
+        return self._build_sight_cover_fields(preview_path, False, cover_source)
+
+    def _resolve_sight_detail_image_fields(self, context: dict[str, Any]) -> dict[str, Any]:
+        """详情页专用图独立于卡片封面；缺失时由前端回退封面。"""
+        sight_dir = Path(context["sight_dir"])
+        item_kind = str(context.get("item_kind") or "")
+        resource_id = str(context.get("resource_id") or "").strip()
+        enabled_name = str(context.get("enabled_name") or "")
+
+        repository_detail: dict[str, Any] = {}
+        if resource_id:
+            repository_detail = self._sights_repo.find_resource_detail_image(resource_id)
+        if not repository_detail.get("path"):
+            repository_detail = self._find_repository_detail_from_summary(
+                self._get_install_summary(enabled_name)
+            )
+
+        legacy_detail = None
+        if item_kind != "external_file":
+            legacy_detail = self._find_detail_image(sight_dir)
+
+        detail_path = Path(repository_detail["path"]) if repository_detail.get("path") else legacy_detail
+        detail_source = str(
+            repository_detail.get("detail_source")
+            or ("legacy_usersights" if legacy_detail else "default")
+        )
+        if not detail_path:
+            return {
+                "detail_cover_url": "",
+                "detail_cover_is_default": True,
+                "detail_preview_path": "",
+                "detail_cover_source": "default",
+            }
+        return {
+            "detail_cover_url": self._to_data_url(detail_path),
+            "detail_cover_is_default": False,
+            "detail_preview_path": str(detail_path),
+            "detail_cover_source": detail_source,
         }
 
     def discover_usersights_paths(self, configured_sights_path: str | None = None) -> list[dict[str, Any]]:
@@ -1897,6 +1962,16 @@ class SightsManager:
                 return cover
         return {}
 
+    def _find_repository_detail_from_summary(self, summary: dict[str, Any]) -> dict[str, Any]:
+        resource_ids = summary.get("resource_ids") if isinstance(summary, dict) else []
+        if not isinstance(resource_ids, list):
+            return {}
+        for resource_id in resource_ids:
+            detail = self._sights_repo.find_resource_detail_image(str(resource_id))
+            if detail.get("path"):
+                return detail
+        return {}
+
     def _apply_install_summary(self, sight: dict[str, Any], summary: dict[str, Any] | None = None) -> None:
         """把安装清单状态补充到列表项，兼容旧 UserSights 目录扫描结果。"""
         if not self._usersights_path and summary is None:
@@ -2193,6 +2268,8 @@ class SightsManager:
             "meta_warnings": meta_info["warnings"],
             "parse_status": meta_info["status"],
             **page,
+            **self._resolve_sight_detail_cover_fields(context),
+            **self._resolve_sight_detail_image_fields(context),
         }
         install_fields = context.get("install_fields")
         if isinstance(install_fields, dict):
@@ -3685,8 +3762,24 @@ class SightsManager:
                 continue
 
         for p in candidates:
-            if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
-                return p
+            if not p.is_file() or p.is_symlink():
+                continue
+            if p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+                continue
+            if is_package_detail_asset_name(p.name):
+                continue
+            return p
+        return None
+
+    def _find_detail_image(self, dir_path: Path) -> Path | None:
+        """在炮镜目录根层查找详情页专用图，不回退到封面或任意图片。"""
+        for name in ("detail.webp", "detail.png", "detail.jpg", "detail.jpeg"):
+            candidate = dir_path / name
+            try:
+                if candidate.is_file() and not candidate.is_symlink() and is_package_detail_asset_name(candidate.name):
+                    return candidate
+            except OSError:
+                continue
         return None
 
     def _to_data_url(self, file_path: Path) -> str:
@@ -3699,9 +3792,16 @@ class SightsManager:
         Returns:
             data URL 字符串，失败时返回空字符串
         """
+        try:
+            if file_path.is_symlink() or not file_path.is_file():
+                return ""
+        except OSError:
+            return ""
         ext = file_path.suffix.lower().replace(".", "")
         if ext == "jpg":
             ext = "jpeg"
+        if ext not in {"jpeg", "png", "webp"}:
+            return ""
         try:
             with open(file_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode("utf-8")

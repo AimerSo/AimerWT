@@ -406,6 +406,39 @@ class AppApi:
             }
         return self._call_sight_service("import_cover", project_name, str(result[0]))
 
+    def select_sight_detail_image(self, project_name):
+        if not self._window:
+            return {
+                "success": False,
+                "msg": "窗口尚未准备完成",
+                "data": {},
+                "errors": [{"code": "window_not_ready", "message": "窗口尚未准备完成"}],
+                "warnings": [],
+            }
+        try:
+            result = self._window.create_file_dialog(
+                dialog_type=10,
+                allow_multiple=False,
+                file_types=("Image Files (*.png;*.jpg;*.jpeg;*.webp)",),
+            )
+        except Exception as e:
+            return {
+                "success": False,
+                "msg": str(e),
+                "data": {},
+                "errors": [{"code": "file_dialog_failed", "message": str(e)}],
+                "warnings": [],
+            }
+        if not result:
+            return {
+                "success": False,
+                "msg": "已取消选择",
+                "data": {"cancelled": True},
+                "errors": [],
+                "warnings": [],
+            }
+        return self._call_sight_service("import_detail_image", project_name, str(result[0]))
+
     # ===== 工具箱 API =====
 
     def toolbox_convert_webp(self, payload):

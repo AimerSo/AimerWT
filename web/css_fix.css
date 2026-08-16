@@ -829,6 +829,12 @@
     object-fit: cover;
 }
 
+#sights-list .sight-package-card .small-card-img.is-default-cover {
+    object-fit: contain;
+    object-position: center;
+    background: rgba(0, 0, 0, 0.02);
+}
+
 #sights-list[data-sights-mode='packages'] .sight-package-desc,
 #sights-list[data-sights-mode='enabled'] .sight-package-card[data-sight-kind='package'] .sight-package-desc {
     min-height: calc(12px * 1.45 * 2);
@@ -976,6 +982,12 @@
     height: 100%;
     width: 100%;
     object-fit: cover;
+}
+
+#sights-list .sight-package-card.is-featured .small-card-img.is-default-cover {
+    object-fit: contain;
+    object-position: center;
+    background: rgba(0, 0, 0, 0.02);
 }
 
 #sights-list .sight-package-card.is-featured-single,

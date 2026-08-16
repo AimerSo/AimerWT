@@ -552,15 +552,25 @@
                                             </section>
 
                                             <section class="sightinfo-panel" role="tabpanel" data-sight-panel="cover" hidden>
-                                                <div class="sightinfo-panel-heading"><div><span class="sightinfo-eyebrow">卡片与外部内容</span><h3>封面与链接</h3><p>封面会复制进作者项目，导出时统一生成 ZIP 根目录的 preview.webp。</p></div></div>
+                                                <div class="sightinfo-panel-heading"><div><span class="sightinfo-eyebrow">卡片与外部内容</span><h3>封面与链接</h3><p>封面导出为 ZIP 根目录的 preview.webp，用于卡片。详情页图片可选，导出为 detail.webp；未设置时客户端详情页回退使用封面。</p></div></div>
                                                 <div class="sightinfo-cover-layout">
-                                                    <div class="sightinfo-cover-stage" id="sight-cover-stage">
-                                                        <img id="sight-cover-preview" alt="炮镜封面预览" hidden>
-                                                        <div class="sightinfo-cover-placeholder" id="sight-cover-placeholder"><i class="ri-image-add-line"></i><span>尚未选择封面</span><small>支持 PNG、JPG、JPEG、WEBP</small></div>
-                                                        <div class="sightinfo-cover-actions"><button class="btn-v2 primary" type="button" id="btn-sight-select-cover">选择封面</button><button class="btn-v2" type="button" id="btn-sight-clear-cover">清除</button></div>
+                                                    <div class="sightinfo-cover-stages">
+                                                        <div class="sightinfo-cover-stage" id="sight-cover-stage">
+                                                            <span class="sightinfo-cover-stage-label">卡片封面</span>
+                                                            <img id="sight-cover-preview" alt="炮镜封面预览" hidden>
+                                                            <div class="sightinfo-cover-placeholder" id="sight-cover-placeholder"><i class="ri-image-add-line"></i><span>尚未选择封面</span><small>支持 PNG、JPG、JPEG、WEBP</small></div>
+                                                            <div class="sightinfo-cover-actions"><button class="btn-v2 primary" type="button" id="btn-sight-select-cover">选择封面</button><button class="btn-v2" type="button" id="btn-sight-clear-cover">清除</button></div>
+                                                        </div>
+                                                        <div class="sightinfo-cover-stage" id="sight-detail-stage">
+                                                            <span class="sightinfo-cover-stage-label">详情页图片</span>
+                                                            <img id="sight-detail-preview" alt="炮镜详情页图片预览" hidden>
+                                                            <div class="sightinfo-cover-placeholder" id="sight-detail-placeholder"><i class="ri-image-add-line"></i><span>尚未选择详情页图片</span><small>未设置时详情页使用封面</small></div>
+                                                            <div class="sightinfo-cover-actions"><button class="btn-v2 primary" type="button" id="btn-sight-select-detail">选择图片</button><button class="btn-v2" type="button" id="btn-sight-clear-detail">清除</button></div>
+                                                        </div>
                                                     </div>
                                                     <div class="sightinfo-cover-fields">
-                                                        <div class="sightinfo-readonly-row"><span>项目内素材</span><code id="sight-cover-source">未设置</code></div>
+                                                        <div class="sightinfo-readonly-row"><span>封面素材</span><code id="sight-cover-source">未设置</code></div>
+                                                        <div class="sightinfo-readonly-row"><span>详情页素材</span><code id="sight-detail-source">未设置</code></div>
                                                         <label class="sightinfo-field"><span>视频链接</span><input class="sightinfo-input" type="url" data-sight-field="package.link_video" placeholder="作品介绍、演示或教程视频"></label>
                                                         <label class="sightinfo-field"><span>WT Live 链接</span><input class="sightinfo-input" type="url" data-sight-field="package.link_wtlive" placeholder="留空时不写入公开元数据"></label>
                                                         <label class="sightinfo-field"><span>Bilibili 链接</span><input class="sightinfo-input" type="url" data-sight-field="package.link_bilibili" placeholder="留空时不写入公开元数据"></label>

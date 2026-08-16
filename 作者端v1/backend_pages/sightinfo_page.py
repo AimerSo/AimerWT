@@ -4,7 +4,7 @@
 
 功能定位:
 - 管理作者端炮镜项目，不读取或写入游戏 UserSights。
-- 从文件夹或 ZIP 安全复制真实 BLK、公开伪 BLK和封面素材。
+- 从文件夹或 ZIP 安全复制真实 BLK、公开伪 BLK、封面和详情页图片素材。
 - 维护作者私有项目模型，生成当前主程序可消费的公开伪 BLK。
 - 在导出前给出路径、分组、元数据和安装映射兼容报告。
 - 白名单构建标准 ZIP，任何失败都不覆盖既有项目与成品。
@@ -40,10 +40,13 @@ from services.sight_meta_parser import SightMetaParser
 from services.sight_vehicle_catalog import SightVehicleCatalog, normalize_vehicle_id
 from services.sight_package_rules import (
     BLOCKED_ARCHIVE_EXTENSIONS,
+    COVER_OUTPUT_NAME,
+    DETAIL_ASSET_NAMES,
+    DETAIL_OUTPUT_NAME,
     TARGET_DIR_UNSET,
     build_archive_install_mapping,
     is_archive_member_path_safe,
-    is_package_cover_asset_name,
+    is_package_image_asset_name,
     is_unsafe_windows_path_part,
     normalize_safe_relative_path,
 )
@@ -63,6 +66,9 @@ MAX_IMPORT_MEMBER_COUNT = 10_000
 MAX_IMPORT_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_PROJECT_FILE_COUNT = 5_000
 ALLOWED_COVER_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_PIL_FORMATS = {"PNG", "JPEG", "WEBP"}
+MAX_AUTHOR_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_AUTHOR_IMAGE_PIXELS = 40_000_000
 
 PACKAGE_KEYS = {
     "package_name",
@@ -219,6 +225,7 @@ class AuthorSightService:
             "project": project,
             "scan": self._empty_scan(),
             "cover_preview": "",
+            "detail_preview": "",
         }, msg="炮镜项目已创建")
 
     def rename_project(self, old_name: str, new_name: str) -> dict[str, Any]:
@@ -328,6 +335,7 @@ class AuthorSightService:
             "scan": scan,
             "import_summary": import_summary,
             "cover_preview": self._cover_preview_data_url(target_dir, project),
+            "detail_preview": self._detail_preview_data_url(target_dir, project),
         }, msg="炮镜项目已导入", warnings=import_warnings)
 
     def load_project(self, project_name: str) -> dict[str, Any]:
@@ -344,6 +352,7 @@ class AuthorSightService:
             "project": project,
             "scan": scan,
             "cover_preview": self._cover_preview_data_url(project_dir, project),
+            "detail_preview": self._detail_preview_data_url(project_dir, project),
         })
 
     def save_project(self, project_name: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -545,34 +554,75 @@ class AuthorSightService:
         }, msg="兼容检查完成", warnings=report["warnings"], errors=report["errors"])
 
     def import_cover(self, project_name: str, source_path: str | Path) -> dict[str, Any]:
+        return self._import_project_image(
+            project_name,
+            source_path,
+            asset_prefix="cover",
+            field_name="cover",
+            output_name=COVER_OUTPUT_NAME,
+            preview_key="cover_preview",
+            success_msg="封面素材已复制到炮镜项目",
+        )
+
+    def import_detail_image(self, project_name: str, source_path: str | Path) -> dict[str, Any]:
+        return self._import_project_image(
+            project_name,
+            source_path,
+            asset_prefix="detail",
+            field_name="detail_cover",
+            output_name=DETAIL_OUTPUT_NAME,
+            preview_key="detail_preview",
+            success_msg="详情页图片已复制到炮镜项目",
+        )
+
+    def _import_project_image(
+        self,
+        project_name: str,
+        source_path: str | Path,
+        *,
+        asset_prefix: str,
+        field_name: str,
+        output_name: str,
+        preview_key: str,
+        success_msg: str,
+    ) -> dict[str, Any]:
         safe_name = self._validate_project_name(project_name)
         project_dir = self._project_dir(safe_name)
-        source = Path(str(source_path or "")).resolve()
+        source = Path(str(source_path or "")).resolve(strict=False)
         if not project_dir.is_dir():
             return self._failure("炮镜项目不存在", code="project_not_found")
-        if not source.is_file() or source.suffix.lower() not in ALLOWED_COVER_EXTENSIONS:
+        if source.is_symlink() or not source.is_file() or source.suffix.lower() not in ALLOWED_COVER_EXTENSIONS:
             return self._failure("请选择 PNG、JPG、JPEG 或 WEBP 图片", code="cover_invalid")
+        try:
+            source_size = source.stat().st_size
+        except OSError:
+            return self._failure("请选择 PNG、JPG、JPEG 或 WEBP 图片", code="cover_invalid")
+        if source_size <= 0 or source_size > MAX_AUTHOR_IMAGE_BYTES:
+            return self._failure("图片体积超过 20MB 上限", code="cover_too_large")
 
         asset_dir = project_dir / SOURCE_ASSET_DIR_NAME
         asset_dir.mkdir(parents=True, exist_ok=True)
         asset_id = uuid.uuid4().hex
-        target = asset_dir / f"cover_{asset_id}{source.suffix.lower()}"
-        temp_target = asset_dir / f".cover_{asset_id}{source.suffix.lower()}"
-        shutil.copy2(source, temp_target)
+        suffix = source.suffix.lower()
+        target = asset_dir / f"{asset_prefix}_{asset_id}{suffix}"
+        temp_target = asset_dir / f".{asset_prefix}_{asset_id}{suffix}"
         try:
+            shutil.copy2(source, temp_target)
             self._read_image_preview(temp_target, max_size=16)
             os.replace(str(temp_target), str(target))
+        except Exception:
+            return self._failure("无法读取图片，请选择有效的 PNG、JPG、JPEG 或 WEBP", code="cover_invalid")
         finally:
             if temp_target.exists():
                 temp_target.unlink()
-        cover = {
+        asset = {
             "source_path": target.relative_to(project_dir).as_posix(),
-            "output_name": "preview.webp",
+            "output_name": output_name,
         }
         return self._success({
-            "cover": cover,
-            "cover_preview": self._image_preview_data_url(target),
-        }, msg="封面素材已复制到炮镜项目")
+            field_name: asset,
+            preview_key: self._image_preview_data_url(target),
+        }, msg=success_msg)
 
 
     def export_project_zip(self, project_name: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -624,7 +674,10 @@ class AuthorSightService:
 
                 cover_path = self._resolve_cover_path(project_dir, project)
                 if cover_path.is_file():
-                    self._write_cover_webp(cover_path, build_dir / "preview.webp")
+                    self._write_cover_webp(cover_path, build_dir / COVER_OUTPUT_NAME)
+                detail_path = self._resolve_detail_path(project_dir, project)
+                if detail_path.is_file():
+                    self._write_cover_webp(detail_path, build_dir / DETAIL_OUTPUT_NAME)
 
                 members = sorted(
                     [item for item in build_dir.rglob("*") if item.is_file()],
@@ -641,6 +694,7 @@ class AuthorSightService:
                         if item.get("include", True)
                     ],
                     expect_cover=cover_path.is_file(),
+                    expect_detail=detail_path.is_file(),
                 )
                 os.replace(str(temp_zip), str(output_path))
             finally:
@@ -688,7 +742,8 @@ class AuthorSightService:
             },
             "files": [],
             "groups": [],
-            "cover": {"source_path": "", "output_name": "preview.webp"},
+            "cover": {"source_path": "", "output_name": COVER_OUTPUT_NAME},
+            "detail_cover": {"source_path": "", "output_name": DETAIL_OUTPUT_NAME},
             "export": {"archive_name": self._default_archive_name(project_name)},
             "extra_meta": {},
             "import_meta": {
@@ -715,6 +770,7 @@ class AuthorSightService:
             if isinstance(item, dict)
         ]
         cover_raw = data.get("cover") if isinstance(data.get("cover"), dict) else {}
+        detail_raw = data.get("detail_cover") if isinstance(data.get("detail_cover"), dict) else {}
         export_raw = data.get("export") if isinstance(data.get("export"), dict) else {}
         import_raw = data.get("import_meta") if isinstance(data.get("import_meta"), dict) else {}
         source_origin_raw = (
@@ -736,10 +792,8 @@ class AuthorSightService:
             "package": package,
             "files": files,
             "groups": groups,
-            "cover": {
-                "source_path": self._soft_relative_path(cover_raw.get("source_path")),
-                "output_name": "preview.webp",
-            },
+            "cover": self._normalize_image_asset(cover_raw, COVER_OUTPUT_NAME),
+            "detail_cover": self._normalize_image_asset(detail_raw, DETAIL_OUTPUT_NAME),
             "export": {
                 "archive_name": str(
                     export_raw.get("archive_name") or self._default_archive_name(project_name)
@@ -913,7 +967,13 @@ class AuthorSightService:
         if cover_path.is_file():
             project["cover"] = {
                 "source_path": cover_path.relative_to(project_dir).as_posix(),
-                "output_name": "preview.webp",
+                "output_name": COVER_OUTPUT_NAME,
+            }
+        detail_path = self._find_managed_detail_path(project_dir)
+        if detail_path.is_file():
+            project["detail_cover"] = {
+                "source_path": detail_path.relative_to(project_dir).as_posix(),
+                "output_name": DETAIL_OUTPUT_NAME,
             }
         if parsed_meta is not None:
             matched_count = sum(
@@ -1363,6 +1423,15 @@ class AuthorSightService:
                 cover_source_bytes = 0
         if not cover_path.is_file():
             add_warning("cover_missing", "没有封面，客户端将使用默认图。")
+        detail_path = self._resolve_detail_path(project_dir, project)
+        detail_source_bytes = 0
+        if detail_path.is_file():
+            try:
+                detail_source_bytes = detail_path.stat().st_size
+            except OSError:
+                detail_source_bytes = 0
+        if not detail_path.is_file():
+            add_warning("detail_missing", "没有详情页图片，客户端详情页将回退使用封面。")
         if not package.get("description"):
             add_warning("description_missing", "作品没有详细说明。")
         category_tags = {"historical", "competitive", "fun"}
@@ -1494,12 +1563,14 @@ class AuthorSightService:
                 "install_entries": mapping["entries"],
                 "group_count": len(project["groups"]),
                 "ungrouped_count": len(ungrouped),
-                "cover_output": "preview.webp" if cover_path.is_file() else "",
-                "export_member_count": len(included) + (1 if cover_path.is_file() else 0),
+                "cover_output": COVER_OUTPUT_NAME if cover_path.is_file() else "",
+                "detail_output": DETAIL_OUTPUT_NAME if detail_path.is_file() else "",
+                "export_member_count": len(included) + (1 if cover_path.is_file() else 0) + (1 if detail_path.is_file() else 0),
                 "estimated_source_bytes": package_size,
-                "estimated_export_input_bytes": package_size + meta_bytes + cover_source_bytes,
+                "estimated_export_input_bytes": package_size + meta_bytes + cover_source_bytes + detail_source_bytes,
                 "meta_bytes": meta_bytes,
                 "cover_source_bytes": cover_source_bytes,
+                "detail_source_bytes": detail_source_bytes,
                 "unmatched_real_count": max(0, len(valid_output_paths) - matched_meta_count),
                 "analyzed_file_count": len(analysis_rows),
                 "analysis_results": analysis_rows[:100],
@@ -1690,6 +1761,7 @@ class AuthorSightService:
         archive_path: Path,
         expected_real_paths: list[str],
         expect_cover: bool,
+        expect_detail: bool = False,
     ) -> None:
         with zipfile.ZipFile(archive_path, "r") as zf:
             names = [
@@ -1728,8 +1800,10 @@ class AuthorSightService:
                 raise ValueError("导出 ZIP 的 V2 元数据无法聚合为同一炮镜包")
             if len(merged["meta"].get("files") or []) != len(expected):
                 raise ValueError("导出 ZIP 的 V2 元数据没有覆盖全部真实 BLK")
-            if expect_cover != ("preview.webp" in names):
+            if expect_cover != (COVER_OUTPUT_NAME in names):
                 raise ValueError("导出 ZIP 封面成员与项目封面状态不一致")
+            if expect_detail != (DETAIL_OUTPUT_NAME in names):
+                raise ValueError("导出 ZIP 详情页图片成员与项目状态不一致")
     def _copy_single_blk_source(self, source: Path, project_dir: Path) -> dict[str, Any]:
         safe_name = normalize_safe_relative_path(source.name)
         target = project_dir / SOURCE_DIR_NAME / Path(*PurePosixPath(safe_name).parts)
@@ -1813,7 +1887,7 @@ class AuthorSightService:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(file_path, target)
                 copied_blk += 1
-            elif suffix in ALLOWED_COVER_EXTENSIONS and is_package_cover_asset_name(safe_rel):
+            elif suffix in ALLOWED_COVER_EXTENSIONS and is_package_image_asset_name(safe_rel):
                 target = self._next_asset_path(project_dir / SOURCE_ASSET_DIR_NAME / Path(safe_rel).name)
                 shutil.copy2(file_path, target)
                 copied_assets += 1
@@ -1857,7 +1931,7 @@ class AuthorSightService:
                     with zf.open(member, "r") as src, open(target, "wb") as dst:
                         shutil.copyfileobj(src, dst, length=1024 * 1024)
                     copied_blk += 1
-                elif suffix in ALLOWED_COVER_EXTENSIONS and is_package_cover_asset_name(safe_rel):
+                elif suffix in ALLOWED_COVER_EXTENSIONS and is_package_image_asset_name(safe_rel):
                     target = self._next_asset_path(project_dir / SOURCE_ASSET_DIR_NAME / PurePosixPath(safe_rel).name)
                     with zf.open(member, "r") as src, open(target, "wb") as dst:
                         shutil.copyfileobj(src, dst, length=1024 * 1024)
@@ -1872,27 +1946,74 @@ class AuthorSightService:
             "uncompressed_bytes": total_size,
         }
 
-    def _resolve_cover_path(self, project_dir: Path, project: dict[str, Any]) -> Path:
-        cover = project.get("cover") if isinstance(project.get("cover"), dict) else {}
-        source_path = str(cover.get("source_path") or "")
+    def _normalize_image_asset(self, raw: Any, output_name: str) -> dict[str, str]:
+        data = raw if isinstance(raw, dict) else {}
+        return {
+            "source_path": self._soft_relative_path(data.get("source_path")),
+            "output_name": output_name,
+        }
+
+    def _resolve_image_asset_path(self, project_dir: Path, asset: Any) -> Path:
+        data = asset if isinstance(asset, dict) else {}
+        source_path = str(data.get("source_path") or "")
         if not source_path:
             return Path()
         resolved = self._resolve_project_relative(project_dir, source_path, require_exists=False)
-        if resolved is not None and resolved.is_file() and resolved.suffix.lower() in ALLOWED_COVER_EXTENSIONS:
+        if resolved is not None and resolved.is_file() and not resolved.is_symlink() and resolved.suffix.lower() in ALLOWED_COVER_EXTENSIONS:
             return resolved
         return Path()
 
-    def _find_managed_cover_path(self, project_dir: Path) -> Path:
+    def _resolve_cover_path(self, project_dir: Path, project: dict[str, Any]) -> Path:
+        return self._resolve_image_asset_path(project_dir, project.get("cover"))
+
+    def _resolve_detail_path(self, project_dir: Path, project: dict[str, Any]) -> Path:
+        return self._resolve_image_asset_path(project_dir, project.get("detail_cover"))
+
+    def _iter_managed_image_files(self, project_dir: Path) -> list[Path]:
         asset_dir = project_dir / SOURCE_ASSET_DIR_NAME
         if not asset_dir.is_dir():
-            return Path()
-        candidates = sorted(
-            [
+            return []
+        try:
+            items = [
                 item for item in asset_dir.iterdir()
-                if item.is_file() and item.suffix.lower() in ALLOWED_COVER_EXTENSIONS
-            ],
+                if item.is_file() and not item.is_symlink() and item.suffix.lower() in ALLOWED_COVER_EXTENSIONS
+            ]
+        except OSError:
+            return []
+        return items
+
+    @staticmethod
+    def _is_detail_asset_file(path: Path) -> bool:
+        name = path.name.lower()
+        stem = path.stem.lower()
+        return name in DETAIL_ASSET_NAMES or stem.startswith("detail_")
+
+    def _find_managed_cover_path(self, project_dir: Path) -> Path:
+        candidates = [
+            item for item in self._iter_managed_image_files(project_dir)
+            if not self._is_detail_asset_file(item)
+        ]
+        candidates.sort(
             key=lambda item: (
-                0 if item.stem.lower().startswith("preview") else 1,
+                0 if item.stem.lower().startswith("preview") else
+                1 if item.stem.lower().startswith("icon") else
+                2 if item.stem.lower().startswith("cover") else
+                3,
+                item.name.lower(),
+            ),
+        )
+        return candidates[0] if candidates else Path()
+
+    def _find_managed_detail_path(self, project_dir: Path) -> Path:
+        candidates = [
+            item for item in self._iter_managed_image_files(project_dir)
+            if self._is_detail_asset_file(item)
+        ]
+        candidates.sort(
+            key=lambda item: (
+                0 if item.name.lower() == DETAIL_OUTPUT_NAME else
+                1 if item.name.lower() in DETAIL_ASSET_NAMES else
+                2,
                 item.name.lower(),
             ),
         )
@@ -1901,6 +2022,10 @@ class AuthorSightService:
     def _cover_preview_data_url(self, project_dir: Path, project: dict[str, Any]) -> str:
         cover_path = self._resolve_cover_path(project_dir, project)
         return self._image_preview_data_url(cover_path) if cover_path.is_file() else ""
+
+    def _detail_preview_data_url(self, project_dir: Path, project: dict[str, Any]) -> str:
+        detail_path = self._resolve_detail_path(project_dir, project)
+        return self._image_preview_data_url(detail_path) if detail_path.is_file() else ""
 
     def _image_preview_data_url(self, image_path: Path) -> str:
         try:
@@ -1912,7 +2037,16 @@ class AuthorSightService:
     def _read_image_preview(self, image_path: Path, max_size: int) -> tuple[bytes, str]:
         from PIL import Image
 
+        Image.MAX_IMAGE_PIXELS = MAX_AUTHOR_IMAGE_PIXELS
         with Image.open(image_path) as image:
+            fmt = str(image.format or "").upper()
+            if fmt == "JPG":
+                fmt = "JPEG"
+            if fmt not in ALLOWED_PIL_FORMATS:
+                raise ValueError("图片格式不受支持")
+            width, height = image.size
+            if width <= 0 or height <= 0 or width * height > MAX_AUTHOR_IMAGE_PIXELS:
+                raise ValueError("图片像素尺寸超过安全上限")
             image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             if image.mode in {"RGBA", "LA"}:
                 output = image.convert("RGBA")
@@ -1929,8 +2063,17 @@ class AuthorSightService:
     def _write_cover_webp(self, source_path: Path, target_path: Path) -> None:
         from PIL import Image
 
+        Image.MAX_IMAGE_PIXELS = MAX_AUTHOR_IMAGE_PIXELS
         target_path.parent.mkdir(parents=True, exist_ok=True)
         with Image.open(source_path) as image:
+            fmt = str(image.format or "").upper()
+            if fmt == "JPG":
+                fmt = "JPEG"
+            if fmt not in ALLOWED_PIL_FORMATS:
+                raise ValueError("图片格式不受支持")
+            width, height = image.size
+            if width <= 0 or height <= 0 or width * height > MAX_AUTHOR_IMAGE_PIXELS:
+                raise ValueError("图片像素尺寸超过安全上限")
             if image.mode in {"P", "PA"}:
                 image = image.convert("RGBA")
             elif image.mode not in {"RGB", "RGBA", "L", "LA"}:

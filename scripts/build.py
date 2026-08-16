@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
+import json
 import os
+import runpy
 import shutil
 import hashlib
 import subprocess
@@ -34,6 +36,7 @@ REQUIRED_UNTRACKED_THEME_FILES = (
     "wuye_fuyin.json",
     "zqrx_mifuyu.json",
     "supporter.json",
+    "DaiSongSong.json",
 )
 
 REQUIRED_UNTRACKED_WEB_FILES = (
@@ -113,33 +116,122 @@ def copy_tracked_web_files(target_dir: Path) -> int:
     return copied
 
 
+def load_secrets_from_app_secrets() -> dict[str, str]:
+    """环境变量缺失时，回退读取本地已有的 app_secrets.py。"""
+    secrets_file = PROJECT_ROOT / "app_secrets.py"
+    if not secrets_file.is_file():
+        return {}
+    namespace = runpy.run_path(str(secrets_file))
+    values: dict[str, str] = {}
+    for key in REQUIRED_BUILD_ENV_VARS:
+        value = str(namespace.get(key, "") or "").strip()
+        if value:
+            values[key] = value
+    return values
+
+
+def resolve_hidden_theme_files() -> tuple[str, ...]:
+    """口令模块存在时以其名单为准，避免打包清单漏掉 UP 主题。"""
+    try:
+        from services.theme_unlock.service import HIDDEN_THEME_RULES
+    except Exception:
+        return REQUIRED_UNTRACKED_THEME_FILES
+    return tuple(HIDDEN_THEME_RULES.keys())
+
+
+def _read_theme_meta(theme_path: Path) -> dict:
+    data = json.loads(theme_path.read_text(encoding="utf-8"))
+    meta = data.get("meta") if isinstance(data, dict) else {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def verify_hidden_theme_pack() -> tuple[str, ...]:
+    """确认隐藏主题文件和口令模块都在分发范围内，并用本地口令表做兑换自检。"""
+    theme_dir = PROJECT_ROOT / "web" / "themes"
+    filenames = resolve_hidden_theme_files()
+    missing = [name for name in filenames if not (theme_dir / name).is_file()]
+    if missing:
+        raise RuntimeError("分发版隐藏主题缺失: " + ", ".join(missing))
+
+    unlock_service = PROJECT_ROOT / "services" / "theme_unlock" / "service.py"
+    if not unlock_service.is_file():
+        raise RuntimeError("分发版缺少 services/theme_unlock，主题口令无法生效")
+
+    from services.theme_unlock.service import HIDDEN_THEME_RULES, ThemeUnlockService
+
+    required_theme_files = ("chifeng.json", "DaiSongSong.json")
+    for filename in required_theme_files:
+        if filename not in HIDDEN_THEME_RULES:
+            raise RuntimeError(f"口令模块缺少隐藏主题: {filename}")
+
+    chifeng_author = str(_read_theme_meta(theme_dir / "chifeng.json").get("author") or "")
+    if "赤风" not in chifeng_author:
+        raise RuntimeError(f"赤风主题作者异常: {chifeng_author}")
+    songsong_author = str(_read_theme_meta(theme_dir / "DaiSongSong.json").get("author") or "")
+    if "大松松" not in songsong_author:
+        raise RuntimeError(f"大松松主题作者异常: {songsong_author}")
+
+    class _UnlockProbe:
+        def get_unlocked_themes(self):
+            return []
+
+        def set_unlocked_themes(self, unlocked):
+            self.unlocked = list(unlocked)
+            return True
+
+    probe = ThemeUnlockService(_UnlockProbe())
+    checked = []
+    for filename, rule in HIDDEN_THEME_RULES.items():
+        if not isinstance(rule, dict) or rule.get("admin_only"):
+            continue
+        code = str(rule.get("code") or "").strip()
+        if not code:
+            continue
+        result = probe.redeem_theme_code(code)
+        if result.get("theme_file") != filename or not result.get("success"):
+            raise RuntimeError(f"{filename} 口令未能解锁对应主题")
+        checked.append(filename)
+    if not checked:
+        raise RuntimeError("口令模块没有可校验的隐藏主题口令")
+
+    invalid_result = probe.redeem_theme_code("__aimerwt_invalid_theme_code__")
+    if invalid_result.get("success"):
+        raise RuntimeError("无效口令不应解锁任何主题")
+
+    log.info("   - 已校验隐藏主题口令模块: " + ", ".join(checked))
+    return filenames
+
+
 def _copy_untracked_build_assets(web_pack_dir: Path) -> int:
     """复制被 .gitignore 排除但分发版必需的 web 文件。"""
     themes_src = PROJECT_ROOT / "web" / "themes"
     themes_dst = web_pack_dir / "themes"
     themes_dst.mkdir(parents=True, exist_ok=True)
+    hidden_theme_files = verify_hidden_theme_pack()
 
     copied = 0
+    missing_web_files = []
     for relative_path in REQUIRED_UNTRACKED_WEB_FILES:
         source = PROJECT_ROOT / "web" / relative_path
         if not source.is_file():
-            log.warning(f"   - 分发版必需文件缺失: {relative_path}")
+            missing_web_files.append(relative_path)
             continue
         destination = web_pack_dir / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
             shutil.copy2(source, destination)
             copied += 1
+    if missing_web_files:
+        raise RuntimeError("分发版必需文件缺失: " + ", ".join(missing_web_files))
 
-    for filename in REQUIRED_UNTRACKED_THEME_FILES:
+    for filename in hidden_theme_files:
         source = themes_src / filename
-        if not source.is_file():
-            log.warning(f"   - 分发版隐藏主题缺失: {filename}")
-            continue
         dst = themes_dst / filename
         if not dst.exists():
             shutil.copy2(source, dst)
             copied += 1
+    packed_themes = sorted(path.name for path in themes_dst.glob("*.json"))
+    log.info("   - 已纳入主题文件: " + ", ".join(packed_themes))
     return copied
 
 
@@ -188,8 +280,9 @@ def require_build_env() -> dict[str, str]:
     """校验生产打包所需的关键环境变量。"""
     missing = []
     values: dict[str, str] = {}
+    file_secrets = load_secrets_from_app_secrets()
     for key in REQUIRED_BUILD_ENV_VARS:
-        value = os.environ.get(key, "").strip()
+        value = os.environ.get(key, "").strip() or file_secrets.get(key, "")
         if not value:
             missing.append(key)
             continue

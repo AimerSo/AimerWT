@@ -8874,6 +8874,7 @@ app.openSightSingleDetail = async function (sight_name, options = {}) {
 
     this.closeSightCardActionMenu?.();
     const seedFeature = options.feature || null;
+    const listCover = this._getSightListItemCover(decodedName);
     this._sightSingleDetailActiveName = decodedName;
     this._sightSingleDetailSource = options.source || {
         type: 'list',
@@ -8886,6 +8887,9 @@ app.openSightSingleDetail = async function (sight_name, options = {}) {
         success: true,
         name: decodedName,
         enabled_name: decodedName,
+        cover_url: listCover.cover_url,
+        cover_is_default: listCover.cover_is_default,
+        detail_cover_url: '',
         selected_feature: seedFeature,
         blk_features: seedFeature ? [seedFeature] : [],
     };
@@ -8915,6 +8919,11 @@ app.openSightSingleDetail = async function (sight_name, options = {}) {
         this._sightSingleDetailData = {
             ...detail,
             selected_feature: seedFeature || detail.selected_feature || null,
+            cover_url: detail.cover_url || listCover.cover_url || '',
+            cover_is_default: detail.cover_url
+                ? !!detail.cover_is_default
+                : listCover.cover_is_default,
+            detail_cover_url: detail.detail_cover_url || '',
         };
         this._sightSingleDetailListState = { loading: false, error: '' };
         this.renderSightSingleDetail();
@@ -8957,6 +8966,45 @@ app.closeSightSingleDetail = function () {
     if (packageView) packageView.hidden = true;
 };
 
+app._sanitizeSightImageUrl = function (value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^data:image\/(?:png|jpe?g|webp);base64,/i.test(raw)) return raw;
+    if (/^assets\//i.test(raw)) return raw;
+    return '';
+};
+
+app._getSightListItemCover = function (sight_name) {
+    const name = String(sight_name || '').trim();
+    const listItem = (this._sightsItems || []).find((item) => {
+        const enabled = String(item?.enabled_name || item?.name || '').trim();
+        return !!name && enabled === name;
+    }) || {};
+    const cover_url = this._sanitizeSightImageUrl(listItem.cover_url);
+    return {
+        cover_url,
+        cover_is_default: !cover_url || !!listItem.cover_is_default,
+    };
+};
+
+app._resolveSightDetailCover = function (detail, meta, sight_name) {
+    const listCover = this._getSightListItemCover(
+        sight_name || detail?.enabled_name || detail?.name || ''
+    );
+    const dedicated = this._sanitizeSightImageUrl(
+        detail?.detail_cover_url || meta?.detail_cover_url || ''
+    );
+    const cardCover = this._sanitizeSightImageUrl(
+        detail?.cover_url || meta?.cover_url || listCover.cover_url || ''
+    );
+    const hero = dedicated || cardCover;
+    return {
+        cover: hero || 'assets/card_image_small.png',
+        cover_is_default: !hero,
+        card_cover: cardCover || 'assets/card_image_small.png',
+    };
+};
+
 app.renderSightSingleDetail = function () {
     const detailView = document.getElementById('sight-single-detail-view');
     if (!detailView) return;
@@ -8969,9 +9017,10 @@ app.renderSightSingleDetail = function () {
     const title = String(meta.package_name || detail.display_name || detail.enabled_name || detail.name || activeName || this.t('resource.sight_single_detail_title', {}, '炮镜详情'));
     const author = String(meta.author || this.t('mod.unknown_author', {}, '未知作者'));
     const description = String(meta.description || this.t('mod.no_description', {}, '暂无简介介绍'));
-    const cover_source = String(meta.cover_url || detail.cover_url || '').trim();
-    const cover = cover_source || 'assets/card_image_small.png';
-    const cover_is_default = !cover_source || (!!detail.cover_is_default && !meta.cover_url);
+    const coverState = this._resolveSightDetailCover(detail, meta, activeName);
+    const cover = coverState.cover;
+    const cover_is_default = coverState.cover_is_default;
+    const cardCover = coverState.card_cover || cover;
     const author_not_provided = this.t('resource.sight_single_detail_author_not_provided');
     const not_detected = this.t('resource.sight_single_detail_not_detected');
     const blk_count = Math.max(0, Number(detail.package_blk_total ?? detail.blk_feature_total ?? (feature ? 1 : 0)) || 0);
@@ -9050,7 +9099,7 @@ app.renderSightSingleDetail = function () {
                         <span class="sight-single-detail-actions">
                             <button type="button" class="btn-v2 small secondary" ${canEdit ? '' : 'disabled aria-disabled="true"'}
                                     data-sight-name-encoded="${encodeURIComponent(activeName)}"
-                                    data-sight-cover="${this._escapeHtml(cover)}"
+                                    data-sight-cover="${this._escapeHtml(cardCover)}"
                                     onclick="app.openEditSightModal(decodeURIComponent(this.dataset.sightNameEncoded || ''), this.dataset.sightCover || '')">
                                 <i class="ri-edit-line"></i><span>${this._escapeHtml(this.t('resource.sight_card_menu_edit', {}, '编辑页'))}</span>
                             </button>
@@ -9447,9 +9496,9 @@ app.renderSightPackageDetail = function () {
     const selectedGroupId = this._sightDetailSelectedGroupId || detail.selected_group_id || groups[0]?.group_id || '__all__';
     const selectedGroup = groups.find(group => String(group.group_id) === String(selectedGroupId)) || groups[0] || null;
     const rows = Array.isArray(this._sightDetailListState?.rows) ? this._sightDetailListState.rows : [];
-    const cover_source = String(meta.cover_url || detail.cover_url || '').trim();
-    const cover = cover_source || 'assets/card_image_small.png';
-    const cover_is_default = !cover_source || (!!detail.cover_is_default && !meta.cover_url);
+    const coverState = this._resolveSightDetailCover(detail, meta, this._sightDetailActiveName || detail.enabled_name || detail.name || '');
+    const cover = coverState.cover;
+    const cover_is_default = coverState.cover_is_default;
     const title = this._getSightDetailDisplayName(detail);
     const author = String(meta.author || this.t('mod.unknown_author', {}, '未知作者'));
     const version = String(meta.version || '').trim();
