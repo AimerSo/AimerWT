@@ -3,10 +3,14 @@
     'use strict';
 
     var UID_SHOWN_KEY = 'aimer_uid_popup_shown';
+    var FIRST_SHOW_SETTLED_EVENT = 'aimerwt:uid_first_show_settled';
     var MODAL_ID = 'modal-uid-welcome';
     var _injected = false;
     var _first_show_pending = {};
     var _first_show_handled = {};
+    var _first_show_blocking = {};
+    var _first_show_visible_seq_id = '';
+    var _popup_generation = 0;
 
     function escapeHtml(value) {
         return String(value == null ? '' : value)
@@ -20,6 +24,29 @@
     function normalizeSeqId(seqId) {
         var parsed = parseInt(seqId, 10);
         return parsed > 0 ? String(parsed) : '';
+    }
+
+    function isGuideActive() {
+        return Boolean(
+            window.AuthorGuide &&
+            typeof window.AuthorGuide.isActive === 'function' &&
+            window.AuthorGuide.isActive()
+        );
+    }
+
+    function isFirstShowBlocking() {
+        return Object.keys(_first_show_blocking).some(function (seqId) {
+            return _first_show_blocking[seqId] === true;
+        });
+    }
+
+    function settleFirstShow(seqId) {
+        seqId = normalizeSeqId(seqId);
+        if (!seqId || !_first_show_blocking[seqId]) return;
+        delete _first_show_blocking[seqId];
+        window.dispatchEvent(new CustomEvent(FIRST_SHOW_SETTLED_EVENT, {
+            detail: { seqId: seqId }
+        }));
     }
 
     /* 将 UID 格式化为 5 位展示编号（如 1 → 00001） */
@@ -516,10 +543,11 @@
     /* ========== 弹窗控制 ========== */
     function showUidPopup(seqId) {
         seqId = normalizeSeqId(seqId);
-        if (!seqId) return;
+        if (!seqId) return false;
         ensureModal();
         var modal = document.getElementById(MODAL_ID);
-        if (!modal) return;
+        if (!modal) return false;
+        _popup_generation += 1;
 
         var formatted = formatUid(seqId);
 
@@ -571,16 +599,47 @@
         setTimeout(function () {
             if (btn) btn.classList.add('visible');
         }, revealDelay + 200);
+        return true;
+    }
+
+    function showUidFirstPopupWhenReady(seqId) {
+        seqId = normalizeSeqId(seqId);
+        if (!seqId || !_first_show_blocking[seqId]) return;
+        if (isGuideActive()) {
+            setTimeout(function () {
+                showUidFirstPopupWhenReady(seqId);
+            }, 3000);
+            return;
+        }
+
+        _first_show_visible_seq_id = seqId;
+        if (!showUidPopup(seqId)) {
+            _first_show_visible_seq_id = '';
+            settleFirstShow(seqId);
+        }
     }
 
     function closeUidPopup() {
         clearRollTimers();
+        var firstShowSeqId = _first_show_visible_seq_id;
+        var closingGeneration = _popup_generation;
         var modal = document.getElementById(MODAL_ID);
-        if (!modal) return;
+        if (!modal) {
+            if (_first_show_visible_seq_id === firstShowSeqId) {
+                _first_show_visible_seq_id = '';
+            }
+            settleFirstShow(firstShowSeqId);
+            return;
+        }
         modal.classList.add('hiding');
         setTimeout(function () {
+            if (closingGeneration !== _popup_generation) return;
             modal.classList.remove('show', 'hiding');
             modal.style.display = 'none';
+            if (_first_show_visible_seq_id === firstShowSeqId) {
+                _first_show_visible_seq_id = '';
+            }
+            settleFirstShow(firstShowSeqId);
         }, 350);
     }
 
@@ -588,8 +647,9 @@
     async function checkUidFirstShow(seqId) {
         seqId = normalizeSeqId(seqId);
         if (!seqId || _first_show_handled[seqId] || _first_show_pending[seqId]) return;
+        _first_show_blocking[seqId] = true;
         /* 新手引导运行期间不弹，延迟重试 */
-        if (window.AuthorGuide && typeof window.AuthorGuide.isActive === 'function' && window.AuthorGuide.isActive()) {
+        if (isGuideActive()) {
             _first_show_pending[seqId] = true;
             setTimeout(function () {
                 _first_show_pending[seqId] = false;
@@ -599,6 +659,7 @@
         }
 
         _first_show_pending[seqId] = true;
+        var keepBlockingUntilClose = false;
         try {
             var backendShown = await getBackendFirstShowState(seqId);
             var localShown = hasLocalFirstShow(seqId);
@@ -614,9 +675,13 @@
             await markBackendFirstShow(seqId);
             markLocalFirstShow(seqId);
             _first_show_handled[seqId] = true;
-            setTimeout(function () { showUidPopup(seqId); }, 800);
+            keepBlockingUntilClose = true;
+            setTimeout(function () { showUidFirstPopupWhenReady(seqId); }, 800);
         } finally {
             _first_show_pending[seqId] = false;
+            if (!keepBlockingUntilClose) {
+                settleFirstShow(seqId);
+            }
         }
     }
 
@@ -632,6 +697,7 @@
     window.UidPopupModule = {
         showUidPopup: showUidPopup,
         closeUidPopup: closeUidPopup,
-        checkUidFirstShow: checkUidFirstShow
+        checkUidFirstShow: checkUidFirstShow,
+        isFirstShowBlocking: isFirstShowBlocking
     };
 })();
