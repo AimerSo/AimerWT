@@ -1,6 +1,7 @@
 (function () {
     const GUIDE_STATE_KEY = "aimerwt_main_guide_state_v1";
     const AUTO_START_DELAY_MS = 1100;
+    const UID_FIRST_SHOW_SETTLED_EVENT = "aimerwt:uid_first_show_settled";
     const STEP_WAIT_MAX_MS = 1400;
     const STEP_STABLE_DELTA = 0.9;
     const STEP_STABLE_FRAMES = 5;
@@ -266,7 +267,8 @@
         lastRenderedStep: -1,
         guideStateCache: null,
         guideStateLoadPromise: null,
-        resizeTimer: 0
+        resizeTimer: 0,
+        uidStartPending: false
     };
 
     /* ---- Guide state 持久化 ---- */
@@ -990,6 +992,23 @@
 
     /* ---- start / stop ---- */
 
+    function isUidFirstShowBlocking() {
+        return Boolean(
+            window.UidPopupModule &&
+            typeof window.UidPopupModule.isFirstShowBlocking === "function" &&
+            window.UidPopupModule.isFirstShowBlocking()
+        );
+    }
+
+    function waitForUidFirstShow(options) {
+        if (state.uidStartPending) return;
+        state.uidStartPending = true;
+        window.addEventListener(UID_FIRST_SHOW_SETTLED_EVENT, function resumeGuide() {
+            state.uidStartPending = false;
+            start(options);
+        }, { once: true });
+    }
+
     function stop(opts = {}) {
         console.info(`[Guide] stop (completed=${Boolean(opts.markCompleted)})`);
         state.active = false;
@@ -1026,6 +1045,10 @@
         const force = Boolean(options.force);
         const guideState = getGuideState();
         if (!force && guideState.completed) return false;
+        if (isUidFirstShowBlocking()) {
+            waitForUidFirstShow(options);
+            return false;
+        }
 
         console.info("[Guide] start");
         setGuideState({ firstOpenHandled: true });
