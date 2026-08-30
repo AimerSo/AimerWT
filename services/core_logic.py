@@ -884,9 +884,214 @@ class CoreService:
             log.exception("还原异常详情")
             return {"success": False, "msg": f"还原失败: {e}", "failed_files": []}
 
+    @staticmethod
+    def _scan_blk_text(text: str) -> tuple[list[tuple[int, str]], str, bool]:
+        """屏蔽字符串和注释，保留用于结构判断的花括号及原文索引。"""
+        braces: list[tuple[int, str]] = []
+        masked_chars = list(text)
+        state = "code"
+        quote_char = ""
+        index = 0
+
+        while index < len(text):
+            char = text[index]
+
+            if state == "code":
+                if char in ("'", '"'):
+                    masked_chars[index] = " "
+                    quote_char = char
+                    state = "string"
+                elif char == "/" and index + 1 < len(text):
+                    next_char = text[index + 1]
+                    if next_char == "/":
+                        masked_chars[index] = " "
+                        masked_chars[index + 1] = " "
+                        state = "line_comment"
+                        index += 1
+                    elif next_char == "*":
+                        masked_chars[index] = " "
+                        masked_chars[index + 1] = " "
+                        state = "block_comment"
+                        index += 1
+                elif char in "{}":
+                    braces.append((index, char))
+            elif state == "string":
+                if char not in "\r\n":
+                    masked_chars[index] = " "
+                if char == "\\":
+                    if index + 1 < len(text):
+                        if text[index + 1] not in "\r\n":
+                            masked_chars[index + 1] = " "
+                        index += 1
+                elif char == quote_char:
+                    state = "code"
+            elif state == "line_comment":
+                if char in "\r\n":
+                    state = "code"
+                else:
+                    masked_chars[index] = " "
+            else:
+                if char not in "\r\n":
+                    masked_chars[index] = " "
+                if char == "*" and index + 1 < len(text) and text[index + 1] == "/":
+                    masked_chars[index + 1] = " "
+                    state = "code"
+                    index += 1
+
+            index += 1
+
+        return braces, "".join(masked_chars), state in ("code", "line_comment")
+
+    @staticmethod
+    def _is_valid_blk_structure(text: str) -> bool:
+        braces, _masked_text, lexer_closed = CoreService._scan_blk_text(text)
+        if not lexer_closed:
+            return False
+
+        depth = 0
+        for _index, char in braces:
+            if char == "{":
+                depth += 1
+            else:
+                depth -= 1
+                if depth < 0:
+                    return False
+        return depth == 0
+
+    @staticmethod
+    def _find_matching_brace(text: str, open_index: int) -> int:
+        braces, _masked_text, lexer_closed = CoreService._scan_blk_text(text)
+        if not lexer_closed:
+            return -1
+
+        depth = 0
+        found_open = False
+        for index, char in braces:
+            if not found_open:
+                if index == open_index and char == "{":
+                    found_open = True
+                    depth = 1
+                elif index > open_index:
+                    return -1
+                continue
+
+            if char == "{":
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    return index
+        return -1
+
+    @staticmethod
+    def _iter_top_level_blocks(content: str) -> list[tuple[str, int, int, int]]:
+        """返回顶层 blk 块：(名称, 名称起始, 开括号, 闭括号后一位)。"""
+        blocks: list[tuple[str, int, int, int]] = []
+        braces, masked_text, lexer_closed = CoreService._scan_blk_text(content)
+        if not lexer_closed:
+            return blocks
+
+        depth = 0
+        for index, char in braces:
+            if char == "{":
+                if depth == 0:
+                    cursor = index - 1
+                    while cursor >= 0 and masked_text[cursor].isspace():
+                        cursor -= 1
+                    name_end = cursor + 1
+                    while cursor >= 0 and (masked_text[cursor].isalnum() or masked_text[cursor] == "_"):
+                        cursor -= 1
+                    name = masked_text[cursor + 1:name_end]
+                    close_index = CoreService._find_matching_brace(content, index)
+                    if name and close_index >= 0:
+                        blocks.append((name, cursor + 1, index, close_index + 1))
+                depth += 1
+            else:
+                depth -= 1
+                if depth < 0:
+                    return []
+
+        return blocks if depth == 0 else []
+
+    @staticmethod
+    def _find_top_level_block(content: str, block_name: str) -> tuple[str, int, int, int] | None:
+        target = str(block_name or "").strip().lower()
+        for item in CoreService._iter_top_level_blocks(content):
+            if item[0].lower() == target:
+                return item
+        return None
+
+    @staticmethod
+    def _find_sound_enable_mod_fields(
+        content: str,
+        sound_block: tuple[str, int, int, int],
+    ) -> list[tuple[int, int, str | None]]:
+        """返回顶层 sound{} 直属 enable_mod 值的原文索引和规范化值。"""
+        braces, masked_text, lexer_closed = CoreService._scan_blk_text(content)
+        if not lexer_closed:
+            return []
+
+        _name, _name_start, open_index, end = sound_block
+        field_name_pattern = re.compile(r"(?<![A-Za-z0-9_])enable_mod\b", re.IGNORECASE)
+        valid_field_pattern = re.compile(
+            r"(?<![A-Za-z0-9_])enable_mod\s*:\s*b\s*=\s*(yes|no)(?=\s|;|}|$)",
+            re.IGNORECASE,
+        )
+        fields: list[tuple[int, int, str | None]] = []
+        brace_cursor = 0
+        depth = 0
+        for match in field_name_pattern.finditer(masked_text, open_index + 1, end - 1):
+            while brace_cursor < len(braces) and braces[brace_cursor][0] < match.start():
+                _brace_index, brace_char = braces[brace_cursor]
+                depth += 1 if brace_char == "{" else -1
+                brace_cursor += 1
+            field_start = match.start()
+            previous_char = masked_text[field_start - 1]
+            if depth == 1 and (
+                field_start == open_index + 1
+                or previous_char.isspace()
+                or previous_char in "{};"
+            ):
+                valid_match = valid_field_pattern.match(masked_text, field_start)
+                if valid_match is None:
+                    fields.append((field_start, field_start, None))
+                else:
+                    value_start, value_end = valid_match.span(1)
+                    fields.append((value_start, value_end, valid_match.group(1).lower()))
+        return fields
+
+    @staticmethod
+    def _insert_missing_sound_block(content: str) -> str:
+        """按游戏 config.blk 常见结构补 sound{}：优先插在 download 前，否则跟在 debug/gameplay/graphics/video 后。"""
+        snippet = (
+            "sound{\n"
+            "  enable_mod:b=yes\n"
+            "  fmod_sound_enable:b=yes\n"
+            "  speakerMode:t=\"auto\"\n"
+            "}"
+        )
+        blocks = {
+            name.lower(): (name_start, end)
+            for name, name_start, _open_index, end in CoreService._iter_top_level_blocks(content)
+        }
+        if "download" in blocks:
+            insert_at = blocks["download"][0]
+            prefix = content[:insert_at].rstrip("\n")
+            suffix = content[insert_at:].lstrip("\n")
+            return f"{prefix}\n\n{snippet}\n\n{suffix}"
+        for neighbor in ("debug", "gameplay", "graphics", "video"):
+            if neighbor in blocks:
+                insert_at = blocks[neighbor][1]
+                prefix = content[:insert_at].rstrip("\n")
+                suffix = content[insert_at:].lstrip("\n")
+                return f"{prefix}\n\n{snippet}\n\n{suffix}"
+        prefix = content.rstrip("\n")
+        return f"{prefix}\n\n{snippet}\n"
+
     def _update_config_blk(self) -> bool:
         """
         在 <game_root>/config.blk 中启用 enable_mod:b=yes。
+        若缺少顶层 sound{}，先按游戏配置结构补块，再写入开关。
         
         必要时创建备份并在失败时回滚。
         
@@ -919,29 +1124,43 @@ class CoreService:
             log.error(f"读取配置文件失败: {type(e).__name__}: {e}")
             return False
 
-        # 检查是否已经开启 enable_mod
-        if "enable_mod:b=yes" in content:
-            log.info("Mod 权限已激活，无需更新")
-            return True
+        if not self._is_valid_blk_structure(content):
+            log.warning("配置文件结构无效，取消更新 Mod 权限")
+            return False
 
         new_content = content
-        
-        # 若存在 enable_mod:b=no，则替换为 enable_mod:b=yes
-        if "enable_mod:b=no" in content:
-            new_content = content.replace("enable_mod:b=no", "enable_mod:b=yes")
-            log.info("检测到 Mod 被禁用，正在启用...")
-        
-        # 若未出现 enable_mod 字段，则在 sound{...} 块起始处插入 enable_mod:b=yes
+        sound_blocks = [
+            block
+            for block in self._iter_top_level_blocks(content)
+            if block[0].lower() == "sound"
+        ]
+        if len(sound_blocks) > 1:
+            log.warning("存在多个顶层 sound{} 配置块，取消更新 Mod 权限")
+            return False
+
+        sound_block = sound_blocks[0] if sound_blocks else None
+        if sound_block is None:
+            log.info("未找到 sound{} 配置块，正在按游戏配置结构补全...")
+            new_content = self._insert_missing_sound_block(content)
         else:
-            # 匹配 sound { 或 sound{，不区分大小写
-            pattern = re.compile(r'(sound\s*\{)', re.IGNORECASE)
-            if pattern.search(content):
-                # 在 sound{ 后面插入换行和 enable_mod:b=yes
-                new_content = pattern.sub(r'\1\n  enable_mod:b=yes', content, count=1)
-                log.info("添加 enable_mod 字段...")
-            else:
-                log.warning("未找到 sound{} 配置块，无法自动修改 config.blk")
+            enable_mod_fields = self._find_sound_enable_mod_fields(content, sound_block)
+            if any(value is None for _start, _end, value in enable_mod_fields):
+                log.warning("sound{} 中存在格式非法的 enable_mod 字段，取消更新 Mod 权限")
                 return False
+            if len(enable_mod_fields) > 1:
+                log.warning("sound{} 中存在多个 enable_mod 字段，取消更新 Mod 权限")
+                return False
+            if enable_mod_fields:
+                value_start, value_end, value = enable_mod_fields[0]
+                if value == "yes":
+                    log.info("Mod 权限已激活，无需更新")
+                    return True
+                new_content = content[:value_start] + "yes" + content[value_end:]
+                log.info("检测到 Mod 被禁用，正在启用...")
+            else:
+                _name, _name_start, open_index, _end = sound_block
+                new_content = content[:open_index + 1] + "\n  enable_mod:b=yes" + content[open_index + 1:]
+                log.info("添加 enable_mod 字段...")
 
         if new_content != content:
             try:
@@ -953,7 +1172,24 @@ class CoreService:
                 with open(config, 'r', encoding='utf-8', errors='ignore') as f:
                     verify_content = f.read()
                     
-                if "enable_mod:b=yes" in verify_content:
+                verify_sound_blocks = (
+                    [
+                        block
+                        for block in self._iter_top_level_blocks(verify_content)
+                        if block[0].lower() == "sound"
+                    ]
+                    if self._is_valid_blk_structure(verify_content)
+                    else []
+                )
+                verify_enable_mod_fields = (
+                    self._find_sound_enable_mod_fields(verify_content, verify_sound_blocks[0])
+                    if len(verify_sound_blocks) == 1
+                    else []
+                )
+                if (
+                    len(verify_enable_mod_fields) == 1
+                    and verify_enable_mod_fields[0][2] == "yes"
+                ):
                     log.info("[SUCCESS] 验证成功：Mod 权限已激活 [OK]")
                     return True
                 else:
