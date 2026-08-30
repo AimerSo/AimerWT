@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +25,7 @@ class SightVehicleCatalog:
     """加载、检索并校验随客户端发布的战争雷霆车辆目录。"""
 
     def __init__(self, catalog_path: str | Path | None = None) -> None:
-        self.catalog_path = Path(catalog_path) if catalog_path else Path(__file__).with_name(
-            "sight_vehicle_catalog.json"
-        )
+        self.catalog_path = Path(catalog_path) if catalog_path else self._default_catalog_path()
         self._data = self._load_catalog()
         self._vehicles = self._validate_vehicles(self._data.get("vehicles"))
         self._vehicle_by_id = {item["vehicle_id"]: item for item in self._vehicles}
@@ -85,6 +84,15 @@ class SightVehicleCatalog:
             }
         ]
         return dict(matches[0]) if len(matches) == 1 else None
+
+    @staticmethod
+    def _default_catalog_path() -> Path:
+        source_path = Path(__file__).with_name("sight_vehicle_catalog.json")
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            bundled = Path(sys._MEIPASS) / "services" / "sight_vehicle_catalog.json"
+            if bundled.is_file():
+                return bundled
+        return source_path
 
     def _load_catalog(self) -> dict[str, Any]:
         try:

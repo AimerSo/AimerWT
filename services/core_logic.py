@@ -884,9 +884,88 @@ class CoreService:
             log.exception("还原异常详情")
             return {"success": False, "msg": f"还原失败: {e}", "failed_files": []}
 
+    @staticmethod
+    def _find_matching_brace(text: str, open_index: int) -> int:
+        depth = 0
+        for index in range(open_index, len(text)):
+            char = text[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return index
+        return -1
+
+    @staticmethod
+    def _iter_top_level_blocks(content: str) -> list[tuple[str, int, int, int]]:
+        """返回顶层 blk 块：(名称, 名称起始, 开括号, 闭括号后一位)。"""
+        blocks: list[tuple[str, int, int, int]] = []
+        depth = 0
+        index = 0
+        length = len(content)
+        while index < length:
+            char = content[index]
+            if char == "{":
+                if depth == 0:
+                    cursor = index - 1
+                    while cursor >= 0 and content[cursor] in " \t":
+                        cursor -= 1
+                    name_end = cursor + 1
+                    while cursor >= 0 and (content[cursor].isalnum() or content[cursor] == "_"):
+                        cursor -= 1
+                    name = content[cursor + 1:name_end]
+                    close_index = CoreService._find_matching_brace(content, index)
+                    if name and close_index >= 0:
+                        blocks.append((name, cursor + 1, index, close_index + 1))
+                        index = close_index + 1
+                        continue
+                depth += 1
+            elif char == "}":
+                depth = max(0, depth - 1)
+            index += 1
+        return blocks
+
+    @staticmethod
+    def _find_top_level_block(content: str, block_name: str) -> tuple[str, int, int, int] | None:
+        target = str(block_name or "").strip().lower()
+        for item in CoreService._iter_top_level_blocks(content):
+            if item[0].lower() == target:
+                return item
+        return None
+
+    @staticmethod
+    def _insert_missing_sound_block(content: str) -> str:
+        """按游戏 config.blk 常见结构补 sound{}：优先插在 download 前，否则跟在 debug/gameplay/graphics/video 后。"""
+        snippet = (
+            "sound{\n"
+            "  enable_mod:b=yes\n"
+            "  fmod_sound_enable:b=yes\n"
+            "  speakerMode:t=\"auto\"\n"
+            "}"
+        )
+        blocks = {
+            name.lower(): (name_start, end)
+            for name, name_start, _open_index, end in CoreService._iter_top_level_blocks(content)
+        }
+        if "download" in blocks:
+            insert_at = blocks["download"][0]
+            prefix = content[:insert_at].rstrip("\n")
+            suffix = content[insert_at:].lstrip("\n")
+            return f"{prefix}\n\n{snippet}\n\n{suffix}"
+        for neighbor in ("debug", "gameplay", "graphics", "video"):
+            if neighbor in blocks:
+                insert_at = blocks[neighbor][1]
+                prefix = content[:insert_at].rstrip("\n")
+                suffix = content[insert_at:].lstrip("\n")
+                return f"{prefix}\n\n{snippet}\n\n{suffix}"
+        prefix = content.rstrip("\n")
+        return f"{prefix}\n\n{snippet}\n"
+
     def _update_config_blk(self) -> bool:
         """
         在 <game_root>/config.blk 中启用 enable_mod:b=yes。
+        若缺少顶层 sound{}，先按游戏配置结构补块，再写入开关。
         
         必要时创建备份并在失败时回滚。
         
@@ -931,17 +1010,16 @@ class CoreService:
             new_content = content.replace("enable_mod:b=no", "enable_mod:b=yes")
             log.info("检测到 Mod 被禁用，正在启用...")
         
-        # 若未出现 enable_mod 字段，则在 sound{...} 块起始处插入 enable_mod:b=yes
+        # 若未出现 enable_mod 字段，则写入顶层 sound{}；没有该块时先补块再写开关
         else:
-            # 匹配 sound { 或 sound{，不区分大小写
-            pattern = re.compile(r'(sound\s*\{)', re.IGNORECASE)
-            if pattern.search(content):
-                # 在 sound{ 后面插入换行和 enable_mod:b=yes
-                new_content = pattern.sub(r'\1\n  enable_mod:b=yes', content, count=1)
-                log.info("添加 enable_mod 字段...")
+            sound_block = self._find_top_level_block(content, "sound")
+            if sound_block is None:
+                log.info("未找到 sound{} 配置块，正在按游戏配置结构补全...")
+                new_content = self._insert_missing_sound_block(content)
             else:
-                log.warning("未找到 sound{} 配置块，无法自动修改 config.blk")
-                return False
+                _name, _name_start, open_index, _end = sound_block
+                new_content = content[:open_index + 1] + "\n  enable_mod:b=yes" + content[open_index + 1:]
+                log.info("添加 enable_mod 字段...")
 
         if new_content != content:
             try:

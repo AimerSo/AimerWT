@@ -388,6 +388,11 @@ def build_exe():
             "main.py"
         ]
 
+        catalog_json = PROJECT_ROOT / "services" / "sight_vehicle_catalog.json"
+        if not catalog_json.is_file():
+            raise RuntimeError("缺少 services/sight_vehicle_catalog.json，无法打包炮镜车辆目录")
+        cmd.extend(["--add-data", f"{catalog_json}{sep}services"])
+
         # 可选打包 tools 目录（例如 vgmstream-cli 及其依赖）
         tools_dir = PROJECT_ROOT / "tools"
         if tools_dir.is_dir():
