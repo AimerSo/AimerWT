@@ -94,6 +94,9 @@ web/redeem/redeem_codes.local.js
 # 本地预览工具
 遥测预览.py
 
+# 遥测服务端源码及管理后台（仅本地保留，不上传）
+/AimerWT_Telemetry/
+
 # 遥测服务编译产物（本地构建，不上传）
 AimerWT_Telemetry/.gocache/
 AimerWT_Telemetry/*.exe
